@@ -3,10 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <link rel="icon" type="image/svg+xml" href="./icon.svg" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#1e40af" />
   <meta name="description" content="腫瘤指引快速查 - 個人本機腫瘤指引查閱與防漏工具" />
   <link rel="manifest" href="./manifest.json" />
+  <link rel="apple-touch-icon" href="./icons/icon-192.png" />
   <title>腫瘤指引快速查</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -799,6 +800,16 @@
             `).join('')}</div>` : '<p class="text-sm text-gray-400">尚未設定健保提醒</p>'}
           </div>
 
+          <!-- External Links -->
+          ${card.externalLinks.length ? `
+          <div class="card section">
+            <h2 class="section-title">🔗 外部連結</h2>
+            <div class="space-y-2">${card.externalLinks.map(l => /^https?:\/\//i.test(l.url) ?
+              `<a href="${esc(l.url)}" target="_blank" rel="noopener" class="list-item text-sm" style="color:var(--primary-600);text-decoration:none">🔗 ${esc(l.label)} ↗</a>` :
+              `<div class="list-item text-sm text-gray-500">🔗 ${esc(l.label)}：${esc(l.url)}</div>`
+            ).join('')}</div>
+          </div>` : ''}
+
           <!-- Actions -->
           <div class="space-y-3 mt-6">
             <button class="btn btn-secondary" onclick="navigate('/cancer/${card.id}/edit')">✏️ 編輯此癌別</button>
@@ -1347,6 +1358,7 @@
               <div class="flex gap-2">
                 ${doc.storageKey ? `<button class="btn btn-ghost btn-sm flex-1" onclick="openPdf('${doc.storageKey}')">開啟</button>` :
                   '<span class="btn btn-ghost btn-sm flex-1 text-gray-400" style="cursor:default">需重新匯入</span>'}
+                <button class="btn btn-ghost btn-sm" onclick="navigate('/pdf-library/import/${doc.id}')">編輯</button>
                 ${!doc.current && !doc.archived ? `<button class="btn btn-ghost btn-sm text-green-600" onclick="window._setCurrent('${doc.id}')">設為目前</button>` : ''}
                 ${!doc.archived ? `<button class="btn btn-ghost btn-sm text-gray-500" onclick="window._archiveDoc('${doc.id}')">封存</button>` : ''}
                 <button class="btn btn-ghost btn-sm text-red-500" onclick="window._deleteDoc('${doc.id}')">刪除</button>
@@ -1420,7 +1432,7 @@
               </div>
             </div>
 
-            <label class="checkbox-wrap mb-4"><input type="checkbox" id="imp-current" checked> <span class="text-sm text-gray-700">設為目前版本</span></label>
+            <label class="checkbox-wrap mb-4"><input type="checkbox" id="imp-current" ${existingDoc ? (existingDoc.current ? 'checked' : '') : 'checked'}> <span class="text-sm text-gray-700">設為目前版本</span></label>
 
             <div class="form-group"><label class="label">備註</label><textarea class="input" id="imp-notes" rows="3">${esc(existingDoc?.notes || '')}</textarea></div>
 
