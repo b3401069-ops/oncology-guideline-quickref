@@ -1,4 +1,4 @@
-const CACHE_NAME = 'oncology-guideline-v2';
+const CACHE_NAME = 'oncology-guideline-v3';
 const ASSETS = [
   './',
   './index.html',
@@ -27,9 +27,26 @@ self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   if (!event.request.url.startsWith(self.location.origin)) return;
 
+  // 整個 app 是單一 HTML：navigation 走 network-first 才能即時拿到更新
+  // （fetch 需繞過 HTTP 快取，否則更新永遠進不了 SW 快取），離線時退回快取
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request, { cache: 'no-cache' })
+        .then((response) => {
+          if (response.ok) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
+          return response;
+        })
+        .catch(() => caches.match(event.request).then((c) => c || caches.match('./')))
+    );
+    return;
+  }
+
   event.respondWith(
     caches.match(event.request).then((cached) => {
-      const fetchPromise = fetch(event.request)
+      const fetchPromise = fetch(event.request, { cache: 'no-cache' })
         .then((response) => {
           if (response.ok) {
             const clone = response.clone();

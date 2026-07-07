@@ -1489,6 +1489,10 @@
         const est = await navigator.storage.estimate();
         dbSize = ((est.usage || 0) / 1024 / 1024).toFixed(2) + ' MB';
       }
+      let persistStatus = '不支援';
+      if (navigator.storage?.persisted) {
+        persistStatus = (await navigator.storage.persisted()) ? '✅ 已啟用' : '未啟用（加入主畫面後通常會自動啟用）';
+      }
 
       app.innerHTML = `
         <div class="container">
@@ -1501,13 +1505,14 @@
               <button class="btn btn-secondary" id="export-btn">匯出備份 JSON（不含 PDF）</button>
               <button class="btn btn-secondary" id="import-btn">匯入備份 JSON</button>
               <p class="text-xs text-gray-400">完整備份包含所有資料與 PDF 檔案本體，檔案較大；一般備份僅含資料與 PDF 元資料。</p>
-              <p class="text-xs" style="color:var(--amber-700)">⚠️ iPhone 請務必將本 App「加入主畫面」使用，否則 Safari 可能在 7 天未使用後清除所有本機資料（含 PDF）。請定期匯出完整備份。</p>
+              <p class="text-xs" style="color:var(--amber-700)">⚠️ 建議將本 App「加入主畫面」安裝使用，並定期匯出完整備份。瀏覽器在儲存空間不足時仍可能清除本機資料（含 PDF）。</p>
             </div>
           </div>
 
           <div class="card mb-4">
             <h2 class="font-semibold text-gray-800 mb-3">📊 資料庫資訊</h2>
             <p class="text-sm text-gray-600">目前使用空間：${dbSize}</p>
+            <p class="text-sm text-gray-600 mt-1">持久儲存：${persistStatus}</p>
           </div>
 
           <div class="card mb-4" style="border-color:var(--red-100)">
@@ -1602,6 +1607,8 @@
     async function init() {
       await openDB();
       await seedDatabase();
+      // 要求持久儲存，避免瀏覽器在空間不足時清除 IndexedDB（含 PDF）
+      if (navigator.storage?.persist) navigator.storage.persist();
       handleRoute();
     }
 
