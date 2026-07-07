@@ -395,12 +395,47 @@
       { label: '自費討論', content: '未符合健保給付條件時，與病人討論自費或替代方案並留下紀錄。' },
     ];
 
+    // 預設精準軸（一鍵加入，皆可再修改）
+    const PRESET_PRECISION = [
+      { label: '疾病狀態', type: 'single_select', options: ['新診斷','局部晚期','不可切除','復發','轉移'] },
+      { label: '分期', type: 'single_select', options: ['I','II','III','IV'] },
+      { label: 'ECOG PS', type: 'single_select', options: ['0','1','2','3','4'] },
+      { label: '治療線數', type: 'single_select', options: ['第一線','第二線','第三線以上'] },
+      { label: '生物標記', type: 'multi_select', options: ['EGFR','ALK','ROS1','KRAS','BRAF','HER2','FGFR2','IDH1','MSI-H/dMMR','TMB-High','NTRK','PD-L1 陽性','BRCA1/2'] },
+      { label: '病理亞型', type: 'text', options: [] },
+    ];
+
     // ========== 小工具 ==========
-    // 必查章節可帶頁碼：「章節名稱|12」→ { name, page }
+    // 必查章節可帶頁碼與適用條件：「章節名稱|12|生物標記=FGFR2」
+    // 各段以 | 分隔，純數字段=頁碼，含 = 段=條件，其餘=名稱
     const parseSection = (s) => {
-      const m = s.match(/^(.*?)\|\s*[pP]?\.?\s*(\d+)\s*$/);
-      return m ? { name: m[1].trim(), page: Number(m[2]) } : { name: s, page: null };
+      const parts = String(s).split('|').map(x => x.trim());
+      const out = { name: parts[0] || '', page: null, cond: null, raw: s };
+      for (const p of parts.slice(1)) {
+        if (/^[pP]?\.?\s*\d+$/.test(p)) out.page = Number(p.replace(/\D/g, ''));
+        else if (p.includes('=')) out.cond = parseCondStr(p);
+      }
+      return out;
     };
+    // 條件字串「欄位=值1/值2」→ { field, values }
+    const parseCondStr = (str) => {
+      const i = str.indexOf('=');
+      if (i < 0) return null;
+      const field = str.slice(0, i).trim();
+      const values = str.slice(i + 1).split(/[\/、,]/).map(v => v.trim()).filter(Boolean);
+      return field && values.length ? { field, values } : null;
+    };
+    const condLabel = (cond) => cond && cond.values?.length ? `${cond.field}=${cond.values.join('/')}` : '';
+    // 由精準欄位建 值對照表；條件狀態：null=無條件(一律顯示)、'met'=符合、'unmet'=不符合
+    const buildPfMap = (fields) => { const m = {}; fields.forEach(f => { m[f.label] = Array.isArray(f.value) ? f.value : (hasPfValue(f) ? [String(f.value)] : []); }); return m; };
+    const condState = (cond, pfMap) => {
+      if (!cond || !cond.values?.length) return null;
+      const cur = pfMap[cond.field] || [];
+      return cond.values.some(v => cur.includes(v)) ? 'met' : 'unmet';
+    };
+    // 依條件狀態排序：符合 → 無條件 → 不符合
+    const condRank = (st) => st === 'met' ? 0 : st === null ? 1 : 2;
+
     // 指引過期判斷：以最後確認日（無則匯入日）起算
     const STALE_DAYS = 180;
     const docAgeDays = (d) => Math.floor((Date.now() - new Date(d.verifiedAt || d.importedAt || Date.now())) / 86400000);
@@ -408,6 +443,39 @@
     // 精準欄位是否已填值
     const hasPfValue = (f) => Array.isArray(f.value) ? f.value.length > 0 : !!(f.value && String(f.value).trim());
     const pfValueText = (f) => Array.isArray(f.value) ? f.value.join('、') : (f.value || '');
+
+    // ========== 適用條件選擇器（編輯表單共用） ==========
+    // selFields：此癌別的單選/多選精準欄位
+    const condPickerHTML = (selFields, existing) => {
+      if (!selFields.length) return `<div class="form-group"><label class="label">適用條件</label><p class="text-xs text-gray-400">尚無可用精準欄位。先到「編輯精準欄位」建立單選/多選欄位，才能設定條件。</p></div>`;
+      return `<div class="form-group"><label class="label">適用條件（可不設；設了之後，只有精準欄位填到對應值時才會浮出提醒）</label>
+        <select class="input" id="cond-field">
+          <option value="">— 無條件（一律顯示）—</option>
+          ${selFields.map(f => `<option value="${esc(f.label)}" ${existing?.field === f.label ? 'selected' : ''}>${esc(f.label)}</option>`).join('')}
+        </select>
+        <div id="cond-values" class="mt-2"></div></div>`;
+    };
+    const wireCondPicker = (selFields, existing) => {
+      const fieldEl = document.getElementById('cond-field');
+      const valWrap = document.getElementById('cond-values');
+      if (!fieldEl || !valWrap) return;
+      const renderVals = () => {
+        const f = selFields.find(x => x.label === fieldEl.value);
+        if (!f) { valWrap.innerHTML = ''; return; }
+        valWrap.innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:6px">${f.options.map(o => {
+          const on = existing?.field === f.label && existing.values?.includes(o);
+          return `<label class="checkbox-wrap" style="padding:4px 8px"><input type="checkbox" class="cond-val" value="${esc(o)}" ${on ? 'checked' : ''}> <span class="text-sm">${esc(o)}</span></label>`;
+        }).join('')}</div>`;
+      };
+      fieldEl.addEventListener('change', renderVals);
+      renderVals();
+    };
+    const readCond = () => {
+      const fieldEl = document.getElementById('cond-field');
+      if (!fieldEl || !fieldEl.value) return null;
+      const values = [...document.querySelectorAll('.cond-val:checked')].map(c => c.value);
+      return values.length ? { field: fieldEl.value, values } : null;
+    };
 
     async function seedDatabase() {
       const count = await dbGetAll('cancerCards');
@@ -837,6 +905,8 @@
       const nhiNotes = (await dbGetAll('nhiNotes')).filter(n => n.cancerId === card.id);
       const precisionFields = (await dbGetAll('precisionFields')).filter(p => p.cancerId === card.id);
       const jumpDoc = currentDocs.find(d => d.storageKey);
+      const pfMap = buildPfMap(precisionFields);
+      const filledPf = precisionFields.filter(hasPfValue);
 
       // Update last used
       await dbPut('cancerCards', { ...card, lastUsedAt: new Date().toISOString() });
@@ -855,6 +925,11 @@
             </div>
             <span class="status ${statusClass} shrink-0">${esc(card.reviewStatus)}</span>
           </div>
+
+          ${filledPf.length ? `<div class="mb-4" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+            <span class="text-xs text-gray-400">目前情境：</span>
+            ${filledPf.flatMap(f => (Array.isArray(f.value) ? f.value : [f.value]).map(v => `<span class="tag tag-category">${esc(v)}</span>`)).join('')}
+          </div>` : ''}
 
           <button class="btn btn-primary mb-4" onclick="navigate('/cancer/${card.id}/quickref')">📋 快速參考</button>
 
@@ -897,23 +972,26 @@
             <h2 class="section-title">📖 必查章節</h2>
             ${card.mustReadSections.length ? `<ul class="space-y-2">${card.mustReadSections.map(s => {
               const ps = parseSection(s);
+              const st = condState(ps.cond, pfMap);
               const jump = ps.page && jumpDoc ? `<button class="text-sm" style="margin-left:auto;color:var(--primary-600);font-weight:500;white-space:nowrap" onclick="openPdf('${jumpDoc.storageKey}', ${ps.page})">p.${ps.page} →</button>` :
                 ps.page ? `<span class="text-xs text-gray-400" style="margin-left:auto">p.${ps.page}</span>` : '';
-              return `<li class="list-item"><span class="list-dot">•</span><span class="text-sm text-gray-700">${esc(ps.name)}</span>${jump}</li>`;
+              const mark = st === 'met' ? '<span class="tag tag-category" style="margin-left:6px">✦ ' + esc(condLabel(ps.cond)) + '</span>' :
+                st === 'unmet' ? '<span class="tag" style="margin-left:6px">僅當 ' + esc(condLabel(ps.cond)) + '</span>' : '';
+              return `<li class="list-item" style="${st === 'unmet' ? 'opacity:.5' : ''}"><span class="list-dot">•</span><span class="text-sm text-gray-700">${esc(ps.name)}</span>${mark}${jump}</li>`;
             }).join('')}</ul>` :
               '<p class="text-sm text-gray-400">尚未設定章節清單</p>'}
           </div>
 
-          <!-- Checklist（可勾選） -->
+          <!-- Checklist（可勾選、依情境浮出） -->
           <div class="card section">
             <div class="flex-between">
               <h2 class="section-title">✅ 不要漏</h2>
               ${checklists.some(c => c.checked) ? `<button class="btn btn-ghost btn-sm" style="width:auto;padding:4px 10px" onclick="window._resetChecks('${card.id}')">重設勾選</button>` : ''}
             </div>
-            ${checklists.length ? `<div class="space-y-2">${checklists.map(c => `
-              <label class="list-item" style="cursor:pointer">
+            ${checklists.length ? `<div class="space-y-2">${[...checklists].map(c => ({ c, st: condState(c.condition, pfMap) })).sort((a, b) => condRank(a.st) - condRank(b.st)).map(({ c, st }) => `
+              <label class="list-item" style="cursor:pointer;${st === 'unmet' ? 'opacity:.5' : ''}${st === 'met' ? 'background:var(--primary-50);border-radius:8px;padding-left:6px;padding-right:6px' : ''}">
                 <input type="checkbox" ${c.checked ? 'checked' : ''} style="margin-top:2px" onchange="window._toggleCheck('${c.id}', this.checked, this)">
-                <div><p class="text-sm text-gray-700" style="${c.checked ? 'text-decoration:line-through;color:var(--gray-400)' : ''}">${esc(c.label)}</p><p class="text-xs text-gray-400">${esc(c.category)} · ${esc(c.importance)}</p></div>
+                <div><p class="text-sm text-gray-700" style="${c.checked ? 'text-decoration:line-through;color:var(--gray-400)' : ''}">${esc(c.label)}</p><p class="text-xs text-gray-400">${esc(c.category)} · ${esc(c.importance)}${st === 'met' ? ' · ↳ 因 ' + esc(condLabel(c.condition)) : st === 'unmet' ? ' · 僅當 ' + esc(condLabel(c.condition)) : ''}</p></div>
               </label>
             `).join('')}</div>` : '<p class="text-sm text-gray-400">尚未建立 checklist</p>'}
           </div>
@@ -926,7 +1004,7 @@
                 return `<div class="form-group"><label class="label">${esc(f.label)}${f.required ? ' *' : ''}</label>
                   <div style="display:flex;flex-wrap:wrap;gap:6px">${f.options.map((o, i) => {
                     const on = Array.isArray(f.value) && f.value.includes(o);
-                    return `<button type="button" class="tag ${on ? 'tag-category' : ''}" style="cursor:pointer;border:none;padding:6px 12px" onclick="window._togglePfMulti('${f.id}', ${i}, this)">${esc(o)}</button>`;
+                    return `<button type="button" class="tag ${on ? 'tag-category' : ''}" style="cursor:pointer;border:none;padding:6px 12px" onclick="window._togglePfMulti('${f.id}', ${i})">${esc(o)}</button>`;
                   }).join('')}</div></div>`;
               }
               if (f.type === 'text' || f.type === 'number') {
@@ -941,12 +1019,12 @@
             '<p class="text-sm text-gray-400">尚未設定精準化欄位，可由下方「編輯精準欄位」建立</p>'}
           </div>
 
-          <!-- NHI Notes -->
+          <!-- NHI Notes（依情境浮出） -->
           <div class="card section">
             <h2 class="section-title">🏥 健保提醒</h2>
-            ${nhiNotes.length ? `<div class="space-y-2">${nhiNotes.map(n => {
+            ${nhiNotes.length ? `<div class="space-y-2">${[...nhiNotes].map(n => ({ n, st: condState(n.condition, pfMap) })).sort((a, b) => condRank(a.st) - condRank(b.st)).map(({ n, st }) => {
               const linked = docs.find(d => d.id === n.sourceDocumentId);
-              return `<div class="bg-blue-50 rounded-lg p-3"><p class="text-sm font-medium text-blue-800">${esc(n.label)}</p><p class="text-sm text-blue-700 mt-1">${esc(n.content)}</p>${linked?.storageKey ? `<button class="text-sm text-blue-700 mt-2" style="font-weight:500" onclick="openPdf('${linked.storageKey}')">📄 開啟給付規定 PDF</button>` : ''}</div>`;
+              return `<div class="bg-blue-50 rounded-lg p-3" style="${st === 'unmet' ? 'opacity:.5' : ''}${st === 'met' ? 'outline:2px solid var(--primary-400)' : ''}"><p class="text-sm font-medium text-blue-800">${esc(n.label)}${st === 'met' ? ' <span class="tag tag-category">↳ 因 ' + esc(condLabel(n.condition)) + '</span>' : st === 'unmet' ? ' <span class="tag">僅當 ' + esc(condLabel(n.condition)) + '</span>' : ''}</p><p class="text-sm text-blue-700 mt-1">${esc(n.content)}</p>${linked?.storageKey ? `<button class="text-sm text-blue-700 mt-2" style="font-weight:500" onclick="openPdf('${linked.storageKey}')">📄 開啟給付規定 PDF</button>` : ''}</div>`;
             }).join('')}</div>` : '<p class="text-sm text-gray-400">尚未設定健保提醒</p>'}
           </div>
 
@@ -987,6 +1065,17 @@
       const isEmpty = card.reviewStatus === '待維護';
       const filledPf = precisionFields.filter(hasPfValue);
       const unfilledPf = precisionFields.filter(f => !hasPfValue(f));
+      // 依情境過濾：符合條件與無條件者顯示，不符合者收起（僅計數）
+      const pfMap = buildPfMap(precisionFields);
+      const secAll = card.mustReadSections.map(parseSection).map(ps => ({ ps, st: condState(ps.cond, pfMap) }));
+      const secVisible = secAll.filter(x => x.st !== 'unmet');
+      const secHidden = secAll.length - secVisible.length;
+      const clAll = [...checklists].map(c => ({ c, st: condState(c.condition, pfMap) }));
+      const clVisible = clAll.filter(x => x.st !== 'unmet').sort((a, b) => condRank(a.st) - condRank(b.st));
+      const clHidden = clAll.length - clVisible.length;
+      const nhiAll = [...nhiNotes].map(n => ({ n, st: condState(n.condition, pfMap) }));
+      const nhiVisible = nhiAll.filter(x => x.st !== 'unmet').sort((a, b) => condRank(a.st) - condRank(b.st));
+      const nhiHidden = nhiAll.length - nhiVisible.length;
       const missingItems = [];
       if (!card.primaryGuideline) missingItems.push('尚未設定主要指引');
       if (!card.mustReadSections.length) missingItems.push('尚未設定必查章節');
@@ -1024,29 +1113,34 @@
             `}
           </div>
 
+          ${filledPf.length ? `<div class="mb-4" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+            <span class="text-xs text-gray-400">目前情境：</span>
+            ${filledPf.flatMap(f => (Array.isArray(f.value) ? f.value : [f.value]).map(v => `<span class="tag tag-category">${esc(v)}</span>`)).join('')}
+          </div>` : ''}
+
           <div class="card section">
             <h2 class="section-title">📖 必查章節</h2>
-            ${card.mustReadSections.length ? `<ul class="space-y-2">${card.mustReadSections.map(s => {
-              const ps = parseSection(s);
+            ${secVisible.length ? `<ul class="space-y-2">${secVisible.map(({ ps, st }) => {
               const jump = ps.page && jumpDoc ? `<button class="text-sm" style="margin-left:auto;color:var(--primary-600);font-weight:500;white-space:nowrap" onclick="openPdf('${jumpDoc.storageKey}', ${ps.page})">p.${ps.page} →</button>` :
                 ps.page ? `<span class="text-xs text-gray-400" style="margin-left:auto">p.${ps.page}</span>` : '';
-              return `<li class="list-item"><span class="list-dot">•</span><span class="text-sm text-gray-700">${esc(ps.name)}</span>${jump}</li>`;
-            }).join('')}</ul>` :
-              '<p class="text-sm text-gray-400">尚未設定</p>'}
+              const mark = st === 'met' ? '<span class="tag tag-category" style="margin-left:6px">✦</span>' : '';
+              return `<li class="list-item"><span class="list-dot">•</span><span class="text-sm text-gray-700">${esc(ps.name)}</span>${mark}${jump}</li>`;
+            }).join('')}</ul>${secHidden ? `<p class="text-xs text-gray-400 mt-2">另有 ${secHidden} 項情境相關章節未符合目前輸入</p>` : ''}` :
+              (card.mustReadSections.length ? `<p class="text-sm text-gray-400">目前情境無對應章節（共 ${secHidden} 項情境相關）</p>` : '<p class="text-sm text-gray-400">尚未設定</p>')}
           </div>
 
           <div class="card section">
             <div class="flex-between">
               <h2 class="section-title">✅ 不要漏</h2>
-              ${checklists.some(c => c.checked) ? `<button class="btn btn-ghost btn-sm" style="width:auto;padding:4px 10px" onclick="window._resetChecks('${card.id}')">重設勾選</button>` : ''}
+              ${clVisible.some(x => x.c.checked) ? `<button class="btn btn-ghost btn-sm" style="width:auto;padding:4px 10px" onclick="window._resetChecks('${card.id}')">重設勾選</button>` : ''}
             </div>
-            ${checklists.length ? `<div class="space-y-2">${checklists.map(c => `
-              <label class="list-item" style="cursor:pointer">
+            ${clVisible.length ? `<div class="space-y-2">${clVisible.map(({ c, st }) => `
+              <label class="list-item" style="cursor:pointer;${st === 'met' ? 'background:var(--primary-50);border-radius:8px;padding-left:6px;padding-right:6px' : ''}">
                 <input type="checkbox" ${c.checked ? 'checked' : ''} style="margin-top:2px" onchange="window._toggleCheck('${c.id}', this.checked, this)">
-                <p class="text-sm text-gray-700" style="${c.checked ? 'text-decoration:line-through;color:var(--gray-400)' : ''}">${esc(c.label)}</p>
+                <p class="text-sm text-gray-700" style="${c.checked ? 'text-decoration:line-through;color:var(--gray-400)' : ''}">${esc(c.label)}${st === 'met' ? ' <span class="tag tag-category">↳ 因 ' + esc(condLabel(c.condition)) + '</span>' : ''}</p>
               </label>
-            `).join('')}</div>` :
-              '<p class="text-sm text-gray-400">尚未建立</p>'}
+            `).join('')}</div>${clHidden ? `<p class="text-xs text-gray-400 mt-2">另有 ${clHidden} 項情境相關項目未符合目前輸入</p>` : ''}` :
+              (checklists.length ? `<p class="text-sm text-gray-400">目前情境無對應項目（共 ${clHidden} 項情境相關）</p>` : '<p class="text-sm text-gray-400">尚未建立</p>')}
           </div>
 
           ${filledPf.length ? `
@@ -1059,10 +1153,11 @@
           ${nhiNotes.length ? `
             <div class="card section">
               <h2 class="section-title">🏥 健保提醒</h2>
-              <div class="space-y-2">${nhiNotes.map(n => {
+              ${nhiVisible.length ? `<div class="space-y-2">${nhiVisible.map(({ n, st }) => {
                 const linked = docs.find(d => d.id === n.sourceDocumentId);
-                return `<div class="bg-blue-50 rounded-lg p-3"><p class="text-sm text-blue-800">${esc(n.content)}</p>${linked?.storageKey ? `<button class="text-sm text-blue-700 mt-2" style="font-weight:500" onclick="openPdf('${linked.storageKey}')">📄 開啟給付規定 PDF</button>` : ''}</div>`;
-              }).join('')}</div>
+                return `<div class="bg-blue-50 rounded-lg p-3" style="${st === 'met' ? 'outline:2px solid var(--primary-400)' : ''}"><p class="text-sm text-blue-800">${st === 'met' ? '↳ 因 ' + esc(condLabel(n.condition)) + '：' : ''}${esc(n.content)}</p>${linked?.storageKey ? `<button class="text-sm text-blue-700 mt-2" style="font-weight:500" onclick="openPdf('${linked.storageKey}')">📄 開啟給付規定 PDF</button>` : ''}</div>`;
+              }).join('')}${nhiHidden ? `<p class="text-xs text-gray-400 mt-1">另有 ${nhiHidden} 項情境相關健保提醒未符合目前輸入</p>` : ''}</div>` :
+              `<p class="text-sm text-gray-400">目前情境無對應健保提醒（共 ${nhiHidden} 項情境相關）</p>`}
             </div>
           ` : ''}
 
@@ -1101,21 +1196,24 @@
         lines.push('- ' + (card.primaryGuideline || '待維護'));
         card.secondaryGuidelines.forEach(g => lines.push('- ' + g));
         lines.push('- 本機狀態：' + (hasDocs ? currentDocs.map(d => '已匯入 ' + (d.version || d.title)).join('、') : '尚未匯入'));
-        if (card.mustReadSections.length) {
+        if (filledPf.length) lines.push('- 目前情境：' + filledPf.map(f => pfValueText(f)).join('、'));
+        if (secVisible.length) {
           lines.push('', '必查章節：');
-          card.mustReadSections.forEach(s => { const ps = parseSection(s); lines.push('- ' + ps.name + (ps.page ? '（p.' + ps.page + '）' : '')); });
+          secVisible.forEach(({ ps, st }) => lines.push('- ' + ps.name + (ps.page ? '（p.' + ps.page + '）' : '') + (st === 'met' ? ' ✦' : '')));
+          if (secHidden) lines.push('  （另有 ' + secHidden + ' 項情境相關章節未符合）');
         }
-        if (checklists.length) {
+        if (clVisible.length) {
           lines.push('', '不要漏：');
-          checklists.forEach(c => lines.push('- [' + (c.checked ? 'x' : ' ') + '] ' + c.label));
+          clVisible.forEach(({ c, st }) => lines.push('- [' + (c.checked ? 'x' : ' ') + '] ' + c.label + (st === 'met' ? '（↳ 因 ' + condLabel(c.condition) + '）' : '')));
+          if (clHidden) lines.push('  （另有 ' + clHidden + ' 項情境相關項目未符合）');
         }
         if (filledPf.length) {
           lines.push('', '精準化資訊：');
           filledPf.forEach(f => lines.push('- ' + f.label + '：' + pfValueText(f)));
         }
-        if (nhiNotes.length) {
+        if (nhiVisible.length) {
           lines.push('', '健保提醒：');
-          nhiNotes.forEach(n => lines.push('- ' + n.label + '：' + n.content));
+          nhiVisible.forEach(({ n, st }) => lines.push('- ' + n.label + '：' + n.content + (st === 'met' ? '（↳ 因 ' + condLabel(n.condition) + '）' : '')));
         }
         if (missingItems.length) {
           lines.push('', '目前資訊不足：');
@@ -1178,7 +1276,7 @@
               <button type="button" class="tag tag-category" style="cursor:pointer;border:none" data-section-all="1">＋ 全部加入</button>
             </div>
             <textarea class="input" id="edit-sections" rows="6" placeholder="初始評估&#10;分期與可切除性&#10;生物標記">${esc(card.mustReadSections.join('\n'))}</textarea>
-            <p class="text-xs text-gray-400 mt-1">點上方常用章節快速加入，也可自行輸入或修改。章節可加頁碼「章節名稱|頁碼」（例：初始評估|12），查閱時可一鍵跳頁</p>
+            <p class="text-xs text-gray-400 mt-1">點上方常用章節快速加入，也可自行輸入或修改。可加頁碼「章節名稱|頁碼」（例：初始評估|12）一鍵跳頁；也可加適用條件「章節名稱|68|生物標記=FGFR2」，填入對應值時該章節會標示 ✦ 浮出</p>
           </div>
 
           <div class="card mb-4">
@@ -1230,6 +1328,7 @@
       const card = await dbGet('cancerCards', routeParams.cancerId);
       if (!card) { navigate('/'); return; }
       const items = (await dbGetAll('checklists')).filter(c => c.cancerId === card.id);
+      const selFields = (await dbGetAll('precisionFields')).filter(p => p.cancerId === card.id && (p.type === 'single_select' || p.type === 'multi_select'));
 
       app.innerHTML = `
         <div class="container">
@@ -1269,12 +1368,14 @@
                 ${['必查','建議','參考'].map(i => `<option value="${i}" ${item?.importance===i?'selected':''}>${i}</option>`).join('')}
               </select>
             </div>
+            ${condPickerHTML(selFields, item?.condition)}
             <div class="flex gap-2">
               <button class="btn btn-primary flex-1" id="cl-save">儲存</button>
               <button class="btn btn-secondary flex-1" id="cl-cancel">取消</button>
             </div>
           </div>
         `;
+        wireCondPicker(selFields, item?.condition);
         document.getElementById('cl-preset')?.addEventListener('change', (e) => {
           const p = PRESET_CHECKLIST[Number(e.target.value)];
           if (!p) return;
@@ -1291,6 +1392,8 @@
             label,
             category: document.getElementById('cl-cat').value,
             importance: document.getElementById('cl-imp').value,
+            condition: readCond(),
+            checked: item?.checked || false,
             sourceType: '個人備註',
             sourceDocumentId: '',
             updatedAt: new Date().toISOString().split('T')[0],
@@ -1334,9 +1437,10 @@
             <div class="card flex-between items-start gap-3">
               <div class="min-w-0 flex-1">
                 <p class="font-medium text-gray-900">${esc(item.label)}</p>
-                <div class="flex gap-2 mt-1">
+                <div class="flex gap-2 mt-1" style="flex-wrap:wrap">
                   <span class="tag">${esc(item.category)}</span>
                   <span class="tag ${impClass}">${esc(item.importance)}</span>
+                  ${item.condition ? `<span class="tag tag-category">僅當 ${esc(condLabel(item.condition))}</span>` : ''}
                 </div>
               </div>
               <div class="flex gap-1">
@@ -1371,7 +1475,11 @@
           <h1 class="text-2xl font-bold mb-1">精準化欄位</h1>
           <p class="text-sm text-gray-500 mb-6">${esc(card.zhName)}</p>
 
-          <button class="btn btn-primary mb-4" id="add-precision-btn">+ 新增欄位</button>
+          <div class="flex gap-2 mb-4">
+            <button class="btn btn-primary flex-1" id="add-precision-btn">+ 新增欄位</button>
+            <button class="btn btn-secondary flex-1" id="add-preset-precision-btn">🎯 加入常用軸</button>
+          </div>
+          <p class="text-xs text-gray-400 mb-4">精準軸（如疾病狀態、生物標記）建立後，可在 checklist／健保提醒設定「適用條件」，讓對應提醒依填入的值自動浮出。</p>
           <div id="precision-form" class="hidden card mb-4"></div>
           <div id="precision-list"></div>
           ${renderNav('')}
@@ -1383,6 +1491,12 @@
         document.getElementById('precision-form').innerHTML = `
           <h2 class="font-semibold text-gray-800 mb-3">${item ? '編輯欄位' : '新增欄位'}</h2>
           <div class="space-y-3">
+            ${item ? '' : `<div class="form-group"><label class="label">常用範本（選擇後自動填入，可再修改）</label>
+              <select class="input" id="pf-preset">
+                <option value="">— 自行輸入 —</option>
+                ${PRESET_PRECISION.map((p, i) => `<option value="${i}">${esc(p.label)}</option>`).join('')}
+              </select>
+            </div>`}
             <div class="form-group"><label class="label">欄位名稱</label><input class="input" id="pf-label" value="${esc(item?.label || '')}" placeholder="疾病狀態"></div>
             <div class="form-group"><label class="label">欄位類型</label>
               <select class="input" id="pf-type">
@@ -1411,6 +1525,14 @@
         typeEl.addEventListener('change', toggleOpts);
         toggleOpts();
 
+        document.getElementById('pf-preset')?.addEventListener('change', (e) => {
+          const p = PRESET_PRECISION[Number(e.target.value)];
+          if (!p) return;
+          document.getElementById('pf-label').value = p.label;
+          typeEl.value = p.type; toggleOpts();
+          document.getElementById('pf-options').value = p.options.join('\n');
+        });
+
         document.getElementById('pf-save').addEventListener('click', async () => {
           const label = document.getElementById('pf-label').value.trim();
           if (!label) { showToast('請填寫欄位名稱'); return; }
@@ -1434,6 +1556,19 @@
       };
 
       document.getElementById('add-precision-btn').addEventListener('click', () => renderForm(null));
+
+      // 一鍵加入常用精準軸（已存在同名者跳過）
+      document.getElementById('add-preset-precision-btn').addEventListener('click', async () => {
+        const existing = new Set(items.map(i => i.label));
+        let added = 0;
+        for (const p of PRESET_PRECISION) {
+          if (existing.has(p.label)) continue;
+          await dbPut('precisionFields', { id: crypto.randomUUID(), cancerId: card.id, label: p.label, type: p.type, required: false, options: [...p.options] });
+          added++;
+        }
+        showToast(added ? `已加入 ${added} 個常用精準軸` : '常用軸皆已存在');
+        navigate('/cancer/' + card.id + '/precision');
+      });
 
       const listEl = document.getElementById('precision-list');
       if (items.length === 0) {
@@ -1481,6 +1616,7 @@
       const isNhiDoc = (d) => /健保|nhi/i.test((d.source || '') + ' ' + (d.title || ''));
       const linkableDocs = [...allDocs.filter(d => isNhiDoc(d) && !d.archived), ...allDocs.filter(d => !isNhiDoc(d) && !d.archived)];
       const docMap = {}; allDocs.forEach(d => docMap[d.id] = d);
+      const selFields = (await dbGetAll('precisionFields')).filter(p => p.cancerId === card.id && (p.type === 'single_select' || p.type === 'multi_select'));
 
       app.innerHTML = `
         <div class="container">
@@ -1514,12 +1650,14 @@
                 ${linkableDocs.map(d => `<option value="${d.id}" ${item?.sourceDocumentId === d.id ? 'selected' : ''}>${esc(d.title)}${d.version ? '（' + esc(d.version) + '）' : ''}</option>`).join('')}
               </select>` : `<p class="text-xs text-gray-400">尚未匯入健保文件。可至 PDF 文件庫匯入，來源選「健保給付規定」。</p>`}
             </div>
+            ${condPickerHTML(selFields, item?.condition)}
             <div class="flex gap-2">
               <button class="btn btn-primary flex-1" id="nhi-save">儲存</button>
               <button class="btn btn-secondary flex-1" id="nhi-cancel">取消</button>
             </div>
           </div>
         `;
+        wireCondPicker(selFields, item?.condition);
         document.getElementById('nhi-preset')?.addEventListener('change', (e) => {
           const p = PRESET_NHI[Number(e.target.value)];
           if (!p) return;
@@ -1534,6 +1672,7 @@
             id: item?.id || crypto.randomUUID(),
             cancerId: card.id, label, content,
             sourceDocumentId: document.getElementById('nhi-doc')?.value || '',
+            condition: readCond(),
             updatedAt: new Date().toISOString().split('T')[0],
           });
           showToast(item ? '已更新' : '已新增');
@@ -1555,7 +1694,8 @@
             <div class="min-w-0 flex-1">
               <p class="font-medium text-gray-900">${esc(item.label)}</p>
               <p class="text-sm text-gray-600 mt-1">${esc(item.content)}</p>
-              ${docMap[item.sourceDocumentId]?.storageKey ? `<button class="text-sm mt-2" style="color:var(--primary-600);font-weight:500" onclick="openPdf('${docMap[item.sourceDocumentId].storageKey}')">📄 開啟 ${esc(docMap[item.sourceDocumentId].title)}</button>` : ''}
+              ${item.condition ? `<span class="tag tag-category mt-1" style="display:inline-block">僅當 ${esc(condLabel(item.condition))}</span>` : ''}
+              ${docMap[item.sourceDocumentId]?.storageKey ? `<button class="text-sm mt-2" style="display:block;color:var(--primary-600);font-weight:500" onclick="openPdf('${docMap[item.sourceDocumentId].storageKey}')">📄 開啟 ${esc(docMap[item.sourceDocumentId].title)}</button>` : ''}
             </div>
             <div class="flex gap-1">
               <button class="btn btn-ghost btn-sm" onclick="window._editNhi('${item.id}')">編輯</button>
@@ -2093,13 +2233,13 @@
       showToast('已重設勾選');
       handleRoute();
     };
-    // 精準欄位填值（單選／文字／數字）
+    // 精準欄位填值（單選／文字／數字）；改值後重繪，讓條件連動即時反映
     window._setPfValue = async (id, value) => {
       const f = await dbGet('precisionFields', id);
-      if (f) await dbPut('precisionFields', { ...f, value });
+      if (f) { await dbPut('precisionFields', { ...f, value }); handleRoute(); }
     };
     // 精準欄位多選：以選項 index 切換，避免特殊字元進到 onclick
-    window._togglePfMulti = async (id, optIdx, el) => {
+    window._togglePfMulti = async (id, optIdx) => {
       const f = await dbGet('precisionFields', id);
       if (!f) return;
       const opt = f.options[optIdx];
@@ -2107,7 +2247,7 @@
       const i = cur.indexOf(opt);
       if (i >= 0) cur.splice(i, 1); else cur.push(opt);
       await dbPut('precisionFields', { ...f, value: cur });
-      if (el) el.classList.toggle('tag-category', i < 0);
+      handleRoute();
     };
     // 指引版本確認為最新
     window._verifyDoc = async (id) => {
