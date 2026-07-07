@@ -365,6 +365,36 @@
       '其他未分類腫瘤':'other_unclassified',
     };
 
+    // ========== 預設範本（下拉／快速加入用，皆可再手動修改） ==========
+    const PRESET_SOURCES = ['NCCN', 'ESMO', 'ASCO', '健保給付規定', 'TCOG', 'AJCC', 'WHO'];
+    const sourceDatalist = () => `<datalist id="source-presets">${PRESET_SOURCES.map(s => `<option value="${esc(s)}"></option>`).join('')}</datalist>`;
+
+    const PRESET_SECTIONS = [
+      '初始評估', '診斷與病理確認', '分期與可切除性', '生物標記檢測',
+      '手術治療', '放射治療', '第一線全身治療', '第二線及後線治療',
+      '維持治療', '復發或轉移性疾病治療', '支持治療與症狀控制',
+      '追蹤與監測', '健保給付規定比對',
+    ];
+
+    const PRESET_CHECKLIST = [
+      { label: '確認病理診斷與亞型', category: '確認', importance: '必查' },
+      { label: '完成分期影像檢查', category: '評估', importance: '必查' },
+      { label: '確認生物標記／基因檢測狀態', category: '檢測', importance: '必查' },
+      { label: '評估體能狀態（ECOG PS）', category: '評估', importance: '必查' },
+      { label: '評估器官功能（肝、腎、心）', category: '評估', importance: '必查' },
+      { label: '比對健保給付條件與事前審查需求', category: '確認', importance: '必查' },
+      { label: 'B、C 型肝炎篩檢（全身治療前）', category: '檢測', importance: '建議' },
+      { label: '生育保存諮詢（適齡病人）', category: '處置', importance: '建議' },
+      { label: '評估臨床試驗可行性', category: '評估', importance: '參考' },
+    ];
+
+    const PRESET_NHI = [
+      { label: '比對健保給付規定', content: '提出建議前，需比對台灣健保癌藥給付規定（以最新公告版本為準）確認適應症與給付條件。' },
+      { label: '事前審查', content: '此類藥物多需事前審查，送審前確認生物標記報告、影像與病歷資料齊全。' },
+      { label: '給付線數限制', content: '確認健保給付之治療線數限制，以及先前治療紀錄是否符合。' },
+      { label: '自費討論', content: '未符合健保給付條件時，與病人討論自費或替代方案並留下紀錄。' },
+    ];
+
     async function seedDatabase() {
       const count = await dbGetAll('cancerCards');
       if (count.length > 0) return;
@@ -853,9 +883,10 @@
           <!-- NHI Notes -->
           <div class="card section">
             <h2 class="section-title">🏥 健保提醒</h2>
-            ${nhiNotes.length ? `<div class="space-y-2">${nhiNotes.map(n => `
-              <div class="bg-blue-50 rounded-lg p-3"><p class="text-sm font-medium text-blue-800">${esc(n.label)}</p><p class="text-sm text-blue-700 mt-1">${esc(n.content)}</p></div>
-            `).join('')}</div>` : '<p class="text-sm text-gray-400">尚未設定健保提醒</p>'}
+            ${nhiNotes.length ? `<div class="space-y-2">${nhiNotes.map(n => {
+              const linked = docs.find(d => d.id === n.sourceDocumentId);
+              return `<div class="bg-blue-50 rounded-lg p-3"><p class="text-sm font-medium text-blue-800">${esc(n.label)}</p><p class="text-sm text-blue-700 mt-1">${esc(n.content)}</p>${linked?.storageKey ? `<button class="text-sm text-blue-700 mt-2" style="font-weight:500" onclick="openPdf('${linked.storageKey}')">📄 開啟給付規定 PDF</button>` : ''}</div>`;
+            }).join('')}</div>` : '<p class="text-sm text-gray-400">尚未設定健保提醒</p>'}
           </div>
 
           <!-- External Links -->
@@ -943,7 +974,10 @@
           ${nhiNotes.length ? `
             <div class="card section">
               <h2 class="section-title">🏥 健保提醒</h2>
-              <div class="space-y-2">${nhiNotes.map(n => `<div class="bg-blue-50 rounded-lg p-3"><p class="text-sm text-blue-800">${esc(n.content)}</p></div>`).join('')}</div>
+              <div class="space-y-2">${nhiNotes.map(n => {
+                const linked = docs.find(d => d.id === n.sourceDocumentId);
+                return `<div class="bg-blue-50 rounded-lg p-3"><p class="text-sm text-blue-800">${esc(n.content)}</p>${linked?.storageKey ? `<button class="text-sm text-blue-700 mt-2" style="font-weight:500" onclick="openPdf('${linked.storageKey}')">📄 開啟給付規定 PDF</button>` : ''}</div>`;
+              }).join('')}</div>
             </div>
           ` : ''}
 
@@ -1010,7 +1044,12 @@
 
           <div class="card mb-4">
             <h2 class="font-semibold text-gray-800 mb-3">必查章節（每行一筆）</h2>
+            <div id="section-presets" style="display:flex;flex-wrap:wrap;gap:6px" class="mb-2">
+              ${PRESET_SECTIONS.map(s => `<button type="button" class="tag" style="cursor:pointer;border:none" data-section="${esc(s)}">+ ${esc(s)}</button>`).join('')}
+              <button type="button" class="tag tag-category" style="cursor:pointer;border:none" data-section-all="1">＋ 全部加入</button>
+            </div>
             <textarea class="input" id="edit-sections" rows="6" placeholder="初始評估&#10;分期與可切除性&#10;生物標記">${esc(card.mustReadSections.join('\n'))}</textarea>
+            <p class="text-xs text-gray-400 mt-1">點上方常用章節快速加入，也可自行輸入或修改</p>
           </div>
 
           <div class="card mb-4">
@@ -1023,6 +1062,17 @@
           ${renderNav('')}
         </div>
       `;
+
+      // 常用章節快速加入（不重複）
+      const addSections = (names) => {
+        const ta = document.getElementById('edit-sections');
+        const lines = ta.value.split('\n').map(s => s.trim()).filter(Boolean);
+        for (const s of names) if (!lines.includes(s)) lines.push(s);
+        ta.value = lines.join('\n');
+      };
+      document.querySelectorAll('#section-presets [data-section]').forEach(btn =>
+        btn.addEventListener('click', () => addSections([btn.dataset.section])));
+      document.querySelector('#section-presets [data-section-all]')?.addEventListener('click', () => addSections(PRESET_SECTIONS));
 
       document.getElementById('save-cancer-btn').addEventListener('click', async () => {
         const links = document.getElementById('edit-links').value.split('\n').filter(l => l.trim()).map(l => {
@@ -1058,7 +1108,10 @@
           <h1 class="text-2xl font-bold mb-1">不要漏 Checklist</h1>
           <p class="text-sm text-gray-500 mb-6">${esc(card.zhName)}</p>
 
-          <button class="btn btn-primary mb-4" id="add-checklist-btn">+ 新增項目</button>
+          <div class="flex gap-2 mb-4">
+            <button class="btn btn-primary flex-1" id="add-checklist-btn">+ 新增項目</button>
+            <button class="btn btn-secondary flex-1" id="add-preset-checklist-btn">📋 加入常用項目</button>
+          </div>
           <div id="checklist-form" class="hidden card mb-4"></div>
           <div id="checklist-list"></div>
           ${renderNav('')}
@@ -1070,6 +1123,12 @@
         document.getElementById('checklist-form').innerHTML = `
           <h2 class="font-semibold text-gray-800 mb-3">${item ? '編輯項目' : '新增項目'}</h2>
           <div class="space-y-3">
+            ${item ? '' : `<div class="form-group"><label class="label">常用範本（選擇後自動填入，可再修改）</label>
+              <select class="input" id="cl-preset">
+                <option value="">— 自行輸入 —</option>
+                ${PRESET_CHECKLIST.map((p, i) => `<option value="${i}">${esc(p.label)}</option>`).join('')}
+              </select>
+            </div>`}
             <div class="form-group"><label class="label">項目名稱</label><input class="input" id="cl-label" value="${esc(item?.label || '')}" placeholder="確認生物標記狀態"></div>
             <div class="form-group"><label class="label">分類</label>
               <select class="input" id="cl-cat">
@@ -1087,6 +1146,13 @@
             </div>
           </div>
         `;
+        document.getElementById('cl-preset')?.addEventListener('change', (e) => {
+          const p = PRESET_CHECKLIST[Number(e.target.value)];
+          if (!p) return;
+          document.getElementById('cl-label').value = p.label;
+          document.getElementById('cl-cat').value = p.category;
+          document.getElementById('cl-imp').value = p.importance;
+        });
         document.getElementById('cl-save').addEventListener('click', async () => {
           const label = document.getElementById('cl-label').value.trim();
           if (!label) { showToast('請填寫項目名稱'); return; }
@@ -1110,6 +1176,24 @@
       };
 
       document.getElementById('add-checklist-btn').addEventListener('click', () => renderForm(null));
+
+      // 一鍵加入所有常用項目（已存在同名者跳過）
+      document.getElementById('add-preset-checklist-btn').addEventListener('click', async () => {
+        const existing = new Set(items.map(i => i.label));
+        const today = new Date().toISOString().split('T')[0];
+        let added = 0;
+        for (const p of PRESET_CHECKLIST) {
+          if (existing.has(p.label)) continue;
+          await dbPut('checklists', {
+            id: crypto.randomUUID(), cancerId: card.id,
+            label: p.label, category: p.category, importance: p.importance,
+            sourceType: '個人備註', sourceDocumentId: '', updatedAt: today,
+          });
+          added++;
+        }
+        showToast(added ? `已加入 ${added} 項常用項目` : '常用項目皆已存在');
+        navigate('/cancer/' + card.id + '/checklist');
+      });
 
       const listEl = document.getElementById('checklist-list');
       if (items.length === 0) {
@@ -1263,6 +1347,11 @@
       const card = await dbGet('cancerCards', routeParams.cancerId);
       if (!card) { navigate('/'); return; }
       const items = (await dbGetAll('nhiNotes')).filter(n => n.cancerId === card.id);
+      const allDocs = await dbGetAll('documents');
+      // 健保相關文件優先，其餘文件也可選（供比對給付規定用）
+      const isNhiDoc = (d) => /健保|nhi/i.test((d.source || '') + ' ' + (d.title || ''));
+      const linkableDocs = [...allDocs.filter(d => isNhiDoc(d) && !d.archived), ...allDocs.filter(d => !isNhiDoc(d) && !d.archived)];
+      const docMap = {}; allDocs.forEach(d => docMap[d.id] = d);
 
       app.innerHTML = `
         <div class="container">
@@ -1282,14 +1371,32 @@
         document.getElementById('nhi-form').innerHTML = `
           <h2 class="font-semibold text-gray-800 mb-3">${item ? '編輯提醒' : '新增提醒'}</h2>
           <div class="space-y-3">
+            ${item ? '' : `<div class="form-group"><label class="label">常用範本（選擇後自動填入，可再修改）</label>
+              <select class="input" id="nhi-preset">
+                <option value="">— 自行輸入 —</option>
+                ${PRESET_NHI.map((p, i) => `<option value="${i}">${esc(p.label)}</option>`).join('')}
+              </select>
+            </div>`}
             <div class="form-group"><label class="label">提醒標題</label><input class="input" id="nhi-label" value="${esc(item?.label || '')}" placeholder="健保可近性提醒"></div>
             <div class="form-group"><label class="label">提醒內容</label><textarea class="input" id="nhi-content" rows="4" placeholder="需查健保癌藥給付規定">${esc(item?.content || '')}</textarea></div>
+            <div class="form-group"><label class="label">連結給付規定文件（比對用，可不選）</label>
+              ${linkableDocs.length ? `<select class="input" id="nhi-doc">
+                <option value="">不連結</option>
+                ${linkableDocs.map(d => `<option value="${d.id}" ${item?.sourceDocumentId === d.id ? 'selected' : ''}>${esc(d.title)}${d.version ? '（' + esc(d.version) + '）' : ''}</option>`).join('')}
+              </select>` : `<p class="text-xs text-gray-400">尚未匯入健保文件。可至 PDF 文件庫匯入，來源選「健保給付規定」。</p>`}
+            </div>
             <div class="flex gap-2">
               <button class="btn btn-primary flex-1" id="nhi-save">儲存</button>
               <button class="btn btn-secondary flex-1" id="nhi-cancel">取消</button>
             </div>
           </div>
         `;
+        document.getElementById('nhi-preset')?.addEventListener('change', (e) => {
+          const p = PRESET_NHI[Number(e.target.value)];
+          if (!p) return;
+          document.getElementById('nhi-label').value = p.label;
+          document.getElementById('nhi-content').value = p.content;
+        });
         document.getElementById('nhi-save').addEventListener('click', async () => {
           const label = document.getElementById('nhi-label').value.trim();
           const content = document.getElementById('nhi-content').value.trim();
@@ -1297,7 +1404,7 @@
           await dbPut('nhiNotes', {
             id: item?.id || crypto.randomUUID(),
             cancerId: card.id, label, content,
-            sourceDocumentId: '',
+            sourceDocumentId: document.getElementById('nhi-doc')?.value || '',
             updatedAt: new Date().toISOString().split('T')[0],
           });
           showToast(item ? '已更新' : '已新增');
@@ -1319,6 +1426,7 @@
             <div class="min-w-0 flex-1">
               <p class="font-medium text-gray-900">${esc(item.label)}</p>
               <p class="text-sm text-gray-600 mt-1">${esc(item.content)}</p>
+              ${docMap[item.sourceDocumentId]?.storageKey ? `<button class="text-sm mt-2" style="color:var(--primary-600);font-weight:500" onclick="openPdf('${docMap[item.sourceDocumentId].storageKey}')">📄 開啟 ${esc(docMap[item.sourceDocumentId].title)}</button>` : ''}
             </div>
             <div class="flex gap-1">
               <button class="btn btn-ghost btn-sm" onclick="window._editNhi('${item.id}')">編輯</button>
@@ -1478,6 +1586,7 @@
           </div>
           <label class="checkbox-wrap mb-4"><input type="checkbox" id="batch-current" checked> <span class="text-sm text-gray-700">全部設為目前版本</span></label>
           <div id="batch-list"></div>
+          ${sourceDatalist()}
           <button class="btn btn-primary hidden mb-4" id="batch-submit"></button>
           ${renderNav('pdf')}
         </div>
@@ -1502,7 +1611,7 @@
               ${p.cancerId ? '' : '<p class="text-xs mt-1" style="color:var(--amber-700)">⚠️ 無法從檔名判斷，請手動選擇</p>'}
             </div>
             <div class="form-row">
-              <div class="form-group"><label class="label">來源</label><input class="input b-source" value="${esc(p.source)}"></div>
+              <div class="form-group"><label class="label">來源</label><input class="input b-source" list="source-presets" value="${esc(p.source)}"></div>
               <div class="form-group"><label class="label">版本</label><input class="input b-version" value="${esc(p.version)}"></div>
             </div>
             <button class="btn btn-ghost btn-sm text-red-500 b-remove">移除此筆</button>
@@ -1602,7 +1711,7 @@
               <input type="file" id="pdf-file" accept=".pdf" class="input" style="padding:8px">
             </div>
             <div class="form-group"><label class="label">指引名稱 *</label><input class="input" id="imp-title" value="${esc(existingDoc?.title || '')}" required placeholder="NCCN Biliary Tract Cancers"></div>
-            <div class="form-group"><label class="label">來源</label><input class="input" id="imp-source" value="${esc(existingDoc?.source || '')}" placeholder="NCCN、ESMO"></div>
+            <div class="form-group"><label class="label">來源</label><input class="input" id="imp-source" list="source-presets" value="${esc(existingDoc?.source || '')}" placeholder="NCCN、ESMO、健保給付規定">${sourceDatalist()}</div>
             <div class="form-group"><label class="label">版本</label><input class="input" id="imp-version" value="${esc(existingDoc?.version || '')}" placeholder="2026.V2"></div>
 
             <div class="form-group">
