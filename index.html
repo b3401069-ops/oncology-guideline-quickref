@@ -365,6 +365,9 @@
       '其他未分類腫瘤':'other_unclassified',
     };
 
+    // 健保署藥品給付規定官方頁面（腫瘤科查第9節 抗癌瘤藥物）
+    const NHI_DRUG_URL = 'https://www.nhi.gov.tw/ch/np-2505-1.html';
+
     // ========== 預設範本（下拉／快速加入用，皆可再手動修改） ==========
     const PRESET_SOURCES = ['NCCN', 'ESMO', 'ASCO', '健保給付規定', 'TCOG', 'AJCC', 'WHO'];
     const sourceDatalist = () => `<datalist id="source-presets">${PRESET_SOURCES.map(s => `<option value="${esc(s)}"></option>`).join('')}</datalist>`;
@@ -1749,6 +1752,14 @@
             </div>
           </div>
 
+          <a href="${NHI_DRUG_URL}" target="_blank" rel="noopener" class="bg-blue-50 rounded-lg p-3 mb-4" style="display:flex;align-items:center;gap:8px;text-decoration:none">
+            <span>🏥</span>
+            <div class="min-w-0 flex-1">
+              <p class="text-sm font-medium text-blue-800">下載健保藥品給付規定 ↗</p>
+              <p class="text-xs text-blue-600">健保署官網 · 腫瘤科查「第9節 抗癌瘤藥物」完整版 PDF</p>
+            </div>
+          </a>
+
           <div class="filter-bar">
             <button class="filter-chip active" data-source="">全部</button>
             ${sources.map(s => `<button class="filter-chip" data-source="${esc(s)}">${esc(s)}</button>`).join('')}
@@ -1981,7 +1992,9 @@
               <input type="file" id="pdf-file" accept=".pdf" class="input" style="padding:8px">
             </div>
             <div class="form-group"><label class="label">指引名稱 *</label><input class="input" id="imp-title" value="${esc(existingDoc?.title || '')}" required placeholder="NCCN Biliary Tract Cancers"></div>
-            <div class="form-group"><label class="label">來源</label><input class="input" id="imp-source" list="source-presets" value="${esc(existingDoc?.source || '')}" placeholder="NCCN、ESMO、健保給付規定">${sourceDatalist()}</div>
+            <div class="form-group"><label class="label">來源</label><input class="input" id="imp-source" list="source-presets" value="${esc(existingDoc?.source || '')}" placeholder="NCCN、ESMO、健保給付規定">${sourceDatalist()}
+              <a href="${NHI_DRUG_URL}" target="_blank" rel="noopener" class="text-xs" style="color:var(--primary-600);text-decoration:none">🏥 到健保署下載藥品給付規定 ↗</a>
+            </div>
             <div class="form-group"><label class="label">版本</label><input class="input" id="imp-version" value="${esc(existingDoc?.version || '')}" placeholder="2026.V2"></div>
 
             <div class="form-group">
