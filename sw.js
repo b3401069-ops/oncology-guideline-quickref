@@ -1,9 +1,9 @@
-const CACHE_NAME = 'oncology-guideline-v1';
+const CACHE_NAME = 'oncology-guideline-v2';
 const ASSETS = [
-  '/',
-  '/index.html',
-  '/manifest.json',
-  '/icon.svg',
+  './',
+  './index.html',
+  './manifest.json',
+  './icon.svg',
 ];
 
 self.addEventListener('install', (event) => {
