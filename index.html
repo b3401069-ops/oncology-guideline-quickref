@@ -521,6 +521,62 @@
       );
     }
 
+    // ========== Filename Guessing (batch import) ==========
+    const SOURCE_PATTERNS = [
+      ['NCCN', /nccn/i], ['ESMO', /esmo/i], ['ASCO', /asco/i], ['NICE', /nice/i],
+      ['JSCO', /jsco/i], ['TCOG', /tcog/i], ['AJCC', /ajcc/i], ['WHO', /\bwho\b/i],
+      ['健保', /健保|nhi/i],
+    ];
+    // 常見指引檔名縮寫 → 癌別 id（synonyms 沒涵蓋的）
+    const FILENAME_HINTS = { nscl: 'nsclc' };
+    const NAME_STOPWORDS = new Set(['cancer','cancers','carcinoma','tumor','tumors','tumour','cell','cells','of','and','the','disease','neoplasm','neoplasms','syndrome','syndromes']);
+
+    function guessSource(name) {
+      for (const [label, re] of SOURCE_PATTERNS) if (re.test(name)) return label;
+      return '';
+    }
+
+    function guessVersion(name) {
+      let m = name.match(/(20\d{2})[ ._-]*[vV](\d+)/);
+      if (m) return m[1] + '.V' + m[2];
+      m = name.match(/[vV](\d+)[ ._-]*(20\d{2})/);
+      if (m) return m[2] + '.V' + m[1];
+      m = name.match(/20\d{2}/);
+      return m ? m[0] : '';
+    }
+
+    function guessCancer(filename, cards) {
+      const norm = filename.toLowerCase().replace(/\.pdf$/i, '').replace(/[_\-.+()\[\]]+/g, ' ');
+      const tokens = new Set(norm.split(/\s+/).filter(Boolean));
+      for (const [hint, id] of Object.entries(FILENAME_HINTS)) {
+        if (tokens.has(hint)) { const c = cards.find(c => c.id === id); if (c) return c; }
+      }
+      let best = null, bestScore = 0;
+      for (const c of cards) {
+        let score = 0;
+        if (c.zhName && filename.includes(c.zhName)) score = 5;
+        for (const n of [c.enName, ...(c.synonyms || [])]) {
+          if (!n) continue;
+          if (/[一-鿿]/.test(n)) {
+            if (filename.includes(n)) score = Math.max(score, 5);
+            continue;
+          }
+          const ln = n.toLowerCase();
+          if (!ln.includes(' ') && /^[a-z0-9]{2,6}$/.test(ln)) {
+            // 縮寫要求整個 token 完全一致，避免 mm/hl 之類誤中
+            if (tokens.has(ln)) score = Math.max(score, ln.length >= 3 ? 3 : 2);
+          } else if (norm.includes(ln)) {
+            score = Math.max(score, 4);
+          } else {
+            const words = ln.split(/\s+/).filter(w => !NAME_STOPWORDS.has(w));
+            if (words.length && words.every(w => tokens.has(w))) score = Math.max(score, 4);
+          }
+        }
+        if (score > bestScore) { bestScore = score; best = c; }
+      }
+      return bestScore >= 2 ? best : null;
+    }
+
     // ========== HTML Escape ==========
     function esc(s) {
       return String(s ?? '').replace(/[&<>"']/g, c => (
@@ -589,6 +645,8 @@
         await renderNhi(app);
       } else if (currentRoute === '/pdf-library' && !routeParams.docId) {
         await renderPdfLibrary(app);
+      } else if (currentRoute === '/pdf-library/batch') {
+        await renderBatchImport(app);
       } else if (currentRoute.startsWith('/pdf-library/import')) {
         await renderImportPdf(app);
       } else if (currentRoute === '/settings') {
@@ -1308,7 +1366,10 @@
         <div class="container">
           <div class="flex-between mb-6">
             <h1 class="text-2xl font-bold">PDF 文件庫</h1>
-            <button class="btn btn-primary btn-sm" style="width:auto;padding:8px 16px" onclick="navigate('/pdf-library/import')">+ 匯入</button>
+            <div class="flex gap-2">
+              <button class="btn btn-secondary btn-sm" style="width:auto;padding:8px 12px" onclick="navigate('/pdf-library/import')">+ 單筆</button>
+              <button class="btn btn-primary btn-sm" style="width:auto;padding:8px 12px" onclick="navigate('/pdf-library/batch')">📥 批次匯入</button>
+            </div>
           </div>
 
           <div class="filter-bar">
@@ -1399,6 +1460,131 @@
         showToast('已刪除');
         navigate('/pdf-library');
       };
+    }
+
+    async function renderBatchImport(app) {
+      const cancerCards = await dbGetAll('cancerCards');
+      const cancerOptions = (selectedId) => cancerCards.map(c =>
+        `<option value="${c.id}" ${c.id === selectedId ? 'selected' : ''}>${esc(c.zhName)}（${esc(c.enName)}）</option>`
+      ).join('');
+
+      app.innerHTML = `
+        <div class="container">
+          <button class="back-btn" onclick="navigate('/pdf-library')">← 返回</button>
+          <h1 class="text-2xl font-bold mb-1">批次匯入 PDF</h1>
+          <p class="text-sm text-gray-500 mb-4">一次選多個 PDF，依檔名自動判斷癌別、來源與版本；匯入前可逐筆調整。</p>
+          <div class="form-group">
+            <input type="file" id="batch-files" accept=".pdf,application/pdf" multiple class="input" style="padding:8px">
+          </div>
+          <label class="checkbox-wrap mb-4"><input type="checkbox" id="batch-current" checked> <span class="text-sm text-gray-700">全部設為目前版本</span></label>
+          <div id="batch-list"></div>
+          <button class="btn btn-primary hidden mb-4" id="batch-submit"></button>
+          ${renderNav('pdf')}
+        </div>
+      `;
+
+      let pending = [];
+      const listEl = document.getElementById('batch-list');
+      const submitBtn = document.getElementById('batch-submit');
+
+      const renderRows = () => {
+        submitBtn.classList.toggle('hidden', pending.length === 0);
+        submitBtn.textContent = '匯入全部（' + pending.length + ' 份）';
+        listEl.innerHTML = pending.map((p, i) => `
+          <div class="card" data-row="${i}">
+            <p class="text-xs text-gray-400 truncate mb-2">📄 ${esc(p.file.name)}</p>
+            <div class="form-group"><label class="label">指引名稱</label><input class="input b-title" value="${esc(p.title)}"></div>
+            <div class="form-group"><label class="label">癌別</label>
+              <select class="input b-cancer">
+                <option value="">（不指定，之後再編輯）</option>
+                ${cancerOptions(p.cancerId)}
+              </select>
+              ${p.cancerId ? '' : '<p class="text-xs mt-1" style="color:var(--amber-700)">⚠️ 無法從檔名判斷，請手動選擇</p>'}
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label class="label">來源</label><input class="input b-source" value="${esc(p.source)}"></div>
+              <div class="form-group"><label class="label">版本</label><input class="input b-version" value="${esc(p.version)}"></div>
+            </div>
+            <button class="btn btn-ghost btn-sm text-red-500 b-remove">移除此筆</button>
+          </div>
+        `).join('');
+        listEl.querySelectorAll('.b-remove').forEach(btn => btn.addEventListener('click', () => {
+          const idx = Number(btn.closest('[data-row]').dataset.row);
+          syncRows();
+          pending.splice(idx, 1);
+          renderRows();
+        }));
+      };
+
+      const syncRows = () => {
+        listEl.querySelectorAll('[data-row]').forEach(row => {
+          const p = pending[Number(row.dataset.row)];
+          if (!p) return;
+          p.title = row.querySelector('.b-title').value.trim();
+          p.cancerId = row.querySelector('.b-cancer').value;
+          p.source = row.querySelector('.b-source').value.trim();
+          p.version = row.querySelector('.b-version').value.trim();
+        });
+      };
+
+      document.getElementById('batch-files').addEventListener('change', (e) => {
+        pending = [...e.target.files].filter(f => f.type === 'application/pdf' || /\.pdf$/i.test(f.name)).map(f => {
+          const base = f.name.replace(/\.pdf$/i, '');
+          return {
+            file: f,
+            title: base.replace(/[_]+/g, ' ').trim(),
+            cancerId: guessCancer(f.name, cancerCards)?.id || '',
+            source: guessSource(f.name),
+            version: guessVersion(base),
+          };
+        });
+        renderRows();
+      });
+
+      submitBtn.addEventListener('click', async () => {
+        syncRows();
+        const missingTitle = pending.findIndex(p => !p.title);
+        if (missingTitle >= 0) { showToast('第 ' + (missingTitle + 1) + ' 筆缺指引名稱'); return; }
+        const setAsCurrent = document.getElementById('batch-current').checked;
+        submitBtn.disabled = true;
+        const today = new Date().toISOString().split('T')[0];
+        let done = 0;
+        try {
+          for (const p of pending) {
+            submitBtn.textContent = '匯入中（' + (done + 1) + '/' + pending.length + '）…';
+            const storageKey = await storePdf(p.file);
+            const docData = {
+              id: crypto.randomUUID(),
+              title: p.title,
+              source: p.source,
+              version: p.version,
+              cancerIds: p.cancerId ? [p.cancerId] : [],
+              fileName: p.file.name,
+              storageKey,
+              pageCount: 0,
+              importedAt: today,
+              current: setAsCurrent,
+              archived: false,
+              notes: '',
+            };
+            await dbPut('documents', docData);
+            if (p.cancerId) {
+              const card = await dbGet('cancerCards', p.cancerId);
+              if (card && !card.documentIds.includes(docData.id)) {
+                await dbPut('cancerCards', { ...card, documentIds: [...card.documentIds, docData.id], updatedAt: today });
+              }
+              if (setAsCurrent) await archiveSupersededDocs(docData);
+            }
+            done++;
+          }
+          showToast('已匯入 ' + done + ' 份 PDF');
+          navigate('/pdf-library');
+        } catch (e) {
+          submitBtn.disabled = false;
+          renderRows();
+          showToast('第 ' + (done + 1) + ' 筆匯入失敗：' + e.message + '（前 ' + done + ' 筆已完成）');
+        }
+      });
     }
 
     async function renderImportPdf(app) {
