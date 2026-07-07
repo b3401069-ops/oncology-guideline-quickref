@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1e40af"/>
+      <stop offset="100%" style="stop-color:#3b82f6"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="100" fill="url(#bg)"/>
+  <g transform="translate(128, 80)">
+    <!-- Document -->
+    <rect x="0" y="40" width="256" height="320" rx="16" fill="white" opacity="0.95"/>
+    <rect x="24" y="80" width="160" height="12" rx="6" fill="#1e40af" opacity="0.3"/>
+    <rect x="24" y="108" width="200" height="12" rx="6" fill="#1e40af" opacity="0.2"/>
+    <rect x="24" y="136" width="140" height="12" rx="6" fill="#1e40af" opacity="0.2"/>
+    <rect x="24" y="180" width="180" height="12" rx="6" fill="#1e40af" opacity="0.15"/>
+    <rect x="24" y="208" width="120" height="12" rx="6" fill="#1e40af" opacity="0.15"/>
+    <!-- Checkmark -->
+    <circle cx="200" cy="300" r="40" fill="#22c55e"/>
+    <path d="M180 300 L195 315 L220 285" stroke="white" stroke-width="8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- Search icon -->
+    <circle cx="60" cy="300" r="30" fill="none" stroke="#60a5fa" stroke-width="6"/>
+    <line x1="82" y1="322" x2="100" y2="340" stroke="#60a5fa" stroke-width="6" stroke-linecap="round"/>
+  </g>
+  <!-- Bottom text -->
+  <text x="256" y="480" text-anchor="middle" font-family="sans-serif" font-weight="bold" font-size="48" fill="white" opacity="0.9">腫瘤指引</text>
+</svg>

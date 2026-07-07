@@ -1,0 +1,1582 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#1e40af" />
+  <meta name="description" content="腫瘤指引快速查 - 個人本機腫瘤指引查閱與防漏工具" />
+  <link rel="manifest" href="/manifest.json" />
+  <title>腫瘤指引快速查</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    :root {
+      --primary-50: #eff6ff; --primary-100: #dbeafe; --primary-200: #bfdbfe;
+      --primary-500: #3b82f6; --primary-600: #2563eb; --primary-700: #1d4ed8;
+      --primary-800: #1e40af; --primary-900: #1e3a8a;
+      --gray-50: #f9fafb; --gray-100: #f3f4f6; --gray-200: #e5e7eb;
+      --gray-300: #d1d5db; --gray-400: #9ca3af; --gray-500: #6b7280;
+      --gray-600: #4b5563; --gray-700: #374151; --gray-800: #1f2937;
+      --gray-900: #111827; --red-500: #ef4444; --red-600: #dc2626;
+      --green-50: #f0fdf4; --green-100: #dcfce7; --green-500: #22c55e;
+      --green-600: #16a34a; --green-700: #15803d; --green-800: #166534;
+      --yellow-50: #fefce8; --yellow-100: #fef9c3; --yellow-700: #a16207;
+      --amber-50: #fffbeb; --amber-100: #fef3c7; --amber-200: #fde68a;
+      --amber-700: #b45309; --amber-800: #92400e;
+      --orange-50: #fff7ed; --orange-200: #fed7aa; --orange-700: #c2410c;
+      --blue-50: #eff6ff; --blue-100: #dbeafe; --blue-600: #2563eb;
+      --blue-700: #1d4ed8; --blue-800: #1e40af;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang TC', 'Microsoft JhengHei', sans-serif;
+      background: var(--gray-50); color: var(--gray-900); min-height: 100vh;
+      padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);
+    }
+    .hidden { display: none !important; }
+    .container { max-width: 480px; margin: 0 auto; padding: 16px 16px 100px; }
+    .card { background: #fff; border-radius: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); border: 1px solid var(--gray-100); padding: 16px; margin-bottom: 12px; }
+    .btn { display: inline-flex; align-items: center; justify-content: center; padding: 12px 24px; border-radius: 12px; font-size: 16px; font-weight: 500; border: none; cursor: pointer; transition: all 0.15s; width: 100%; }
+    .btn:active { transform: scale(0.98); }
+    .btn-primary { background: var(--primary-600); color: #fff; }
+    .btn-primary:hover { background: var(--primary-700); }
+    .btn-secondary { background: #fff; color: var(--primary-700); border: 2px solid var(--primary-200); }
+    .btn-secondary:hover { background: var(--primary-50); }
+    .btn-ghost { background: transparent; color: var(--gray-600); padding: 8px 16px; }
+    .btn-ghost:hover { background: var(--gray-100); }
+    .btn-danger { background: var(--red-600); color: #fff; }
+    .btn-danger:hover { background: var(--red-500); }
+    .btn-sm { padding: 6px 12px; font-size: 14px; }
+    .input { width: 100%; padding: 12px 16px; border: 1px solid var(--gray-300); border-radius: 12px; font-size: 16px; outline: none; }
+    .input:focus { border-color: var(--primary-500); box-shadow: 0 0 0 2px var(--primary-100); }
+    .label { display: block; font-size: 14px; font-weight: 500; color: var(--gray-700); margin-bottom: 6px; }
+    .status { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 999px; }
+    .status-pending { background: var(--gray-100); color: var(--gray-500); }
+    .status-partial { background: var(--yellow-100); color: var(--yellow-700); }
+    .status-maintained { background: var(--green-100); color: var(--green-700); }
+    .nav { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid var(--gray-200); z-index: 50; padding-bottom: env(safe-area-inset-bottom); }
+    .nav-inner { max-width: 480px; margin: 0 auto; display: flex; justify-content: space-around; height: 64px; }
+    .nav-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; background: none; border: none; color: var(--gray-400); font-size: 12px; cursor: pointer; }
+    .nav-btn.active { color: var(--primary-600); }
+    .nav-icon { font-size: 20px; margin-bottom: 2px; }
+    .search-wrap { position: relative; margin-bottom: 16px; }
+    .search-icon { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); font-size: 18px; }
+    .search-clear { position: absolute; right: 16px; top: 50%; transform: translateY(-50%); background: none; border: none; color: var(--gray-400); font-size: 16px; cursor: pointer; }
+    .category-title { font-size: 12px; font-weight: 600; color: var(--gray-500); text-transform: uppercase; letter-spacing: 0.05em; padding: 0 4px; margin-bottom: 8px; margin-top: 24px; }
+    .cancer-item { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; background: #fff; border-radius: 12px; border: 1px solid var(--gray-100); margin-bottom: 8px; cursor: pointer; transition: all 0.15s; }
+    .cancer-item:hover { background: var(--gray-50); }
+    .cancer-item:active { transform: scale(0.98); }
+    .cancer-name { font-weight: 500; color: var(--gray-900); }
+    .cancer-en { font-size: 12px; color: var(--gray-400); }
+    .section { margin-bottom: 16px; }
+    .section-title { font-weight: 600; color: var(--gray-800); margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+    .alert { padding: 12px 16px; border-radius: 12px; margin-bottom: 12px; font-size: 14px; }
+    .alert-warning { background: var(--amber-50); border: 1px solid var(--amber-200); color: var(--amber-800); }
+    .alert-info { background: var(--blue-50); border: 1px solid var(--blue-100); color: var(--blue-800); }
+    .alert-success { background: var(--green-50); border: 1px solid var(--green-100); color: var(--green-800); }
+    .tag { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 6px; background: var(--gray-100); color: var(--gray-600); }
+    .tag-required { background: #fee2e2; color: #991b1b; }
+    .tag-category { background: var(--blue-50); color: var(--blue-700); }
+    .list-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px 0; }
+    .list-dot { color: var(--primary-500); margin-top: 2px; }
+    .quick-links { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }
+    .quick-link { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; background: #fff; border-radius: 16px; border: 1px solid var(--gray-100); cursor: pointer; transition: all 0.15s; }
+    .quick-link:hover { background: var(--gray-50); }
+    .quick-link:active { transform: scale(0.98); }
+    .quick-link-icon { font-size: 32px; margin-bottom: 8px; }
+    .quick-link-label { font-size: 14px; font-weight: 500; color: var(--gray-700); }
+    .form-group { margin-bottom: 16px; }
+    .form-row { display: flex; gap: 8px; }
+    .form-row > * { flex: 1; }
+    textarea.input { resize: none; min-height: 80px; }
+    .back-btn { display: inline-flex; align-items: center; gap: 4px; background: none; border: none; color: var(--gray-500); font-size: 14px; cursor: pointer; padding: 4px 8px; margin-bottom: 8px; }
+    .back-btn:hover { color: var(--gray-700); }
+    .flex-between { display: flex; align-items: center; justify-content: space-between; }
+    .gap-2 { gap: 8px; }
+    .gap-3 { gap: 12px; }
+    .flex { display: flex; }
+    .flex-col { flex-direction: column; }
+    .flex-1 { flex: 1; }
+    .items-center { align-items: center; }
+    .items-start { align-items: flex-start; }
+    .justify-between { justify-content: space-between; }
+    .text-center { text-align: center; }
+    .text-sm { font-size: 14px; }
+    .text-xs { font-size: 12px; }
+    .text-gray-400 { color: var(--gray-400); }
+    .text-gray-500 { color: var(--gray-500); }
+    .text-gray-600 { color: var(--gray-600); }
+    .text-gray-700 { color: var(--gray-700); }
+    .text-green-600 { color: var(--green-600); }
+    .text-green-700 { color: var(--green-700); }
+    .text-red-500 { color: var(--red-500); }
+    .font-medium { font-weight: 500; }
+    .font-semibold { font-weight: 600; }
+    .font-bold { font-weight: 700; }
+    .text-lg { font-size: 18px; }
+    .text-xl { font-size: 20px; }
+    .text-2xl { font-size: 24px; }
+    .text-3xl { font-size: 30px; }
+    .mt-1 { margin-top: 4px; }
+    .mt-2 { margin-top: 8px; }
+    .mt-3 { margin-top: 12px; }
+    .mt-4 { margin-top: 16px; }
+    .mb-2 { margin-bottom: 8px; }
+    .mb-3 { margin-bottom: 12px; }
+    .mb-4 { margin-bottom: 16px; }
+    .mb-6 { margin-bottom: 24px; }
+    .ml-2 { margin-left: 8px; }
+    .p-3 { padding: 12px; }
+    .p-4 { padding: 16px; }
+    .rounded { border-radius: 8px; }
+    .rounded-lg { border-radius: 12px; }
+    .bg-green-50 { background: var(--green-50); }
+    .bg-blue-50 { background: var(--blue-50); }
+    .border-t { border-top: 1px solid var(--gray-100); }
+    .pt-3 { padding-top: 12px; }
+    .space-y-1 > * + * { margin-top: 4px; }
+    .space-y-2 > * + * { margin-top: 8px; }
+    .space-y-3 > * + * { margin-top: 12px; }
+    .space-y-4 > * + * { margin-top: 16px; }
+    .space-y-5 > * + * { margin-top: 20px; }
+    .w-full { width: 100%; }
+    .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .min-w-0 { min-width: 0; }
+    .shrink-0 { flex-shrink: 0; }
+    .overflow-y-auto { overflow-y: auto; }
+    .max-h-64 { max-height: 256px; }
+    .checkbox-wrap { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 4px 0; }
+    .checkbox-wrap input { width: 18px; height: 18px; }
+    .toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: var(--gray-800); color: #fff; padding: 12px 24px; border-radius: 12px; font-size: 14px; z-index: 9999; animation: toast-in 0.3s ease; }
+    @keyframes toast-in { from { opacity: 0; transform: translateX(-50%) translateY(-20px); } to { opacity: 1; transform: translateX(-50%) translateY(0); } }
+    .empty-state { text-align: center; padding: 48px 16px; color: var(--gray-400); }
+    .doc-item { background: var(--green-50); border-radius: 12px; padding: 12px; display: flex; align-items: center; justify-content: space-between; }
+    .doc-item-archived { background: var(--gray-50); }
+    .filter-bar { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 16px; }
+    .filter-chip { padding: 6px 12px; border-radius: 999px; font-size: 14px; white-space: nowrap; border: none; cursor: pointer; background: var(--gray-100); color: var(--gray-600); }
+    .filter-chip.active { background: var(--primary-600); color: #fff; }
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 100; display: flex; align-items: flex-end; justify-content: center; }
+    .modal-content { background: #fff; border-radius: 20px 20px 0 0; width: 100%; max-width: 480px; max-height: 80vh; overflow-y: auto; padding: 24px; }
+    @media (min-width: 480px) { .modal-content { border-radius: 20px; margin-bottom: 20px; } }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script type="module">
+    // ========== Database ==========
+    const DB_NAME = 'OncologyGuidelineDB';
+    const DB_VERSION = 1;
+    let db;
+
+    function openDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(DB_NAME, DB_VERSION);
+        req.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains('cancerCards')) {
+            const store = db.createObjectStore('cancerCards', { keyPath: 'id' });
+            store.createIndex('category', 'category');
+            store.createIndex('zhName', 'zhName');
+          }
+          if (!db.objectStoreNames.contains('documents')) {
+            const store = db.createObjectStore('documents', { keyPath: 'id' });
+            store.createIndex('cancerIds', 'cancerIds', { multiEntry: true });
+          }
+          if (!db.objectStoreNames.contains('checklists')) {
+            const store = db.createObjectStore('checklists', { keyPath: 'id' });
+            store.createIndex('cancerId', 'cancerId');
+          }
+          if (!db.objectStoreNames.contains('precisionFields')) {
+            const store = db.createObjectStore('precisionFields', { keyPath: 'id' });
+            store.createIndex('cancerId', 'cancerId');
+          }
+          if (!db.objectStoreNames.contains('nhiNotes')) {
+            const store = db.createObjectStore('nhiNotes', { keyPath: 'id' });
+            store.createIndex('cancerId', 'cancerId');
+          }
+        };
+        req.onsuccess = (e) => { db = e.target.result; resolve(db); };
+        req.onerror = (e) => reject(e.target.error);
+      });
+    }
+
+    // PDF storage (separate DB for large files)
+    function openPdfDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open('OncologyPdfStorage', 1);
+        req.onupgradeneeded = (e) => {
+          e.target.result.createObjectStore('pdfs');
+        };
+        req.onsuccess = (e) => resolve(e.target.result);
+        req.onerror = (e) => reject(e.target.error);
+      });
+    }
+
+    function dbGetAll(storeName) {
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, 'readonly');
+        const req = tx.objectStore(storeName).getAll();
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    function dbGet(storeName, id) {
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, 'readonly');
+        const req = tx.objectStore(storeName).get(id);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    function dbPut(storeName, data) {
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, 'readwrite');
+        const req = tx.objectStore(storeName).put(data);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    function dbDelete(storeName, id) {
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, 'readwrite');
+        const req = tx.objectStore(storeName).delete(id);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    function dbClear(storeName) {
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, 'readwrite');
+        const req = tx.objectStore(storeName).clear();
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    // ========== Seed Data ==========
+    const CATEGORIES = {
+      '消化系癌症': [
+        { zh: '食道癌', en: 'Esophageal cancer', syn: ['esophageal carcinoma','食道鱗狀細胞癌','食道腺癌'] },
+        { zh: '胃癌', en: 'Gastric cancer', syn: ['stomach cancer','gastric carcinoma'] },
+        { zh: '小腸癌', en: 'Small bowel cancer', syn: ['small intestinal cancer','duodenal cancer'] },
+        { zh: '大腸直腸癌', en: 'Colorectal cancer', syn: ['CRC','colon cancer','rectal cancer','結腸癌','直腸癌'] },
+        { zh: '肛門癌', en: 'Anal cancer', syn: ['anal carcinoma','anal canal cancer'] },
+        { zh: '胰臟癌', en: 'Pancreatic cancer', syn: ['pancreatic carcinoma','胰腺癌'] },
+        { zh: '膽道癌', en: 'Biliary tract cancer', syn: ['cholangiocarcinoma','gallbladder cancer','肝內膽管癌','肝外膽管癌','膽囊癌'] },
+        { zh: '肝癌', en: 'Hepatocellular carcinoma', syn: ['HCC','hepatocellular cancer','肝細胞癌'] },
+        { zh: '胃腸道基質瘤', en: 'Gastrointestinal stromal tumor', syn: ['GIST'] },
+        { zh: '神經內分泌腫瘤', en: 'Neuroendocrine tumor', syn: ['NET','neuroendocrine neoplasm','NEN'] },
+      ],
+      '胸腔癌症': [
+        { zh: '非小細胞肺癌', en: 'Non-small cell lung cancer', syn: ['NSCLC'] },
+        { zh: '小細胞肺癌', en: 'Small cell lung cancer', syn: ['SCLC'] },
+        { zh: '胸腺腫瘤', en: 'Thymic tumor', syn: ['thymoma','thymic carcinoma','胸腺癌'] },
+        { zh: '間皮瘤', en: 'Mesothelioma', syn: ['malignant mesothelioma','pleural mesothelioma'] },
+      ],
+      '乳癌': [
+        { zh: '乳癌', en: 'Breast cancer', syn: ['breast carcinoma','乳腺癌'] },
+      ],
+      '婦癌': [
+        { zh: '卵巢癌', en: 'Ovarian cancer', syn: ['ovarian carcinoma'] },
+        { zh: '輸卵管癌', en: 'Fallopian tube cancer', syn: ['tubal cancer'] },
+        { zh: '原發性腹膜癌', en: 'Primary peritoneal cancer', syn: ['peritoneal carcinoma'] },
+        { zh: '子宮內膜癌', en: 'Endometrial cancer', syn: ['uterine cancer','endometrial carcinoma'] },
+        { zh: '子宮頸癌', en: 'Cervical cancer', syn: ['cervical carcinoma','宫颈癌'] },
+        { zh: '外陰癌', en: 'Vulvar cancer', syn: ['vulvar carcinoma'] },
+        { zh: '陰道癌', en: 'Vaginal cancer', syn: ['vaginal carcinoma'] },
+        { zh: '妊娠滋養細胞疾病', en: 'Gestational trophoblastic disease', syn: ['GTD','GTN','絨毛膜癌','葡萄胎'] },
+      ],
+      '泌尿系癌症': [
+        { zh: '腎細胞癌', en: 'Renal cell carcinoma', syn: ['RCC','kidney cancer','腎癌'] },
+        { zh: '膀胱癌', en: 'Bladder cancer', syn: ['bladder carcinoma','urothelial carcinoma'] },
+        { zh: '攝護腺癌', en: 'Prostate cancer', syn: ['prostate carcinoma','前列腺癌'] },
+        { zh: '睪丸癌', en: 'Testicular cancer', syn: ['testicular carcinoma','testicular germ cell tumor'] },
+        { zh: '陰莖癌', en: 'Penile cancer', syn: ['penile carcinoma'] },
+        { zh: '腎盂輸尿管癌', en: 'Renal pelvis and ureter cancer', syn: ['upper tract urothelial carcinoma','UTUC'] },
+      ],
+      '頭頸癌': [
+        { zh: '口腔癌', en: 'Oral cavity cancer', syn: ['oral cancer','oral carcinoma'] },
+        { zh: '口咽癌', en: 'Oropharyngeal cancer', syn: ['oropharynx cancer'] },
+        { zh: '下咽癌', en: 'Hypopharyngeal cancer', syn: ['hypopharynx cancer'] },
+        { zh: '喉癌', en: 'Laryngeal cancer', syn: ['larynx cancer','喉頭癌'] },
+        { zh: '鼻咽癌', en: 'Nasopharyngeal cancer', syn: ['NPC','nasopharynx cancer'] },
+        { zh: '唾液腺癌', en: 'Salivary gland cancer', syn: ['salivary gland carcinoma','涎腺癌'] },
+        { zh: '甲狀腺癌', en: 'Thyroid cancer', syn: ['thyroid carcinoma','papillary thyroid','follicular thyroid'] },
+      ],
+      '皮膚與黑色素細胞癌': [
+        { zh: '黑色素瘤', en: 'Melanoma', syn: ['malignant melanoma','惡性黑色素瘤'] },
+        { zh: '非黑色素皮膚癌', en: 'Non-melanoma skin cancer', syn: ['NMSC','basal cell carcinoma','squamous cell skin carcinoma','BCC','cSCC','基底細胞癌','鱗狀細胞癌'] },
+        { zh: 'Merkel 細胞癌', en: 'Merkel cell carcinoma', syn: ['MCC'] },
+      ],
+      '骨與軟組織腫瘤': [
+        { zh: '軟組織肉瘤', en: 'Soft tissue sarcoma', syn: ['STS','sarcoma','肉瘤'] },
+        { zh: '骨肉瘤', en: 'Osteosarcoma', syn: ['osteogenic sarcoma'] },
+        { zh: '尤文氏肉瘤', en: 'Ewing sarcoma', syn: ["Ewing's sarcoma",'Ewing tumor'] },
+      ],
+      '中樞神經系統腫瘤': [
+        { zh: '腦部腫瘤', en: 'Brain tumor', syn: ['brain cancer','glioma','glioblastoma','GBM','腦瘤','神經膠質瘤'] },
+        { zh: '脊髓腫瘤', en: 'Spinal cord tumor', syn: ['spinal tumor','spinal cord neoplasm'] },
+        { zh: '腦轉移指引入口', en: 'Brain metastasis', syn: ['brain mets','CNS metastasis','腦轉移'] },
+      ],
+      '血液腫瘤': [
+        { zh: '淋巴瘤', en: 'Lymphoma', syn: ['Hodgkin lymphoma','non-Hodgkin lymphoma','HL','NHL','霍奇金淋巴瘤','非霍奇金淋巴瘤'] },
+        { zh: '多發性骨髓瘤', en: 'Multiple myeloma', syn: ['MM','plasma cell myeloma','骨髓瘤'] },
+        { zh: '慢性淋巴性白血病', en: 'Chronic lymphocytic leukemia', syn: ['CLL'] },
+        { zh: '骨髓增生不良症候群', en: 'Myelodysplastic syndromes', syn: ['MDS'] },
+        { zh: '骨髓增生性腫瘤', en: 'Myeloproliferative neoplasms', syn: ['MPN','CML','PV','ET','PMF'] },
+      ],
+      '內分泌與神經內分泌腫瘤': [
+        { zh: '副腎腫瘤', en: 'Adrenal tumor', syn: ['adrenal carcinoma','adrenocortical carcinoma','pheochromocytoma'] },
+      ],
+      '其他': [
+        { zh: '原發不明癌', en: 'Cancer of unknown primary', syn: ['CUP','unknown primary'] },
+        { zh: '罕見癌症', en: 'Rare cancers', syn: ['rare tumor','orphan cancer'] },
+        { zh: '其他未分類腫瘤', en: 'Other unclassified tumors', syn: [] },
+      ],
+    };
+
+    const ID_MAP = {
+      '食道癌':'esophageal_cancer','胃癌':'gastric_cancer','小腸癌':'small_bowel_cancer',
+      '大腸直腸癌':'colorectal_cancer','肛門癌':'anal_cancer','胰臟癌':'pancreatic_cancer',
+      '膽道癌':'biliary_tract_cancer','肝癌':'hepatocellular_carcinoma','胃腸道基質瘤':'gist',
+      '神經內分泌腫瘤':'neuroendocrine_tumor','非小細胞肺癌':'nsclc','小細胞肺癌':'sclc',
+      '胸腺腫瘤':'thymic_tumor','間皮瘤':'mesothelioma','乳癌':'breast_cancer',
+      '卵巢癌':'ovarian_cancer','輸卵管癌':'fallopian_tube_cancer','原發性腹膜癌':'primary_peritoneal_cancer',
+      '子宮內膜癌':'endometrial_cancer','子宮頸癌':'cervical_cancer','外陰癌':'vulvar_cancer',
+      '陰道癌':'vaginal_cancer','妊娠滋養細胞疾病':'gestational_trophoblastic_disease',
+      '腎細胞癌':'renal_cell_carcinoma','膀胱癌':'bladder_cancer','攝護腺癌':'prostate_cancer',
+      '睪丸癌':'testicular_cancer','陰莖癌':'penile_cancer','腎盂輸尿管癌':'renal_pelvis_ureter_cancer',
+      '口腔癌':'oral_cavity_cancer','口咽癌':'oropharyngeal_cancer','下咽癌':'hypopharyngeal_cancer',
+      '喉癌':'laryngeal_cancer','鼻咽癌':'nasopharyngeal_cancer','唾液腺癌':'salivary_gland_cancer',
+      '甲狀腺癌':'thyroid_cancer','黑色素瘤':'melanoma','非黑色素皮膚癌':'non_melanoma_skin_cancer',
+      'Merkel 細胞癌':'merkel_cell_carcinoma','軟組織肉瘤':'soft_tissue_sarcoma','骨肉瘤':'osteosarcoma',
+      '尤文氏肉瘤':'ewing_sarcoma','腦部腫瘤':'brain_tumor','脊髓腫瘤':'spinal_cord_tumor',
+      '腦轉移指引入口':'brain_metastasis','淋巴瘤':'lymphoma','多發性骨髓瘤':'multiple_myeloma',
+      '慢性淋巴性白血病':'cll','骨髓增生不良症候群':'mds','骨髓增生性腫瘤':'mpn',
+      '副腎腫瘤':'adrenal_tumor','原發不明癌':'cancer_unknown_primary','罕見癌症':'rare_cancers',
+      '其他未分類腫瘤':'other_unclassified',
+    };
+
+    async function seedDatabase() {
+      const count = await dbGetAll('cancerCards');
+      if (count.length > 0) return;
+      const today = new Date().toISOString().split('T')[0];
+      for (const [category, cancers] of Object.entries(CATEGORIES)) {
+        for (const c of cancers) {
+          await dbPut('cancerCards', {
+            id: ID_MAP[c.zh],
+            category,
+            zhName: c.zh,
+            enName: c.en,
+            synonyms: c.syn,
+            primaryGuideline: '',
+            secondaryGuidelines: [],
+            documentIds: [],
+            mustReadSections: [],
+            checklistIds: [],
+            precisionFieldIds: [],
+            nhiNoteIds: [],
+            externalLinks: [],
+            reviewStatus: '待維護',
+            updatedAt: today,
+          });
+        }
+      }
+    }
+
+    // ========== PDF Helpers ==========
+    async function storePdf(file) {
+      const pdfDb = await openPdfDB();
+      const key = 'pdf-' + crypto.randomUUID();
+      const buf = await file.arrayBuffer();
+      return new Promise((resolve, reject) => {
+        const tx = pdfDb.transaction('pdfs', 'readwrite');
+        tx.objectStore('pdfs').put(buf, key);
+        tx.oncomplete = () => { pdfDb.close(); resolve(key); };
+        tx.onerror = () => { pdfDb.close(); reject(new Error('無法儲存 PDF')); };
+      });
+    }
+
+    async function getPdfBlob(key) {
+      const pdfDb = await openPdfDB();
+      return new Promise((resolve, reject) => {
+        const tx = pdfDb.transaction('pdfs', 'readonly');
+        const req = tx.objectStore('pdfs').get(key);
+        req.onsuccess = () => {
+          pdfDb.close();
+          resolve(req.result ? new Blob([req.result], { type: 'application/pdf' }) : null);
+        };
+        req.onerror = () => { pdfDb.close(); reject(new Error('無法讀取 PDF')); };
+      });
+    }
+
+    async function deletePdf(key) {
+      const pdfDb = await openPdfDB();
+      return new Promise((resolve, reject) => {
+        const tx = pdfDb.transaction('pdfs', 'readwrite');
+        tx.objectStore('pdfs').delete(key);
+        tx.oncomplete = () => { pdfDb.close(); resolve(); };
+        tx.onerror = () => { pdfDb.close(); reject(new Error('無法刪除 PDF')); };
+      });
+    }
+
+    async function openPdf(key) {
+      const blob = await getPdfBlob(key);
+      if (!blob) throw new Error('找不到 PDF 檔案');
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    }
+
+    // ========== Backup ==========
+    async function exportBackup() {
+      const [cancerCards, documents, checklists, precisionFields, nhiNotes] = await Promise.all([
+        dbGetAll('cancerCards'), dbGetAll('documents'), dbGetAll('checklists'),
+        dbGetAll('precisionFields'), dbGetAll('nhiNotes')
+      ]);
+      return {
+        version: 1, exportedAt: new Date().toISOString(),
+        cancerCards,
+        documents: documents.map(d => ({ ...d, storageKey: null })),
+        checklists, precisionFields, nhiNotes
+      };
+    }
+
+    function downloadJSON(data, filename) {
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    async function importBackup(file) {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (data.version !== 1) throw new Error('備份格式不相容');
+      for (const store of ['cancerCards','documents','checklists','precisionFields','nhiNotes']) {
+        await dbClear(store);
+        if (data[store]?.length) {
+          for (const item of data[store]) await dbPut(store, item);
+        }
+      }
+    }
+
+    // ========== Search ==========
+    function searchCards(cards, query) {
+      if (!query.trim()) return cards;
+      const q = query.toLowerCase().trim();
+      return cards.filter(c =>
+        c.zhName.toLowerCase().includes(q) ||
+        c.enName.toLowerCase().includes(q) ||
+        c.id.toLowerCase().includes(q) ||
+        c.synonyms.some(s => s.toLowerCase().includes(q)) ||
+        c.category.toLowerCase().includes(q)
+      );
+    }
+
+    // ========== Toast ==========
+    function showToast(msg, duration = 2500) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.classList.remove('hidden');
+      setTimeout(() => el.classList.add('hidden'), duration);
+    }
+
+    // ========== Router ==========
+    let currentRoute = '/';
+    let routeParams = {};
+
+    function navigate(path) {
+      currentRoute = path;
+      routeParams = {};
+      // Parse route params
+      const parts = path.split('/').filter(Boolean);
+      if (parts[0] === 'cancer' && parts[1]) {
+        routeParams.cancerId = parts[1];
+        routeParams.sub = parts[2] || '';
+      } else if (parts[0] === 'pdf-library' && parts[1] === 'import') {
+        routeParams.docId = parts[2] || '';
+      }
+      render();
+      window.scrollTo(0, 0);
+    }
+
+    // ========== Render Engine ==========
+    async function render() {
+      const app = document.getElementById('app');
+      if (currentRoute === '/') {
+        await renderHomePage(app);
+      } else if (currentRoute.startsWith('/cancer/') && !routeParams.sub) {
+        await renderCancerDetail(app);
+      } else if (routeParams.sub === 'quickref') {
+        await renderQuickRef(app);
+      } else if (routeParams.sub === 'edit') {
+        await renderEditCancer(app);
+      } else if (routeParams.sub === 'checklist') {
+        await renderChecklist(app);
+      } else if (routeParams.sub === 'precision') {
+        await renderPrecision(app);
+      } else if (routeParams.sub === 'nhi') {
+        await renderNhi(app);
+      } else if (currentRoute === '/pdf-library' && !routeParams.docId) {
+        await renderPdfLibrary(app);
+      } else if (currentRoute.startsWith('/pdf-library/import')) {
+        await renderImportPdf(app);
+      } else if (currentRoute === '/settings') {
+        await renderSettings(app);
+      } else {
+        navigate('/');
+      }
+    }
+
+    // ========== Pages ==========
+
+    async function renderHomePage(app) {
+      const cards = await dbGetAll('cancerCards');
+      const pending = cards.filter(c => c.reviewStatus === '待維護').length;
+      
+      app.innerHTML = `
+        <div class="container">
+          <div class="mb-6">
+            <h1 class="text-2xl font-bold">腫瘤指引快速查</h1>
+            <p class="text-sm text-gray-500 mt-1">個人本機指引查閱與防漏工具</p>
+          </div>
+          <div class="search-wrap">
+            <span class="search-icon">🔍</span>
+            <input type="text" id="search-input" class="input" style="padding-left:44px;padding-right:40px"
+              placeholder="搜尋癌別、英文名或同義詞..." />
+            <button id="search-clear" class="search-clear hidden">✕</button>
+          </div>
+          ${pending > 0 ? `<div class="alert alert-warning">⚠️ 有 <strong>${pending}</strong> 個癌別待維護</div>` : ''}
+          <div id="search-results" class="hidden"></div>
+          <div id="home-content">
+            <div class="quick-links">
+              <div class="quick-link" onclick="navigate('/pdf-library')">
+                <span class="quick-link-icon">📄</span>
+                <span class="quick-link-label">PDF 文件庫</span>
+              </div>
+              <div class="quick-link" onclick="navigate('/settings')">
+                <span class="quick-link-icon">⚙️</span>
+                <span class="quick-link-label">設定</span>
+              </div>
+            </div>
+            <div id="category-list"></div>
+          </div>
+          ${renderNav('search')}
+        </div>
+      `;
+
+      // Render categories
+      const grouped = {};
+      cards.forEach(c => { if (!grouped[c.category]) grouped[c.category] = []; grouped[c.category].push(c); });
+      const catEl = document.getElementById('category-list');
+      catEl.innerHTML = Object.entries(grouped).map(([cat, items]) => `
+        <div class="category-title">${cat}</div>
+        ${items.map(c => renderCancerCardItem(c)).join('')}
+      `).join('');
+
+      // Search
+      const input = document.getElementById('search-input');
+      const clearBtn = document.getElementById('search-clear');
+      const resultsEl = document.getElementById('search-results');
+      const homeEl = document.getElementById('home-content');
+
+      input.addEventListener('input', () => {
+        const q = input.value;
+        clearBtn.classList.toggle('hidden', !q);
+        if (q.trim()) {
+          const filtered = searchCards(cards, q);
+          homeEl.classList.add('hidden');
+          resultsEl.classList.remove('hidden');
+          resultsEl.innerHTML = `
+            <p class="text-sm text-gray-500 mb-3">找到 ${filtered.length} 個結果</p>
+            ${filtered.length === 0 ? '<div class="card text-center" style="padding:32px"><p class="text-gray-400">找不到符合的癌別</p></div>' :
+              filtered.map(c => renderCancerCardItem(c)).join('')}
+          `;
+        } else {
+          homeEl.classList.remove('hidden');
+          resultsEl.classList.add('hidden');
+        }
+      });
+      clearBtn.addEventListener('click', () => { input.value = ''; input.dispatchEvent(new Event('input')); });
+    }
+
+    function renderCancerCardItem(card) {
+      const statusClass = card.reviewStatus === '已維護' ? 'status-maintained' :
+        card.reviewStatus === '部分維護' ? 'status-partial' : 'status-pending';
+      const hasDocs = card.documentIds.length > 0;
+      return `
+        <div class="cancer-item" onclick="navigate('/cancer/${card.id}')">
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="cancer-name truncate">${card.zhName}</span>
+              <span class="status ${statusClass}">${card.reviewStatus}</span>
+            </div>
+            <p class="cancer-en truncate">${card.enName}</p>
+          </div>
+          <div class="flex items-center gap-2 ml-2">
+            ${hasDocs ? '<span class="text-green-600 text-sm">✓ PDF</span>' : ''}
+            <span class="text-gray-300">›</span>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderNav(active) {
+      const items = [
+        { path: '/', id: 'search', icon: '🔍', label: '搜尋' },
+        { path: '/pdf-library', id: 'pdf', icon: '📄', label: '文件庫' },
+        { path: '/settings', id: 'settings', icon: '⚙️', label: '設定' },
+      ];
+      return `
+        <nav class="nav">
+          <div class="nav-inner">
+            ${items.map(i => `
+              <button class="nav-btn ${i.id === active ? 'active' : ''}" onclick="navigate('${i.path}')">
+                <span class="nav-icon">${i.icon}</span>
+                <span>${i.label}</span>
+              </button>
+            `).join('')}
+          </div>
+        </nav>
+      `;
+    }
+
+    async function renderCancerDetail(app) {
+      const card = await dbGet('cancerCards', routeParams.cancerId);
+      if (!card) { navigate('/'); return; }
+
+      const docs = await dbGetAll('documents');
+      const myDocs = docs.filter(d => d.cancerIds?.includes(card.id));
+      const currentDocs = myDocs.filter(d => d.current && !d.archived);
+      const archivedDocs = myDocs.filter(d => d.archived);
+
+      const checklists = (await dbGetAll('checklists')).filter(c => c.cancerId === card.id);
+      const nhiNotes = (await dbGetAll('nhiNotes')).filter(n => n.cancerId === card.id);
+
+      // Update last used
+      await dbPut('cancerCards', { ...card, lastUsedAt: new Date().toISOString() });
+
+      const statusClass = card.reviewStatus === '已維護' ? 'status-maintained' :
+        card.reviewStatus === '部分維護' ? 'status-partial' : 'status-pending';
+
+      app.innerHTML = `
+        <div class="container">
+          <button class="back-btn" onclick="navigate('/')">← 返回</button>
+          <div class="flex-between gap-3 mb-6">
+            <div class="min-w-0">
+              <h1 class="text-2xl font-bold">${card.zhName}</h1>
+              <p class="text-sm text-gray-500">${card.enName}</p>
+              ${card.synonyms.length ? `<p class="text-xs text-gray-400 mt-1">同義詞：${card.synonyms.join('、')}</p>` : ''}
+            </div>
+            <span class="status ${statusClass} shrink-0">${card.reviewStatus}</span>
+          </div>
+
+          <button class="btn btn-primary mb-4" onclick="navigate('/cancer/${card.id}/quickref')">📋 快速參考</button>
+
+          <!-- Guideline Documents -->
+          <div class="card section">
+            <h2 class="section-title">📄 應查指引</h2>
+            ${card.primaryGuideline ? `<p class="text-sm text-gray-700 mb-2">${card.primaryGuideline}</p>` :
+              '<p class="text-sm text-gray-400 mb-2">尚未設定主要指引</p>'}
+            ${card.secondaryGuidelines.length ? `<div class="text-sm text-gray-500"><p class="mb-1">其他指引：</p><ul>${card.secondaryGuidelines.map(g => `<li>• ${g}</li>`).join('')}</ul></div>` : ''}
+            <div class="border-t pt-3 mt-3">
+              <p class="text-sm font-medium text-gray-700 mb-2">本機 PDF：</p>
+              ${currentDocs.length === 0 ? '<p class="text-sm text-gray-400">尚未匯入</p>' :
+                currentDocs.map(d => `
+                  <div class="doc-item mb-2">
+                    <div class="min-w-0 flex-1">
+                      <p class="text-sm font-medium text-green-800 truncate">${d.title}</p>
+                      <p class="text-xs text-green-600">${d.source} · ${d.version}</p>
+                    </div>
+                    <button class="btn btn-ghost btn-sm text-green-700" onclick="openPdf('${d.storageKey}')">開啟</button>
+                  </div>
+                `).join('')}
+              ${archivedDocs.length ? `
+                <details class="mt-2">
+                  <summary class="text-xs text-gray-400 cursor-pointer">封存版本 (${archivedDocs.length})</summary>
+                  ${archivedDocs.map(d => `
+                    <div class="doc-item doc-item-archived mt-2">
+                      <p class="text-xs text-gray-500 truncate">${d.title} (${d.version})</p>
+                      <button class="text-xs text-gray-400" onclick="openPdf('${d.storageKey}')">開啟</button>
+                    </div>
+                  `).join('')}
+                </details>
+              ` : ''}
+            </div>
+          </div>
+
+          <!-- Must Read Sections -->
+          <div class="card section">
+            <h2 class="section-title">📖 必查章節</h2>
+            ${card.mustReadSections.length ? `<ul class="space-y-2">${card.mustReadSections.map(s => `<li class="list-item"><span class="list-dot">•</span><span class="text-sm text-gray-700">${s}</span></li>`).join('')}</ul>` :
+              '<p class="text-sm text-gray-400">尚未設定章節清單</p>'}
+          </div>
+
+          <!-- Checklist -->
+          <div class="card section">
+            <h2 class="section-title">✅ 不要漏</h2>
+            ${checklists.length ? `<div class="space-y-2">${checklists.map(c => `
+              <div class="list-item"><span style="color:#f59e0b">⚠</span><div><p class="text-sm text-gray-700">${c.label}</p><p class="text-xs text-gray-400">${c.category} · ${c.importance}</p></div></div>
+            `).join('')}</div>` : '<p class="text-sm text-gray-400">尚未建立 checklist</p>'}
+          </div>
+
+          <!-- NHI Notes -->
+          <div class="card section">
+            <h2 class="section-title">🏥 健保提醒</h2>
+            ${nhiNotes.length ? `<div class="space-y-2">${nhiNotes.map(n => `
+              <div class="bg-blue-50 rounded-lg p-3"><p class="text-sm font-medium text-blue-800">${n.label}</p><p class="text-sm text-blue-700 mt-1">${n.content}</p></div>
+            `).join('')}</div>` : '<p class="text-sm text-gray-400">尚未設定健保提醒</p>'}
+          </div>
+
+          <!-- Actions -->
+          <div class="space-y-3 mt-6">
+            <button class="btn btn-secondary" onclick="navigate('/cancer/${card.id}/edit')">✏️ 編輯此癌別</button>
+            <button class="btn btn-ghost" onclick="navigate('/cancer/${card.id}/checklist')">編輯 Checklist</button>
+            <button class="btn btn-ghost" onclick="navigate('/cancer/${card.id}/precision')">編輯精準欄位</button>
+            <button class="btn btn-ghost" onclick="navigate('/cancer/${card.id}/nhi')">編輯健保提醒</button>
+          </div>
+          ${renderNav('')}
+        </div>
+      `;
+    }
+
+    async function renderQuickRef(app) {
+      const card = await dbGet('cancerCards', routeParams.cancerId);
+      if (!card) { navigate('/'); return; }
+
+      const docs = await dbGetAll('documents');
+      const currentDocs = docs.filter(d => d.cancerIds?.includes(card.id) && d.current && !d.archived);
+      const checklists = (await dbGetAll('checklists')).filter(c => c.cancerId === card.id);
+      const precisionFields = (await dbGetAll('precisionFields')).filter(p => p.cancerId === card.id);
+      const nhiNotes = (await dbGetAll('nhiNotes')).filter(n => n.cancerId === card.id);
+
+      const hasDocs = currentDocs.length > 0;
+      const isEmpty = card.reviewStatus === '待維護';
+      const missingItems = [];
+      if (!card.primaryGuideline) missingItems.push('尚未設定主要指引');
+      if (!card.mustReadSections.length) missingItems.push('尚未設定必查章節');
+      if (!checklists.length) missingItems.push('尚未建立 checklist');
+      if (!precisionFields.length) missingItems.push('尚未設定精準化欄位');
+
+      app.innerHTML = `
+        <div class="container">
+          <button class="back-btn" onclick="navigate('/cancer/${card.id}')">← 返回</button>
+          <h1 class="text-2xl font-bold mb-1">快速參考</h1>
+          <p class="text-sm text-gray-500 mb-6">${card.zhName} · ${card.enName}</p>
+
+          ${isEmpty ? '<div class="alert alert-warning mb-4">⚠️ 此癌別資料待維護，以下資訊可能不完整</div>' : ''}
+
+          <div class="card section">
+            <h2 class="section-title">📄 應查指引</h2>
+            ${card.primaryGuideline ? `<p class="text-sm text-gray-700">${card.primaryGuideline}</p>${card.secondaryGuidelines.map(g => `<p class="text-sm text-gray-500">${g}</p>`).join('')}` :
+              '<p class="text-sm text-gray-400">尚未設定</p>'}
+          </div>
+
+          <div class="card section">
+            <h2 class="section-title">💾 本機 PDF 狀態</h2>
+            ${hasDocs ? currentDocs.map(d => `
+              <div class="bg-green-50 rounded-lg p-3 flex-between">
+                <div><p class="text-sm font-medium text-green-800">✅ 已匯入 ${d.version}</p><p class="text-xs text-green-600">${d.title}</p></div>
+                <button class="text-sm text-green-700 font-medium" onclick="openPdf('${d.storageKey}')">一鍵開啟</button>
+              </div>
+            `).join('') : `
+              <div class="bg-gray-50 rounded-lg p-3">
+                <p class="text-sm text-gray-500">❌ 尚未匯入</p>
+                <button class="text-sm text-primary-600 mt-1" onclick="navigate('/pdf-library/import')">前往匯入 →</button>
+              </div>
+            `}
+          </div>
+
+          <div class="card section">
+            <h2 class="section-title">📖 必查章節</h2>
+            ${card.mustReadSections.length ? `<ul class="space-y-2">${card.mustReadSections.map(s => `<li class="list-item"><span class="list-dot">•</span><span class="text-sm text-gray-700">${s}</span></li>`).join('')}</ul>` :
+              '<p class="text-sm text-gray-400">尚未設定</p>'}
+          </div>
+
+          <div class="card section">
+            <h2 class="section-title">✅ 不要漏</h2>
+            ${checklists.length ? `<div class="space-y-2">${checklists.map(c => `<div class="list-item"><span style="color:#f59e0b">⚠</span><span class="text-sm text-gray-700">${c.label}</span></div>`).join('')}</div>` :
+              '<p class="text-sm text-gray-400">尚未建立</p>'}
+          </div>
+
+          ${nhiNotes.length ? `
+            <div class="card section">
+              <h2 class="section-title">🏥 健保提醒</h2>
+              <div class="space-y-2">${nhiNotes.map(n => `<div class="bg-blue-50 rounded-lg p-3"><p class="text-sm text-blue-800">${n.content}</p></div>`).join('')}</div>
+            </div>
+          ` : ''}
+
+          ${missingItems.length ? `
+            <div class="card section" style="border-color:var(--orange-200);background:var(--orange-50)">
+              <h2 class="section-title" style="color:var(--orange-700)">⚠️ 目前資訊不足</h2>
+              <ul class="space-y-1">${missingItems.map(m => `<li class="text-sm" style="color:var(--orange-700)">• ${m}</li>`).join('')}</ul>
+            </div>
+          ` : ''}
+
+          <div class="card section" style="border-color:var(--primary-200);background:var(--primary-50)">
+            <h2 class="section-title" style="color:var(--primary-800)">👉 下一步</h2>
+            <ul class="space-y-2">
+              ${hasDocs ? '<li class="text-sm" style="color:var(--primary-700)">✅ 已有本機指引，可直接開啟查閱</li>' : '<li class="text-sm" style="color:var(--primary-700)">• 先匯入本機 PDF 指引</li>'}
+              ${card.mustReadSections.length ? '<li class="text-sm" style="color:var(--primary-700)">• 依必查章節逐項確認</li>' : ''}
+              ${precisionFields.length ? '<li class="text-sm" style="color:var(--primary-700)">• 若要更精準，補充精準化欄位資訊</li>' : ''}
+              ${checklists.length ? '<li class="text-sm" style="color:var(--primary-700)">• 依不要漏 checklist 逐項確認</li>' : ''}
+            </ul>
+          </div>
+
+          <div class="text-xs text-gray-400 text-center mt-4 mb-8">
+            <p>來源：${card.primaryGuideline || '待維護'}</p>
+            <p>更新日期：${card.updatedAt}</p>
+            <p class="mt-2">此為快速參考，非最終治療建議</p>
+          </div>
+          ${renderNav('')}
+        </div>
+      `;
+    }
+
+    async function renderEditCancer(app) {
+      const card = await dbGet('cancerCards', routeParams.cancerId);
+      if (!card) { navigate('/'); return; }
+
+      app.innerHTML = `
+        <div class="container">
+          <button class="back-btn" onclick="navigate('/cancer/${card.id}')">← 返回</button>
+          <h1 class="text-2xl font-bold mb-1">編輯癌別</h1>
+          <p class="text-sm text-gray-500 mb-6">${card.zhName}</p>
+
+          <div class="card mb-4">
+            <h2 class="font-semibold text-gray-800 mb-3">基本資料</h2>
+            <div class="space-y-4">
+              <div class="form-group"><label class="label">中文名稱</label><input class="input" id="edit-zh" value="${card.zhName}"></div>
+              <div class="form-group"><label class="label">英文名稱</label><input class="input" id="edit-en" value="${card.enName}"></div>
+              <div class="form-group"><label class="label">同義詞（用「、」分隔）</label><input class="input" id="edit-syn" value="${card.synonyms.join('、')}" placeholder="cholangiocarcinoma、gallbladder cancer"></div>
+              <div class="form-group"><label class="label">審核狀態</label>
+                <select class="input" id="edit-status">
+                  <option value="待維護" ${card.reviewStatus==='待維護'?'selected':''}>待維護</option>
+                  <option value="部分維護" ${card.reviewStatus==='部分維護'?'selected':''}>部分維護</option>
+                  <option value="已維護" ${card.reviewStatus==='已維護'?'selected':''}>已維護</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="card mb-4">
+            <h2 class="font-semibold text-gray-800 mb-3">指引路由</h2>
+            <div class="space-y-4">
+              <div class="form-group"><label class="label">主要指引</label><input class="input" id="edit-primary" value="${card.primaryGuideline}" placeholder="NCCN Biliary Tract Cancers"></div>
+              <div class="form-group"><label class="label">其他指引（每行一筆）</label><textarea class="input" id="edit-secondary" rows="3" placeholder="ESMO biliary tract cancer guidance">${card.secondaryGuidelines.join('\n')}</textarea></div>
+            </div>
+          </div>
+
+          <div class="card mb-4">
+            <h2 class="font-semibold text-gray-800 mb-3">必查章節（每行一筆）</h2>
+            <textarea class="input" id="edit-sections" rows="6" placeholder="初始評估&#10;分期與可切除性&#10;生物標記">${card.mustReadSections.join('\n')}</textarea>
+          </div>
+
+          <div class="card mb-4">
+            <h2 class="font-semibold text-gray-800 mb-3">外部連結</h2>
+            <textarea class="input" id="edit-links" rows="4" placeholder="NCCN指南|https://www.nccn.org">${card.externalLinks.map(l => l.label+'|'+l.url).join('\n')}</textarea>
+            <p class="text-xs text-gray-400 mt-1">格式：標題|網址，每行一筆</p>
+          </div>
+
+          <button class="btn btn-primary" id="save-cancer-btn">儲存</button>
+          ${renderNav('')}
+        </div>
+      `;
+
+      document.getElementById('save-cancer-btn').addEventListener('click', async () => {
+        const links = document.getElementById('edit-links').value.split('\n').filter(l => l.trim()).map(l => {
+          const [label, url] = l.split('|');
+          return { label: label?.trim() || '', url: url?.trim() || '' };
+        }).filter(l => l.label && l.url);
+
+        await dbPut('cancerCards', {
+          ...card,
+          zhName: document.getElementById('edit-zh').value.trim(),
+          enName: document.getElementById('edit-en').value.trim(),
+          synonyms: document.getElementById('edit-syn').value.split(/[、,]/).map(s => s.trim()).filter(Boolean),
+          primaryGuideline: document.getElementById('edit-primary').value.trim(),
+          secondaryGuidelines: document.getElementById('edit-secondary').value.split('\n').map(s => s.trim()).filter(Boolean),
+          mustReadSections: document.getElementById('edit-sections').value.split('\n').map(s => s.trim()).filter(Boolean),
+          externalLinks: links,
+          reviewStatus: document.getElementById('edit-status').value,
+          updatedAt: new Date().toISOString().split('T')[0],
+        });
+        showToast('已儲存');
+        navigate('/cancer/' + card.id);
+      });
+    }
+
+    async function renderChecklist(app) {
+      const card = await dbGet('cancerCards', routeParams.cancerId);
+      if (!card) { navigate('/'); return; }
+      const items = (await dbGetAll('checklists')).filter(c => c.cancerId === card.id);
+
+      app.innerHTML = `
+        <div class="container">
+          <button class="back-btn" onclick="navigate('/cancer/${card.id}')">← 返回</button>
+          <h1 class="text-2xl font-bold mb-1">不要漏 Checklist</h1>
+          <p class="text-sm text-gray-500 mb-6">${card.zhName}</p>
+
+          <button class="btn btn-primary mb-4" id="add-checklist-btn">+ 新增項目</button>
+          <div id="checklist-form" class="hidden card mb-4"></div>
+          <div id="checklist-list"></div>
+          ${renderNav('')}
+        </div>
+      `;
+
+      const renderForm = (item) => {
+        document.getElementById('checklist-form').classList.remove('hidden');
+        document.getElementById('checklist-form').innerHTML = `
+          <h2 class="font-semibold text-gray-800 mb-3">${item ? '編輯項目' : '新增項目'}</h2>
+          <div class="space-y-3">
+            <div class="form-group"><label class="label">項目名稱</label><input class="input" id="cl-label" value="${item?.label || ''}" placeholder="確認生物標記狀態"></div>
+            <div class="form-group"><label class="label">分類</label>
+              <select class="input" id="cl-cat">
+                ${['檢測','評估','處置','確認','其他'].map(c => `<option value="${c}" ${item?.category===c?'selected':''}>${c}</option>`).join('')}
+              </select>
+            </div>
+            <div class="form-group"><label class="label">重要性</label>
+              <select class="input" id="cl-imp">
+                ${['必查','建議','參考'].map(i => `<option value="${i}" ${item?.importance===i?'selected':''}>${i}</option>`).join('')}
+              </select>
+            </div>
+            <div class="flex gap-2">
+              <button class="btn btn-primary flex-1" id="cl-save">儲存</button>
+              <button class="btn btn-secondary flex-1" id="cl-cancel">取消</button>
+            </div>
+          </div>
+        `;
+        document.getElementById('cl-save').addEventListener('click', async () => {
+          const label = document.getElementById('cl-label').value.trim();
+          if (!label) { showToast('請填寫項目名稱'); return; }
+          const data = {
+            id: item?.id || crypto.randomUUID(),
+            cancerId: card.id,
+            label,
+            category: document.getElementById('cl-cat').value,
+            importance: document.getElementById('cl-imp').value,
+            sourceType: '個人備註',
+            sourceDocumentId: '',
+            updatedAt: new Date().toISOString().split('T')[0],
+          };
+          await dbPut('checklists', data);
+          showToast(item ? '已更新' : '已新增');
+          navigate('/cancer/' + card.id + '/checklist');
+        });
+        document.getElementById('cl-cancel').addEventListener('click', () => {
+          document.getElementById('checklist-form').classList.add('hidden');
+        });
+      };
+
+      document.getElementById('add-checklist-btn').addEventListener('click', () => renderForm(null));
+
+      const listEl = document.getElementById('checklist-list');
+      if (items.length === 0) {
+        listEl.innerHTML = '<div class="card text-center" style="padding:32px"><p class="text-gray-400">尚未新增任何項目</p></div>';
+      } else {
+        listEl.innerHTML = items.map(item => {
+          const impClass = item.importance === '必查' ? 'tag-required' : '';
+          return `
+            <div class="card flex-between items-start gap-3">
+              <div class="min-w-0 flex-1">
+                <p class="font-medium text-gray-900">${item.label}</p>
+                <div class="flex gap-2 mt-1">
+                  <span class="tag">${item.category}</span>
+                  <span class="tag ${impClass}">${item.importance}</span>
+                </div>
+              </div>
+              <div class="flex gap-1">
+                <button class="btn btn-ghost btn-sm" onclick="window._editChecklist('${item.id}')">編輯</button>
+                <button class="btn btn-ghost btn-sm text-red-500" onclick="window._deleteChecklist('${item.id}')">刪除</button>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+
+      window._editChecklist = async (id) => {
+        const item = await dbGet('checklists', id);
+        if (item) renderForm(item);
+      };
+      window._deleteChecklist = async (id) => {
+        if (!confirm('確定刪除此項目？')) return;
+        await dbDelete('checklists', id);
+        showToast('已刪除');
+        navigate('/cancer/' + card.id + '/checklist');
+      };
+    }
+
+    async function renderPrecision(app) {
+      const card = await dbGet('cancerCards', routeParams.cancerId);
+      if (!card) { navigate('/'); return; }
+      const items = (await dbGetAll('precisionFields')).filter(p => p.cancerId === card.id);
+
+      app.innerHTML = `
+        <div class="container">
+          <button class="back-btn" onclick="navigate('/cancer/${card.id}')">← 返回</button>
+          <h1 class="text-2xl font-bold mb-1">精準化欄位</h1>
+          <p class="text-sm text-gray-500 mb-6">${card.zhName}</p>
+
+          <button class="btn btn-primary mb-4" id="add-precision-btn">+ 新增欄位</button>
+          <div id="precision-form" class="hidden card mb-4"></div>
+          <div id="precision-list"></div>
+          ${renderNav('')}
+        </div>
+      `;
+
+      const renderForm = (item) => {
+        document.getElementById('precision-form').classList.remove('hidden');
+        document.getElementById('precision-form').innerHTML = `
+          <h2 class="font-semibold text-gray-800 mb-3">${item ? '編輯欄位' : '新增欄位'}</h2>
+          <div class="space-y-3">
+            <div class="form-group"><label class="label">欄位名稱</label><input class="input" id="pf-label" value="${item?.label || ''}" placeholder="疾病狀態"></div>
+            <div class="form-group"><label class="label">欄位類型</label>
+              <select class="input" id="pf-type">
+                <option value="single_select" ${item?.type==='single_select'?'selected':''}>單選</option>
+                <option value="multi_select" ${item?.type==='multi_select'?'selected':''}>多選</option>
+                <option value="text" ${item?.type==='text'?'selected':''}>文字</option>
+                <option value="number" ${item?.type==='number'?'selected':''}>數字</option>
+              </select>
+            </div>
+            <div id="pf-options-wrap" class="form-group">
+              <label class="label">選項（每行一筆）</label>
+              <textarea class="input" id="pf-options" rows="4" placeholder="新診斷&#10;復發&#10;轉移">${item?.options?.join('\n') || ''}</textarea>
+            </div>
+            <label class="checkbox-wrap"><input type="checkbox" id="pf-req" ${item?.required?'checked':''}> <span class="text-sm text-gray-700">必填</span></label>
+            <p class="text-xs text-gray-400">所有欄位皆可留白，留白時不阻擋快速參考輸出</p>
+            <div class="flex gap-2">
+              <button class="btn btn-primary flex-1" id="pf-save">儲存</button>
+              <button class="btn btn-secondary flex-1" id="pf-cancel">取消</button>
+            </div>
+          </div>
+        `;
+
+        const typeEl = document.getElementById('pf-type');
+        const optWrap = document.getElementById('pf-options-wrap');
+        const toggleOpts = () => { optWrap.style.display = (typeEl.value === 'text' || typeEl.value === 'number') ? 'none' : ''; };
+        typeEl.addEventListener('change', toggleOpts);
+        toggleOpts();
+
+        document.getElementById('pf-save').addEventListener('click', async () => {
+          const label = document.getElementById('pf-label').value.trim();
+          if (!label) { showToast('請填寫欄位名稱'); return; }
+          const type = typeEl.value;
+          const data = {
+            id: item?.id || crypto.randomUUID(),
+            cancerId: card.id,
+            label,
+            type,
+            required: document.getElementById('pf-req').checked,
+            options: (type === 'text' || type === 'number') ? [] :
+              document.getElementById('pf-options').value.split('\n').map(o => o.trim()).filter(Boolean),
+          };
+          await dbPut('precisionFields', data);
+          showToast(item ? '已更新' : '已新增');
+          navigate('/cancer/' + card.id + '/precision');
+        });
+        document.getElementById('pf-cancel').addEventListener('click', () => {
+          document.getElementById('precision-form').classList.add('hidden');
+        });
+      };
+
+      document.getElementById('add-precision-btn').addEventListener('click', () => renderForm(null));
+
+      const listEl = document.getElementById('precision-list');
+      if (items.length === 0) {
+        listEl.innerHTML = '<div class="card text-center" style="padding:32px"><p class="text-gray-400">尚未新增任何欄位</p></div>';
+      } else {
+        listEl.innerHTML = items.map(item => {
+          const typeLabel = { single_select:'單選', multi_select:'多選', text:'文字', number:'數字' }[item.type] || item.type;
+          return `
+            <div class="card flex-between items-start gap-3">
+              <div class="min-w-0 flex-1">
+                <p class="font-medium text-gray-900">${item.label}</p>
+                <div class="flex gap-2 mt-1">
+                  <span class="tag" style="background:var(--blue-50);color:var(--blue-700)">${typeLabel}</span>
+                  ${item.required ? '<span class="tag tag-required">必填</span>' : ''}
+                </div>
+                ${item.options.length ? `<p class="text-xs text-gray-400 mt-1">選項：${item.options.join('、')}</p>` : ''}
+              </div>
+              <div class="flex gap-1">
+                <button class="btn btn-ghost btn-sm" onclick="window._editPrecision('${item.id}')">編輯</button>
+                <button class="btn btn-ghost btn-sm text-red-500" onclick="window._deletePrecision('${item.id}')">刪除</button>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+
+      window._editPrecision = async (id) => {
+        const item = await dbGet('precisionFields', id);
+        if (item) renderForm(item);
+      };
+      window._deletePrecision = async (id) => {
+        if (!confirm('確定刪除此欄位？')) return;
+        await dbDelete('precisionFields', id);
+        showToast('已刪除');
+        navigate('/cancer/' + card.id + '/precision');
+      };
+    }
+
+    async function renderNhi(app) {
+      const card = await dbGet('cancerCards', routeParams.cancerId);
+      if (!card) { navigate('/'); return; }
+      const items = (await dbGetAll('nhiNotes')).filter(n => n.cancerId === card.id);
+
+      app.innerHTML = `
+        <div class="container">
+          <button class="back-btn" onclick="navigate('/cancer/${card.id}')">← 返回</button>
+          <h1 class="text-2xl font-bold mb-1">健保提醒</h1>
+          <p class="text-sm text-gray-500 mb-6">${card.zhName}</p>
+
+          <button class="btn btn-primary mb-4" id="add-nhi-btn">+ 新增提醒</button>
+          <div id="nhi-form" class="hidden card mb-4"></div>
+          <div id="nhi-list"></div>
+          ${renderNav('')}
+        </div>
+      `;
+
+      const renderForm = (item) => {
+        document.getElementById('nhi-form').classList.remove('hidden');
+        document.getElementById('nhi-form').innerHTML = `
+          <h2 class="font-semibold text-gray-800 mb-3">${item ? '編輯提醒' : '新增提醒'}</h2>
+          <div class="space-y-3">
+            <div class="form-group"><label class="label">提醒標題</label><input class="input" id="nhi-label" value="${item?.label || ''}" placeholder="健保可近性提醒"></div>
+            <div class="form-group"><label class="label">提醒內容</label><textarea class="input" id="nhi-content" rows="4" placeholder="需查健保癌藥給付規定">${item?.content || ''}</textarea></div>
+            <div class="flex gap-2">
+              <button class="btn btn-primary flex-1" id="nhi-save">儲存</button>
+              <button class="btn btn-secondary flex-1" id="nhi-cancel">取消</button>
+            </div>
+          </div>
+        `;
+        document.getElementById('nhi-save').addEventListener('click', async () => {
+          const label = document.getElementById('nhi-label').value.trim();
+          const content = document.getElementById('nhi-content').value.trim();
+          if (!label || !content) { showToast('請填寫完整資訊'); return; }
+          await dbPut('nhiNotes', {
+            id: item?.id || crypto.randomUUID(),
+            cancerId: card.id, label, content,
+            sourceDocumentId: '',
+            updatedAt: new Date().toISOString().split('T')[0],
+          });
+          showToast(item ? '已更新' : '已新增');
+          navigate('/cancer/' + card.id + '/nhi');
+        });
+        document.getElementById('nhi-cancel').addEventListener('click', () => {
+          document.getElementById('nhi-form').classList.add('hidden');
+        });
+      };
+
+      document.getElementById('add-nhi-btn').addEventListener('click', () => renderForm(null));
+
+      const listEl = document.getElementById('nhi-list');
+      if (items.length === 0) {
+        listEl.innerHTML = '<div class="card text-center" style="padding:32px"><p class="text-gray-400">尚未新增任何提醒</p></div>';
+      } else {
+        listEl.innerHTML = items.map(item => `
+          <div class="card flex-between items-start gap-3">
+            <div class="min-w-0 flex-1">
+              <p class="font-medium text-gray-900">${item.label}</p>
+              <p class="text-sm text-gray-600 mt-1">${item.content}</p>
+            </div>
+            <div class="flex gap-1">
+              <button class="btn btn-ghost btn-sm" onclick="window._editNhi('${item.id}')">編輯</button>
+              <button class="btn btn-ghost btn-sm text-red-500" onclick="window._deleteNhi('${item.id}')">刪除</button>
+            </div>
+          </div>
+        `).join('');
+      }
+
+      window._editNhi = async (id) => {
+        const item = await dbGet('nhiNotes', id);
+        if (item) renderForm(item);
+      };
+      window._deleteNhi = async (id) => {
+        if (!confirm('確定刪除此提醒？')) return;
+        await dbDelete('nhiNotes', id);
+        showToast('已刪除');
+        navigate('/cancer/' + card.id + '/nhi');
+      };
+    }
+
+    async function renderPdfLibrary(app) {
+      const docs = await dbGetAll('documents');
+      const cancerCards = await dbGetAll('cancerCards');
+      const nameMap = {};
+      cancerCards.forEach(c => nameMap[c.id] = c.zhName);
+
+      const sources = [...new Set(docs.map(d => d.source).filter(Boolean))].sort();
+
+      app.innerHTML = `
+        <div class="container">
+          <div class="flex-between mb-6">
+            <h1 class="text-2xl font-bold">PDF 文件庫</h1>
+            <button class="btn btn-primary btn-sm" style="width:auto;padding:8px 16px" onclick="navigate('/pdf-library/import')">+ 匯入</button>
+          </div>
+
+          <div class="filter-bar">
+            <button class="filter-chip active" data-source="">全部</button>
+            ${sources.map(s => `<button class="filter-chip" data-source="${s}">${s}</button>`).join('')}
+          </div>
+
+          <label class="checkbox-wrap mb-4">
+            <input type="checkbox" id="show-archived"> <span class="text-sm text-gray-600">顯示封存版本</span>
+          </label>
+
+          <div id="pdf-list"></div>
+          ${renderNav('pdf')}
+        </div>
+      `;
+
+      const renderList = () => {
+        const filterSource = document.querySelector('.filter-chip.active')?.dataset.source || '';
+        const showArchived = document.getElementById('show-archived')?.checked;
+
+        let filtered = docs;
+        if (filterSource) filtered = filtered.filter(d => d.source === filterSource);
+        if (!showArchived) filtered = filtered.filter(d => !d.archived);
+        filtered.sort((a, b) => { if (a.current && !b.current) return -1; if (!a.current && b.current) return 1; return (b.importedAt||'').localeCompare(a.importedAt||''); });
+
+        const listEl = document.getElementById('pdf-list');
+        if (filtered.length === 0) {
+          listEl.innerHTML = '<div class="empty-state"><p class="mb-4">尚無 PDF 文件</p><button class="btn btn-primary" onclick="navigate(\'/pdf-library/import\')">匯入第一份 PDF</button></div>';
+          return;
+        }
+
+        listEl.innerHTML = filtered.map(doc => {
+          const tags = doc.cancerIds.map(cid => `<span class="tag tag-category">${nameMap[cid] || cid}</span>`).join(' ');
+          return `
+            <div class="card">
+              <div class="flex-between gap-2 mb-2">
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-2">
+                    <p class="font-medium text-gray-900 truncate">${doc.title}</p>
+                    ${doc.current ? '<span class="status status-maintained">目前版本</span>' : ''}
+                    ${doc.archived ? '<span class="status status-pending">已封存</span>' : ''}
+                  </div>
+                  <p class="text-xs text-gray-500 mt-1">${doc.source} · ${doc.version}</p>
+                </div>
+              </div>
+              ${tags ? `<div class="flex gap-1 mb-3">${tags}</div>` : ''}
+              <div class="flex gap-2">
+                <button class="btn btn-ghost btn-sm flex-1" onclick="openPdf('${doc.storageKey}')">開啟</button>
+                ${!doc.current && !doc.archived ? `<button class="btn btn-ghost btn-sm text-green-600" onclick="window._setCurrent('${doc.id}')">設為目前</button>` : ''}
+                ${!doc.archived ? `<button class="btn btn-ghost btn-sm text-gray-500" onclick="window._archiveDoc('${doc.id}')">封存</button>` : ''}
+                <button class="btn btn-ghost btn-sm text-red-500" onclick="window._deleteDoc('${doc.id}')">刪除</button>
+              </div>
+            </div>
+          `;
+        }).join('');
+      };
+
+      // Filter chips
+      document.querySelectorAll('.filter-chip').forEach(chip => {
+        chip.addEventListener('click', () => {
+          document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+          chip.classList.add('active');
+          renderList();
+        });
+      });
+      document.getElementById('show-archived').addEventListener('change', renderList);
+      renderList();
+
+      window._setCurrent = async (id) => {
+        const doc = await dbGet('documents', id);
+        if (!doc) return;
+        for (const cid of doc.cancerIds) {
+          const related = (await dbGetAll('documents')).filter(d => d.cancerIds?.includes(cid));
+          for (const r of related) {
+            if (r.id !== id && r.current) await dbPut('documents', { ...r, current: false, archived: true });
+          }
+        }
+        await dbPut('documents', { ...doc, current: true, archived: false });
+        showToast('已設為目前版本');
+        navigate('/pdf-library');
+      };
+      window._archiveDoc = async (id) => {
+        const doc = await dbGet('documents', id);
+        if (doc) { await dbPut('documents', { ...doc, archived: true, current: false }); showToast('已封存'); navigate('/pdf-library'); }
+      };
+      window._deleteDoc = async (id) => {
+        const doc = await dbGet('documents', id);
+        if (!doc || !confirm(`確定刪除「${doc.title} (${doc.version})」？`)) return;
+        if (doc.storageKey) await deletePdf(doc.storageKey);
+        await dbDelete('documents', id);
+        showToast('已刪除');
+        navigate('/pdf-library');
+      };
+    }
+
+    async function renderImportPdf(app) {
+      const cancerCards = await dbGetAll('cancerCards');
+      const existingDoc = routeParams.docId ? await dbGet('documents', routeParams.docId) : null;
+
+      app.innerHTML = `
+        <div class="container">
+          <button class="back-btn" onclick="navigate('/pdf-library')">← 返回</button>
+          <h1 class="text-2xl font-bold mb-6">${existingDoc ? '編輯文件' : '匯入 PDF'}</h1>
+
+          <form id="import-form">
+            <div class="form-group">
+              <label class="label">選擇 PDF</label>
+              <input type="file" id="pdf-file" accept=".pdf" class="input" style="padding:8px">
+            </div>
+            <div class="form-group"><label class="label">指引名稱 *</label><input class="input" id="imp-title" value="${existingDoc?.title || ''}" required placeholder="NCCN Biliary Tract Cancers"></div>
+            <div class="form-group"><label class="label">來源</label><input class="input" id="imp-source" value="${existingDoc?.source || ''}" placeholder="NCCN、ESMO"></div>
+            <div class="form-group"><label class="label">版本</label><input class="input" id="imp-version" value="${existingDoc?.version || ''}" placeholder="2026.V2"></div>
+
+            <div class="form-group">
+              <label class="label">對應癌別（可多選）</label>
+              <div class="border rounded-xl p-2 overflow-y-auto max-h-64" style="border-color:var(--gray-200)">
+                ${cancerCards.map(c => `
+                  <label class="checkbox-wrap" style="padding:6px 8px;border-radius:8px">
+                    <input type="checkbox" class="cancer-cb" value="${c.id}" ${existingDoc?.cancerIds?.includes(c.id)?'checked':''}>
+                    <span class="text-sm text-gray-700">${c.zhName}</span>
+                    <span class="text-xs text-gray-400">${c.enName}</span>
+                  </label>
+                `).join('')}
+              </div>
+            </div>
+
+            <label class="checkbox-wrap mb-4"><input type="checkbox" id="imp-current" checked> <span class="text-sm text-gray-700">設為目前版本</span></label>
+
+            <div class="form-group"><label class="label">備註</label><textarea class="input" id="imp-notes" rows="3">${existingDoc?.notes || ''}</textarea></div>
+
+            <button type="submit" class="btn btn-primary" id="imp-submit">${existingDoc ? '更新' : '匯入'}</button>
+          </form>
+          ${renderNav('pdf')}
+        </div>
+      `;
+
+      document.getElementById('import-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const title = document.getElementById('imp-title').value.trim();
+        if (!title) { showToast('請填寫指引名稱'); return; }
+
+        const fileInput = document.getElementById('pdf-file');
+        const file = fileInput.files[0];
+
+        let storageKey = existingDoc?.storageKey || '';
+        if (file) {
+          if (file.type !== 'application/pdf') { showToast('請選擇 PDF 檔案'); return; }
+          if (existingDoc?.storageKey) await deletePdf(existingDoc.storageKey);
+          storageKey = await storePdf(file);
+        }
+
+        const selectedCancers = [...document.querySelectorAll('.cancer-cb:checked')].map(cb => cb.value);
+        const setAsCurrent = document.getElementById('imp-current').checked;
+
+        const docData = {
+          id: existingDoc?.id || crypto.randomUUID(),
+          title,
+          source: document.getElementById('imp-source').value.trim(),
+          version: document.getElementById('imp-version').value.trim(),
+          cancerIds: selectedCancers,
+          fileName: file?.name || existingDoc?.fileName || '',
+          storageKey,
+          pageCount: 0,
+          importedAt: new Date().toISOString().split('T')[0],
+          current: setAsCurrent,
+          archived: false,
+          notes: document.getElementById('imp-notes').value.trim(),
+        };
+
+        await dbPut('documents', docData);
+
+        // Update cancer card documentIds
+        for (const cid of selectedCancers) {
+          const card = await dbGet('cancerCards', cid);
+          if (card && !card.documentIds.includes(docData.id)) {
+            await dbPut('cancerCards', { ...card, documentIds: [...card.documentIds, docData.id], updatedAt: docData.importedAt });
+          }
+        }
+
+        // Archive others if setting as current
+        if (setAsCurrent) {
+          for (const cid of selectedCancers) {
+            const related = (await dbGetAll('documents')).filter(d => d.cancerIds?.includes(cid));
+            for (const r of related) {
+              if (r.id !== docData.id && r.current) await dbPut('documents', { ...r, current: false, archived: true });
+            }
+          }
+        }
+
+        showToast(existingDoc ? '已更新文件' : '已匯入 PDF');
+        navigate('/pdf-library');
+      });
+    }
+
+    async function renderSettings(app) {
+      let dbSize = '計算中...';
+      if (navigator.storage?.estimate) {
+        const est = await navigator.storage.estimate();
+        dbSize = ((est.usage || 0) / 1024 / 1024).toFixed(2) + ' MB';
+      }
+
+      app.innerHTML = `
+        <div class="container">
+          <h1 class="text-2xl font-bold mb-6">設定</h1>
+
+          <div class="card mb-4">
+            <h2 class="font-semibold text-gray-800 mb-3">💾 備份與還原</h2>
+            <div class="space-y-3">
+              <button class="btn btn-primary" id="export-btn">匯出備份 JSON</button>
+              <button class="btn btn-secondary" id="import-btn">匯入備份 JSON</button>
+              <p class="text-xs text-gray-400">備份包含癌別卡、checklist、精準欄位、健保提醒與 PDF 元資料。PDF 檔案本體不含在備份中。</p>
+            </div>
+          </div>
+
+          <div class="card mb-4">
+            <h2 class="font-semibold text-gray-800 mb-3">📊 資料庫資訊</h2>
+            <p class="text-sm text-gray-600">目前使用空間：${dbSize}</p>
+          </div>
+
+          <div class="card mb-4" style="border-color:var(--red-100)">
+            <h2 class="font-semibold mb-3" style="color:var(--red-600)">⚠️ 清除資料</h2>
+            <div id="clear-section">
+              <button class="btn btn-danger" id="clear-btn">清除本機所有資料</button>
+            </div>
+          </div>
+
+          <div class="card mb-4">
+            <h2 class="font-semibold text-gray-800 mb-3">ℹ️ 關於</h2>
+            <div class="space-y-2 text-sm text-gray-600">
+              <p>App 版本：1.0.0</p>
+              <p>名稱：腫瘤指引快速查</p>
+              <p>用途：個人本機腫瘤指引查閱與防漏工具</p>
+            </div>
+          </div>
+
+          <div class="card mb-4" style="border-color:var(--amber-200);background:var(--amber-50)">
+            <h2 class="font-semibold mb-3" style="color:var(--amber-800)">⚠️ 使用邊界提醒</h2>
+            <ul class="space-y-2 text-sm" style="color:var(--amber-700)">
+              <li>• 本 App 不是院級醫療資訊系統</li>
+              <li>• 不串接病人資料、不自動下載指引</li>
+              <li>• 不輸出「最終治療建議」</li>
+              <li>• 不上傳資料到雲端</li>
+              <li>• 本 App 僅供個人查閱參考使用</li>
+              <li>• 所有資料儲存於本機瀏覽器中</li>
+            </ul>
+          </div>
+
+          <div class="text-center text-xs text-gray-400 mt-8 mb-4">
+            <p>腫瘤指引快速查 v1.0.0</p>
+            <p class="mt-1">Vanilla JS + IndexedDB + PWA</p>
+          </div>
+          ${renderNav('settings')}
+        </div>
+      `;
+
+      document.getElementById('export-btn').addEventListener('click', async () => {
+        const data = await exportBackup();
+        downloadJSON(data, `oncology-guideline-backup-${new Date().toISOString().split('T')[0]}.json`);
+        showToast('備份已匯出');
+      });
+
+      document.getElementById('import-btn').addEventListener('click', () => {
+        const input = document.createElement('input');
+        input.type = 'file'; input.accept = '.json';
+        input.onchange = async (e) => {
+          const file = e.target.files[0];
+          if (!file || !confirm('匯入備份將覆蓋現有資料，確定繼續？')) return;
+          try {
+            await importBackup(file);
+            showToast('備份已匯入');
+            navigate('/');
+          } catch (err) {
+            showToast('匯入失敗：' + err.message);
+          }
+        };
+        input.click();
+      });
+
+      document.getElementById('clear-btn').addEventListener('click', async () => {
+        document.getElementById('clear-section').innerHTML = `
+          <p class="text-sm mb-3" style="color:var(--red-600)">確定要清除所有資料？此操作無法復原！</p>
+          <div class="flex gap-2">
+            <button class="btn btn-danger flex-1" id="clear-confirm">確定清除</button>
+            <button class="btn btn-secondary flex-1" id="clear-cancel">取消</button>
+          </div>
+        `;
+        document.getElementById('clear-confirm').addEventListener('click', async () => {
+          for (const store of ['cancerCards','documents','checklists','precisionFields','nhiNotes']) await dbClear(store);
+          indexedDB.deleteDatabase('OncologyPdfStorage');
+          showToast('資料已清除');
+          window.location.reload();
+        });
+        document.getElementById('clear-cancel').addEventListener('click', () => { navigate('/settings'); });
+      });
+    }
+
+    // ========== Init ==========
+    async function init() {
+      await openDB();
+      await seedDatabase();
+
+      // Handle initial URL
+      const path = window.location.pathname;
+      if (path !== '/' && path !== '/index.html') {
+        currentRoute = path;
+        const parts = path.split('/').filter(Boolean);
+        if (parts[0] === 'cancer' && parts[1]) {
+          routeParams.cancerId = parts[1];
+          routeParams.sub = parts[2] || '';
+        } else if (parts[0] === 'pdf-library' && parts[1] === 'import') {
+          routeParams.docId = parts[2] || '';
+        }
+      }
+
+      await render();
+    }
+
+    // Expose navigate globally
+    window.navigate = (path) => {
+      window.history.pushState({}, '', path);
+      navigate(path);
+    };
+
+    // Handle back/forward
+    window.addEventListener('popstate', () => {
+      const path = window.location.pathname;
+      currentRoute = path;
+      const parts = path.split('/').filter(Boolean);
+      routeParams = {};
+      if (parts[0] === 'cancer' && parts[1]) {
+        routeParams.cancerId = parts[1];
+        routeParams.sub = parts[2] || '';
+      } else if (parts[0] === 'pdf-library' && parts[1] === 'import') {
+        routeParams.docId = parts[2] || '';
+      }
+      render();
+    });
+
+    // Expose PDF function
+    window.openPdf = async (key) => {
+      try { await openPdf(key); }
+      catch (e) { showToast(e.message); }
+    };
+
+    init();
+
+    // Register Service Worker
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').then(
+          (reg) => console.log('SW registered:', reg.scope),
+          (err) => console.log('SW registration failed:', err)
+        );
+      });
+    }
+  </script>
+</body>
+</html>

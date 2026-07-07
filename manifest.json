@@ -1,0 +1,17 @@
+{
+  "name": "腫瘤指引快速查",
+  "short_name": "腫瘤指引",
+  "description": "個人本機使用之腫瘤指引查閱、少見癌症防漏、快速參考與本機指引文件庫",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#1e40af",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
