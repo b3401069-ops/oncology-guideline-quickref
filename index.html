@@ -395,6 +395,20 @@
       { label: '自費討論', content: '未符合健保給付條件時，與病人討論自費或替代方案並留下紀錄。' },
     ];
 
+    // ========== 小工具 ==========
+    // 必查章節可帶頁碼：「章節名稱|12」→ { name, page }
+    const parseSection = (s) => {
+      const m = s.match(/^(.*?)\|\s*[pP]?\.?\s*(\d+)\s*$/);
+      return m ? { name: m[1].trim(), page: Number(m[2]) } : { name: s, page: null };
+    };
+    // 指引過期判斷：以最後確認日（無則匯入日）起算
+    const STALE_DAYS = 180;
+    const docAgeDays = (d) => Math.floor((Date.now() - new Date(d.verifiedAt || d.importedAt || Date.now())) / 86400000);
+    const isStaleDoc = (d) => d.current && !d.archived && docAgeDays(d) > STALE_DAYS;
+    // 精準欄位是否已填值
+    const hasPfValue = (f) => Array.isArray(f.value) ? f.value.length > 0 : !!(f.value && String(f.value).trim());
+    const pfValueText = (f) => Array.isArray(f.value) ? f.value.join('、') : (f.value || '');
+
     async function seedDatabase() {
       const count = await dbGetAll('cancerCards');
       if (count.length > 0) return;
@@ -691,7 +705,15 @@
     async function renderHomePage(app) {
       const cards = await dbGetAll('cancerCards');
       const pending = cards.filter(c => c.reviewStatus === '待維護').length;
-      
+      const docs = await dbGetAll('documents');
+      const staleCount = docs.filter(isStaleDoc).length;
+      // 備份提醒：有匯入文件才提醒（代表已有實際資料）
+      const lastBackupAt = localStorage.getItem('lastBackupAt');
+      const backupDays = lastBackupAt ? Math.floor((Date.now() - new Date(lastBackupAt)) / 86400000) : null;
+      const needBackup = docs.length > 0 && (backupDays === null || backupDays > 14);
+      // 最近使用（前 5 筆）
+      const recent = cards.filter(c => c.lastUsedAt).sort((a, b) => b.lastUsedAt.localeCompare(a.lastUsedAt)).slice(0, 5);
+
       app.innerHTML = `
         <div class="container">
           <div class="mb-6">
@@ -705,8 +727,11 @@
             <button id="search-clear" class="search-clear hidden">✕</button>
           </div>
           ${pending > 0 ? `<div class="alert alert-warning">⚠️ 有 <strong>${pending}</strong> 個癌別待維護</div>` : ''}
+          ${staleCount > 0 ? `<div class="alert alert-warning" style="cursor:pointer" onclick="navigate('/pdf-library')">⏰ 有 <strong>${staleCount}</strong> 份指引超過 6 個月未確認版本，點此前往文件庫</div>` : ''}
+          ${needBackup ? `<div class="alert alert-info" style="cursor:pointer" onclick="navigate('/settings')">💾 ${backupDays === null ? '尚未匯出過備份' : '已 ' + backupDays + ' 天未備份'}，點此前往設定頁備份</div>` : ''}
           <div id="search-results" class="hidden"></div>
           <div id="home-content">
+            ${recent.length ? `<div class="category-title">🕐 最近使用</div>${recent.map(c => renderCancerCardItem(c)).join('')}<div style="height:12px"></div>` : ''}
             <div class="quick-links">
               <div class="quick-link" onclick="navigate('/pdf-library')">
                 <span class="quick-link-icon">📄</span>
@@ -810,6 +835,8 @@
 
       const checklists = (await dbGetAll('checklists')).filter(c => c.cancerId === card.id);
       const nhiNotes = (await dbGetAll('nhiNotes')).filter(n => n.cancerId === card.id);
+      const precisionFields = (await dbGetAll('precisionFields')).filter(p => p.cancerId === card.id);
+      const jumpDoc = currentDocs.find(d => d.storageKey);
 
       // Update last used
       await dbPut('cancerCards', { ...card, lastUsedAt: new Date().toISOString() });
@@ -868,16 +895,50 @@
           <!-- Must Read Sections -->
           <div class="card section">
             <h2 class="section-title">📖 必查章節</h2>
-            ${card.mustReadSections.length ? `<ul class="space-y-2">${card.mustReadSections.map(s => `<li class="list-item"><span class="list-dot">•</span><span class="text-sm text-gray-700">${esc(s)}</span></li>`).join('')}</ul>` :
+            ${card.mustReadSections.length ? `<ul class="space-y-2">${card.mustReadSections.map(s => {
+              const ps = parseSection(s);
+              const jump = ps.page && jumpDoc ? `<button class="text-sm" style="margin-left:auto;color:var(--primary-600);font-weight:500;white-space:nowrap" onclick="openPdf('${jumpDoc.storageKey}', ${ps.page})">p.${ps.page} →</button>` :
+                ps.page ? `<span class="text-xs text-gray-400" style="margin-left:auto">p.${ps.page}</span>` : '';
+              return `<li class="list-item"><span class="list-dot">•</span><span class="text-sm text-gray-700">${esc(ps.name)}</span>${jump}</li>`;
+            }).join('')}</ul>` :
               '<p class="text-sm text-gray-400">尚未設定章節清單</p>'}
           </div>
 
-          <!-- Checklist -->
+          <!-- Checklist（可勾選） -->
           <div class="card section">
-            <h2 class="section-title">✅ 不要漏</h2>
+            <div class="flex-between">
+              <h2 class="section-title">✅ 不要漏</h2>
+              ${checklists.some(c => c.checked) ? `<button class="btn btn-ghost btn-sm" style="width:auto;padding:4px 10px" onclick="window._resetChecks('${card.id}')">重設勾選</button>` : ''}
+            </div>
             ${checklists.length ? `<div class="space-y-2">${checklists.map(c => `
-              <div class="list-item"><span style="color:#f59e0b">⚠</span><div><p class="text-sm text-gray-700">${esc(c.label)}</p><p class="text-xs text-gray-400">${esc(c.category)} · ${esc(c.importance)}</p></div></div>
+              <label class="list-item" style="cursor:pointer">
+                <input type="checkbox" ${c.checked ? 'checked' : ''} style="margin-top:2px" onchange="window._toggleCheck('${c.id}', this.checked, this)">
+                <div><p class="text-sm text-gray-700" style="${c.checked ? 'text-decoration:line-through;color:var(--gray-400)' : ''}">${esc(c.label)}</p><p class="text-xs text-gray-400">${esc(c.category)} · ${esc(c.importance)}</p></div>
+              </label>
             `).join('')}</div>` : '<p class="text-sm text-gray-400">尚未建立 checklist</p>'}
+          </div>
+
+          <!-- Precision Fields（填值） -->
+          <div class="card section">
+            <h2 class="section-title">🎯 我要更精準</h2>
+            ${precisionFields.length ? `<div class="space-y-3">${precisionFields.map(f => {
+              if (f.type === 'multi_select') {
+                return `<div class="form-group"><label class="label">${esc(f.label)}${f.required ? ' *' : ''}</label>
+                  <div style="display:flex;flex-wrap:wrap;gap:6px">${f.options.map((o, i) => {
+                    const on = Array.isArray(f.value) && f.value.includes(o);
+                    return `<button type="button" class="tag ${on ? 'tag-category' : ''}" style="cursor:pointer;border:none;padding:6px 12px" onclick="window._togglePfMulti('${f.id}', ${i}, this)">${esc(o)}</button>`;
+                  }).join('')}</div></div>`;
+              }
+              if (f.type === 'text' || f.type === 'number') {
+                return `<div class="form-group"><label class="label">${esc(f.label)}${f.required ? ' *' : ''}</label><input class="input" type="${f.type === 'number' ? 'number' : 'text'}" value="${esc(f.value || '')}" placeholder="（未輸入）" onchange="window._setPfValue('${f.id}', this.value.trim())"></div>`;
+              }
+              return `<div class="form-group"><label class="label">${esc(f.label)}${f.required ? ' *' : ''}</label><select class="input" onchange="window._setPfValue('${f.id}', this.value)">
+                <option value="">（未輸入）</option>
+                ${f.options.map(o => `<option value="${esc(o)}" ${f.value === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}
+              </select></div>`;
+            }).join('')}</div>
+            <p class="text-xs text-gray-400 mt-2">選填即自動儲存；留白不影響快速參考輸出</p>` :
+            '<p class="text-sm text-gray-400">尚未設定精準化欄位，可由下方「編輯精準欄位」建立</p>'}
           </div>
 
           <!-- NHI Notes -->
@@ -922,12 +983,16 @@
       const nhiNotes = (await dbGetAll('nhiNotes')).filter(n => n.cancerId === card.id);
 
       const hasDocs = currentDocs.length > 0;
+      const jumpDoc = currentDocs.find(d => d.storageKey);
       const isEmpty = card.reviewStatus === '待維護';
+      const filledPf = precisionFields.filter(hasPfValue);
+      const unfilledPf = precisionFields.filter(f => !hasPfValue(f));
       const missingItems = [];
       if (!card.primaryGuideline) missingItems.push('尚未設定主要指引');
       if (!card.mustReadSections.length) missingItems.push('尚未設定必查章節');
       if (!checklists.length) missingItems.push('尚未建立 checklist');
       if (!precisionFields.length) missingItems.push('尚未設定精準化欄位');
+      else unfilledPf.forEach(f => missingItems.push('尚未輸入' + f.label));
 
       app.innerHTML = `
         <div class="container">
@@ -961,15 +1026,35 @@
 
           <div class="card section">
             <h2 class="section-title">📖 必查章節</h2>
-            ${card.mustReadSections.length ? `<ul class="space-y-2">${card.mustReadSections.map(s => `<li class="list-item"><span class="list-dot">•</span><span class="text-sm text-gray-700">${esc(s)}</span></li>`).join('')}</ul>` :
+            ${card.mustReadSections.length ? `<ul class="space-y-2">${card.mustReadSections.map(s => {
+              const ps = parseSection(s);
+              const jump = ps.page && jumpDoc ? `<button class="text-sm" style="margin-left:auto;color:var(--primary-600);font-weight:500;white-space:nowrap" onclick="openPdf('${jumpDoc.storageKey}', ${ps.page})">p.${ps.page} →</button>` :
+                ps.page ? `<span class="text-xs text-gray-400" style="margin-left:auto">p.${ps.page}</span>` : '';
+              return `<li class="list-item"><span class="list-dot">•</span><span class="text-sm text-gray-700">${esc(ps.name)}</span>${jump}</li>`;
+            }).join('')}</ul>` :
               '<p class="text-sm text-gray-400">尚未設定</p>'}
           </div>
 
           <div class="card section">
-            <h2 class="section-title">✅ 不要漏</h2>
-            ${checklists.length ? `<div class="space-y-2">${checklists.map(c => `<div class="list-item"><span style="color:#f59e0b">⚠</span><span class="text-sm text-gray-700">${esc(c.label)}</span></div>`).join('')}</div>` :
+            <div class="flex-between">
+              <h2 class="section-title">✅ 不要漏</h2>
+              ${checklists.some(c => c.checked) ? `<button class="btn btn-ghost btn-sm" style="width:auto;padding:4px 10px" onclick="window._resetChecks('${card.id}')">重設勾選</button>` : ''}
+            </div>
+            ${checklists.length ? `<div class="space-y-2">${checklists.map(c => `
+              <label class="list-item" style="cursor:pointer">
+                <input type="checkbox" ${c.checked ? 'checked' : ''} style="margin-top:2px" onchange="window._toggleCheck('${c.id}', this.checked, this)">
+                <p class="text-sm text-gray-700" style="${c.checked ? 'text-decoration:line-through;color:var(--gray-400)' : ''}">${esc(c.label)}</p>
+              </label>
+            `).join('')}</div>` :
               '<p class="text-sm text-gray-400">尚未建立</p>'}
           </div>
+
+          ${filledPf.length ? `
+            <div class="card section">
+              <h2 class="section-title">🎯 精準化資訊</h2>
+              <div class="space-y-1">${filledPf.map(f => `<p class="text-sm text-gray-700">${esc(f.label)}：${esc(pfValueText(f))}</p>`).join('')}</div>
+            </div>
+          ` : ''}
 
           ${nhiNotes.length ? `
             <div class="card section">
@@ -993,10 +1078,12 @@
             <ul class="space-y-2">
               ${hasDocs ? '<li class="text-sm" style="color:var(--primary-700)">✅ 已有本機指引，可直接開啟查閱</li>' : '<li class="text-sm" style="color:var(--primary-700)">• 先匯入本機 PDF 指引</li>'}
               ${card.mustReadSections.length ? '<li class="text-sm" style="color:var(--primary-700)">• 依必查章節逐項確認</li>' : ''}
-              ${precisionFields.length ? '<li class="text-sm" style="color:var(--primary-700)">• 若要更精準，補充精準化欄位資訊</li>' : ''}
+              ${unfilledPf.length ? `<li class="text-sm" style="color:var(--primary-700)">• 若要更精準，回癌別頁補充：${esc(unfilledPf.map(f => f.label).join('、'))}</li>` : ''}
               ${checklists.length ? '<li class="text-sm" style="color:var(--primary-700)">• 依不要漏 checklist 逐項確認</li>' : ''}
             </ul>
           </div>
+
+          <button class="btn btn-secondary" id="copy-quickref-btn">📋 複製為文字</button>
 
           <div class="text-xs text-gray-400 text-center mt-4 mb-8">
             <p>來源：${esc(card.primaryGuideline || '待維護')}</p>
@@ -1006,6 +1093,48 @@
           ${renderNav('')}
         </div>
       `;
+
+      // 複製為文字（依計畫書第九節輸出格式）
+      document.getElementById('copy-quickref-btn').addEventListener('click', async () => {
+        const lines = ['快速參考：' + card.zhName, ''];
+        lines.push('應查指引：');
+        lines.push('- ' + (card.primaryGuideline || '待維護'));
+        card.secondaryGuidelines.forEach(g => lines.push('- ' + g));
+        lines.push('- 本機狀態：' + (hasDocs ? currentDocs.map(d => '已匯入 ' + (d.version || d.title)).join('、') : '尚未匯入'));
+        if (card.mustReadSections.length) {
+          lines.push('', '必查章節：');
+          card.mustReadSections.forEach(s => { const ps = parseSection(s); lines.push('- ' + ps.name + (ps.page ? '（p.' + ps.page + '）' : '')); });
+        }
+        if (checklists.length) {
+          lines.push('', '不要漏：');
+          checklists.forEach(c => lines.push('- [' + (c.checked ? 'x' : ' ') + '] ' + c.label));
+        }
+        if (filledPf.length) {
+          lines.push('', '精準化資訊：');
+          filledPf.forEach(f => lines.push('- ' + f.label + '：' + pfValueText(f)));
+        }
+        if (nhiNotes.length) {
+          lines.push('', '健保提醒：');
+          nhiNotes.forEach(n => lines.push('- ' + n.label + '：' + n.content));
+        }
+        if (missingItems.length) {
+          lines.push('', '目前資訊不足：');
+          missingItems.forEach(m => lines.push('- ' + m));
+        }
+        lines.push('', '來源：' + (card.primaryGuideline || '待維護') + '｜更新日期：' + card.updatedAt);
+        lines.push('此為快速參考，非最終治療建議');
+        const text = lines.join('\n');
+        try {
+          await navigator.clipboard.writeText(text);
+          showToast('已複製到剪貼簿');
+        } catch {
+          // 剪貼簿 API 不可用時的備援
+          const ta = document.createElement('textarea');
+          ta.value = text; document.body.appendChild(ta); ta.select();
+          document.execCommand('copy'); ta.remove();
+          showToast('已複製到剪貼簿');
+        }
+      });
     }
 
     async function renderEditCancer(app) {
@@ -1049,7 +1178,7 @@
               <button type="button" class="tag tag-category" style="cursor:pointer;border:none" data-section-all="1">＋ 全部加入</button>
             </div>
             <textarea class="input" id="edit-sections" rows="6" placeholder="初始評估&#10;分期與可切除性&#10;生物標記">${esc(card.mustReadSections.join('\n'))}</textarea>
-            <p class="text-xs text-gray-400 mt-1">點上方常用章節快速加入，也可自行輸入或修改</p>
+            <p class="text-xs text-gray-400 mt-1">點上方常用章節快速加入，也可自行輸入或修改。章節可加頁碼「章節名稱|頁碼」（例：初始評估|12），查閱時可一鍵跳頁</p>
           </div>
 
           <div class="card mb-4">
@@ -1520,7 +1649,8 @@
                     ${doc.current ? '<span class="status status-maintained">目前版本</span>' : ''}
                     ${doc.archived ? '<span class="status status-pending">已封存</span>' : ''}
                   </div>
-                  <p class="text-xs text-gray-500 mt-1">${esc(doc.source)} · ${esc(doc.version)}</p>
+                  <p class="text-xs text-gray-500 mt-1">${esc(doc.source)} · ${esc(doc.version)}${doc.verifiedAt ? ` · 已確認 ${esc(doc.verifiedAt)}` : ''}</p>
+                  ${isStaleDoc(doc) ? `<p class="text-xs mt-1" style="color:var(--amber-700)">⏰ 超過 6 個月未確認版本 <button class="text-xs" style="color:var(--primary-600);font-weight:500;border:none;background:none;cursor:pointer" onclick="window._verifyDoc('${doc.id}')">確認為最新</button></p>` : ''}
                 </div>
               </div>
               ${tags ? `<div class="flex gap-1 mb-3">${tags}</div>` : ''}
@@ -1820,6 +1950,7 @@
             <h2 class="font-semibold text-gray-800 mb-3">📊 資料庫資訊</h2>
             <p class="text-sm text-gray-600">目前使用空間：${dbSize}</p>
             <p class="text-sm text-gray-600 mt-1">持久儲存：${persistStatus}</p>
+            <p class="text-sm text-gray-600 mt-1">上次備份：${(() => { const t = localStorage.getItem('lastBackupAt'); if (!t) return '<span style="color:var(--amber-700)">尚未備份過</span>'; const d = Math.floor((Date.now() - new Date(t)) / 86400000); return esc(t.split('T')[0]) + (d > 14 ? `（<span style="color:var(--amber-700)">已 ${d} 天</span>）` : `（${d} 天前）`); })()}</p>
           </div>
 
           <div class="card mb-4" style="border-color:var(--red-100)">
@@ -1858,10 +1989,14 @@
         </div>
       `;
 
+      const markBackedUp = () => { localStorage.setItem('lastBackupAt', new Date().toISOString()); };
+
       document.getElementById('export-btn').addEventListener('click', async () => {
         const data = await exportBackup(false);
         downloadJSON(data, `oncology-guideline-backup-${new Date().toISOString().split('T')[0]}.json`);
+        markBackedUp();
         showToast('備份已匯出');
+        navigate('/settings');
       });
 
       document.getElementById('export-full-btn').addEventListener('click', async () => {
@@ -1869,7 +2004,9 @@
         try {
           const data = await exportBackup(true);
           downloadJSON(data, `oncology-guideline-full-backup-${new Date().toISOString().split('T')[0]}.json`);
+          markBackedUp();
           showToast('完整備份已匯出');
+          navigate('/settings');
         } catch (e) {
           showToast('匯出失敗：' + e.message);
         }
@@ -1925,20 +2062,60 @@
     // Handle back/forward and manual hash edits
     window.addEventListener('hashchange', handleRoute);
 
-    // Expose PDF function
-    window.openPdf = async (key) => {
+    // Expose PDF function（page 有值時直接跳頁）
+    window.openPdf = async (key, page) => {
       // 先在使用者手勢內同步開窗，await 之後才 window.open 會被 iOS 擋下
       const win = window.open('', '_blank');
       try {
         const blob = await getPdfBlob(key);
         if (!blob) throw new Error('找不到 PDF 檔案');
-        const url = URL.createObjectURL(blob);
+        const url = URL.createObjectURL(blob) + (page ? '#page=' + page : '');
         if (win) { win.location = url; } else { window.location.href = url; }
-        setTimeout(() => URL.revokeObjectURL(url), 60000);
+        setTimeout(() => URL.revokeObjectURL(url.split('#')[0]), 60000);
       } catch (e) {
         if (win) win.close();
         showToast(e.message);
       }
+    };
+
+    // ========== 全域小操作（勾選、精準欄位、版本確認） ==========
+    // checklist 勾選：就地更新樣式，不重新渲染整頁
+    window._toggleCheck = async (id, checked, el) => {
+      const item = await dbGet('checklists', id);
+      if (!item) return;
+      await dbPut('checklists', { ...item, checked });
+      const p = el?.closest('label')?.querySelector('p');
+      if (p) { p.style.textDecoration = checked ? 'line-through' : ''; p.style.color = checked ? 'var(--gray-400)' : ''; }
+    };
+    window._resetChecks = async (cancerId) => {
+      const items = (await dbGetAll('checklists')).filter(c => c.cancerId === cancerId && c.checked);
+      for (const it of items) await dbPut('checklists', { ...it, checked: false });
+      showToast('已重設勾選');
+      handleRoute();
+    };
+    // 精準欄位填值（單選／文字／數字）
+    window._setPfValue = async (id, value) => {
+      const f = await dbGet('precisionFields', id);
+      if (f) await dbPut('precisionFields', { ...f, value });
+    };
+    // 精準欄位多選：以選項 index 切換，避免特殊字元進到 onclick
+    window._togglePfMulti = async (id, optIdx, el) => {
+      const f = await dbGet('precisionFields', id);
+      if (!f) return;
+      const opt = f.options[optIdx];
+      const cur = Array.isArray(f.value) ? [...f.value] : [];
+      const i = cur.indexOf(opt);
+      if (i >= 0) cur.splice(i, 1); else cur.push(opt);
+      await dbPut('precisionFields', { ...f, value: cur });
+      if (el) el.classList.toggle('tag-category', i < 0);
+    };
+    // 指引版本確認為最新
+    window._verifyDoc = async (id) => {
+      const d = await dbGet('documents', id);
+      if (!d) return;
+      await dbPut('documents', { ...d, verifiedAt: new Date().toISOString().split('T')[0] });
+      showToast('已確認為最新版本');
+      handleRoute();
     };
 
     init();
