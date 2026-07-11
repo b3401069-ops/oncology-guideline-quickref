@@ -1,4 +1,4 @@
-const CACHE_NAME = 'oncology-guideline-v8';
+const CACHE_NAME = 'oncology-guideline-v9';
 const ASSETS = [
   './',
   './index.html',

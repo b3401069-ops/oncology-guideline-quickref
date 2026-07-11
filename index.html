@@ -91,6 +91,15 @@
       border-color: var(--primary-500); background: var(--primary-50); color: var(--primary-800);
       box-shadow: 0 0 0 1px var(--primary-200);
     }
+    .nhi-query-overview { padding: 10px 0; border-bottom: 1px solid var(--gray-200); }
+    .nhi-query-status { padding: 12px; border: 1px solid var(--gray-200); border-radius: 8px; margin-bottom: 12px; }
+    .nhi-query-status.is-warning { background: var(--amber-50); border-color: var(--amber-200); color: var(--amber-800); }
+    .nhi-query-status.is-unmatched { background: var(--orange-50); border-color: var(--orange-200); color: var(--orange-700); }
+    .nhi-query-status.is-matched { background: var(--green-50); border-color: var(--green-100); color: var(--green-700); }
+    .nhi-query-panel { padding: 12px; border: 1px solid var(--gray-200); border-radius: 8px; background: var(--gray-50); margin-bottom: 12px; }
+    .nhi-query-toolbar { display: flex; gap: 8px; }
+    .nhi-query-toolbar .btn { min-width: 0; }
+    @media (max-width: 360px) { .nhi-query-toolbar { flex-direction: column; } }
     .list-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px 0; }
     .list-dot { color: var(--primary-500); margin-top: 2px; }
     .quick-links { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }
@@ -690,6 +699,43 @@
       return [...groups.values()];
     };
     const nhiTreatmentSessionKey = (cancerId) => `nhi-treatment:${cancerId}`;
+    const nhiQuerySessionKey = (cancerId) => `nhi-query:${cancerId}`;
+    const readNhiQueryState = (cancerId) => {
+      try {
+        const parsed = JSON.parse(sessionStorage.getItem(nhiQuerySessionKey(cancerId)) || 'null');
+        if (parsed && typeof parsed === 'object' && parsed.values && typeof parsed.values === 'object') {
+          return { fresh: !!parsed.fresh, values: parsed.values };
+        }
+      } catch {}
+      return { fresh: false, values: {} };
+    };
+    const writeNhiQueryState = (cancerId, state) => {
+      try { sessionStorage.setItem(nhiQuerySessionKey(cancerId), JSON.stringify(state)); } catch {}
+    };
+    const clearNhiQueryState = (cancerId) => {
+      try { sessionStorage.removeItem(nhiQuerySessionKey(cancerId)); } catch {}
+    };
+    const blankPfValue = (field) => field.type === 'multi_select' ? [] : '';
+    const applyNhiQueryState = (fields, state) => fields.map((field) => {
+      if (Object.prototype.hasOwnProperty.call(state.values, field.id)) return { ...field, value: state.values[field.id] };
+      return state.fresh ? { ...field, value: blankPfValue(field) } : field;
+    });
+    const renderNhiQueryField = (field) => {
+      const options = field.options || [];
+      if (field.type === 'multi_select') {
+        const current = Array.isArray(field.value) ? field.value : [];
+        return `<fieldset class="form-group" style="border:0;padding:0;margin:0 0 16px"><legend class="label">${esc(field.label)}</legend>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">${options.map(option => `<label class="checkbox-wrap" style="padding:6px 8px"><input type="checkbox" data-nhi-query-field="${esc(field.id)}" value="${esc(option)}" ${current.includes(option) ? 'checked' : ''}> <span class="text-sm">${esc(option)}</span></label>`).join('')}</div>
+        </fieldset>`;
+      }
+      if (field.type === 'text' || field.type === 'number') {
+        return `<div class="form-group"><label class="label">${esc(field.label)}</label><input class="input" data-nhi-query-field="${esc(field.id)}" type="${field.type === 'number' ? 'number' : 'text'}" value="${esc(field.value ?? '')}" placeholder="（未輸入）"></div>`;
+      }
+      return `<div class="form-group"><label class="label">${esc(field.label)}</label><select class="input" data-nhi-query-field="${esc(field.id)}">
+        <option value="">（未輸入）</option>
+        ${options.map(option => `<option value="${esc(option)}" ${field.value === option ? 'selected' : ''}>${esc(option)}</option>`).join('')}
+      </select></div>`;
+    };
 
     // 指引過期判斷：以最後確認日（無則匯入日）起算
     const STALE_DAYS = 180;
@@ -1441,10 +1487,12 @@
       const hasDocs = currentDocs.length > 0;
       const jumpDoc = currentDocs.find(d => d.storageKey);
       const isEmpty = card.reviewStatus === '待維護';
-      const filledPf = precisionFields.filter(hasPfValue);
-      const unfilledPf = precisionFields.filter(f => !hasPfValue(f));
+      const queryState = readNhiQueryState(card.id);
+      const queryPrecisionFields = applyNhiQueryState(precisionFields, queryState);
+      const filledPf = queryPrecisionFields.filter(hasPfValue);
+      const unfilledPf = queryPrecisionFields.filter(field => !hasPfValue(field));
       // 章節與 checklist 依情境過濾；健保條件全部保留並標示符合、未知或不符合。
-      const pfMap = buildPfMap(precisionFields);
+      const pfMap = buildPfMap(queryPrecisionFields);
       const secAll = card.mustReadSections.map(parseSection).map(ps => ({ ps, st: condState(ps.cond, pfMap) }));
       const secVisible = secAll.filter(x => x.st !== 'unmet');
       const secHidden = secAll.length - secVisible.length;
@@ -1457,12 +1505,27 @@
       const selectedTreatmentKey = sessionStorage.getItem(nhiTreatmentSessionKey(card.id));
       const selectedTreatment = treatmentGroups.find(group => group.key === selectedTreatmentKey);
       if (selectedTreatmentKey && !selectedTreatment) sessionStorage.removeItem(nhiTreatmentSessionKey(card.id));
+      const selectedUnknownEntries = selectedTreatment?.entries.filter(({ st }) => st === 'unknown') || [];
+      const selectedUnmatchedEntries = selectedTreatment?.entries.filter(({ st }) => st === 'unmatched') || [];
+      const selectedMatchedEntries = selectedTreatment?.entries.filter(({ st }) => st === 'matched') || [];
+      const selectedUnknownLabels = [...new Set(selectedUnknownEntries.map(({ n }) => n.condition?.field).filter(Boolean))];
+      const selectedUnmatchedLabels = [...new Set(selectedUnmatchedEntries.map(({ n }) => n.condition?.field).filter(Boolean))];
+      const affectedNhiConditionLabels = [...new Set([...selectedUnknownLabels, ...selectedUnmatchedLabels])];
+      const affectedNhiFields = affectedNhiConditionLabels
+        .map(label => queryPrecisionFields.find(field => field.label === label))
+        .filter(Boolean);
+      const missingNhiFieldLabels = affectedNhiConditionLabels
+        .filter(label => !queryPrecisionFields.some(field => field.label === label));
+      const selectedNhiResultState = selectedUnknownEntries.length ? 'missing'
+        : selectedUnmatchedEntries.length ? 'unmatched'
+        : selectedMatchedEntries.length ? 'matched'
+        : selectedTreatment ? 'review' : '';
       const missingItems = [];
       if (!card.primaryGuideline) missingItems.push('尚未設定主要指引');
       if (!card.mustReadSections.length) missingItems.push('尚未設定必查章節');
       if (!checklists.length) missingItems.push('尚未建立 checklist');
       if (!precisionFields.length) missingItems.push('尚未設定精準化欄位');
-      else unfilledPf.forEach(f => missingItems.push('尚未輸入' + f.label));
+      else unfilledPf.filter(field => field.required).forEach(field => missingItems.push('尚未輸入' + field.label));
 
       app.innerHTML = `
         <div class="container">
@@ -1494,10 +1557,15 @@
             `}
           </div>
 
-          ${filledPf.length ? `<div class="mb-4" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
-            <span class="text-xs text-gray-400">目前情境：</span>
-            ${filledPf.flatMap(f => (Array.isArray(f.value) ? f.value : [f.value]).map(v => `<span class="tag tag-category">${esc(v)}</span>`)).join('')}
-          </div>` : ''}
+          <div class="nhi-query-overview mb-4">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+              <span class="text-xs text-gray-500 font-medium">本次查詢條件</span>
+              <button type="button" class="btn btn-ghost btn-sm" id="nhi-new-case-btn" style="width:auto;min-height:40px;padding:6px 10px">新個案／清除條件</button>
+            </div>
+            <div class="mt-2" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+              ${filledPf.length ? filledPf.flatMap(field => (Array.isArray(field.value) ? field.value : [field.value]).map(value => `<span class="tag tag-category">${esc(field.label)}：${esc(value)}</span>`)).join('') : '<span class="text-xs text-gray-400">尚未輸入條件</span>'}
+            </div>
+          </div>
 
           <div class="card section">
             <h2 class="section-title">📖 必查章節</h2>
@@ -1537,11 +1605,35 @@
               <div class="nhi-treatment-options" role="group" aria-label="藥物或療程">
                 ${treatmentGroups.map(group => `<button type="button" class="nhi-treatment-option" data-nhi-treatment-key="${esc(group.key)}" aria-pressed="${group.key === selectedTreatment?.key}">${esc(group.label)}</button>`).join('')}
               </div>
-              ${selectedTreatment ? `${renderNhiSummary(selectedTreatment.entries.map(({ n }) => n))}<div class="space-y-2">${selectedTreatment.entries.map(({ n, st }, index) => {
-                const linked = docs.find(d => d.id === n.sourceDocumentId);
-                const heading = selectedTreatment.entries.length > 1 ? `給付條件 ${index + 1}` : selectedTreatment.label;
-                return renderNhiNoteCard(n, st, linked, heading);
-              }).join('')}</div>` : '<div class="bg-gray-50 rounded p-3"><p class="text-sm text-gray-500">尚未選擇藥物／療程</p></div>'}
+              ${selectedTreatment ? `
+                ${renderNhiSummary(selectedTreatment.entries.map(({ n }) => n))}
+                ${selectedNhiResultState === 'missing' ? `<div class="nhi-query-status is-warning" aria-live="polite">
+                  <p class="font-semibold">資料不足：尚缺 ${selectedUnknownLabels.length} 項必要條件</p>
+                  <p class="text-xs mt-1">${esc(selectedUnknownLabels.join('、'))}</p>
+                  ${affectedNhiFields.length ? '<button type="button" class="btn btn-secondary btn-sm mt-3" id="nhi-query-open-btn">補填必要條件</button>' : ''}
+                </div>` : ''}
+                ${selectedNhiResultState === 'unmatched' ? `<div class="nhi-query-status is-unmatched" aria-live="polite">
+                  <p class="font-semibold">目前有條件未符合</p>
+                  <p class="text-xs mt-1">${esc(selectedUnmatchedLabels.join('、'))}</p>
+                  ${affectedNhiFields.length ? '<button type="button" class="btn btn-secondary btn-sm mt-3" id="nhi-query-open-btn">修改條件</button>' : ''}
+                </div>` : ''}
+                ${selectedNhiResultState === 'matched' ? `<div class="nhi-query-status is-matched" aria-live="polite"><p class="font-semibold">目前輸入資料符合已擷取條件</p><p class="text-xs mt-1">仍需核對完整條文、文件證明與事前審查要求。</p></div>` : ''}
+                ${selectedNhiResultState === 'review' ? `<div class="nhi-query-status" aria-live="polite"><p class="font-semibold">需逐項人工核對限制條件</p></div>` : ''}
+                ${affectedNhiFields.length ? `<div id="nhi-query-panel" class="nhi-query-panel hidden">
+                  <h3 class="font-semibold text-gray-800 mb-3">${selectedNhiResultState === 'missing' ? '補填必要條件' : '修改查詢條件'}</h3>
+                  ${affectedNhiFields.map(renderNhiQueryField).join('')}
+                  <div class="nhi-query-toolbar">
+                    <button type="button" class="btn btn-primary flex-1" id="nhi-query-submit-btn">重新比對</button>
+                    <button type="button" class="btn btn-secondary flex-1" id="nhi-query-cancel-btn">取消</button>
+                  </div>
+                </div>` : ''}
+                ${missingNhiFieldLabels.length ? `<div class="nhi-query-status is-warning"><p class="font-semibold">尚未建立對應欄位</p><p class="text-xs mt-1">${esc(missingNhiFieldLabels.join('、'))}</p><button type="button" class="btn btn-secondary btn-sm mt-3" id="nhi-query-edit-fields-btn">編輯精準欄位</button></div>` : ''}
+                <div class="space-y-2">${selectedTreatment.entries.map(({ n, st }, index) => {
+                  const linked = docs.find(d => d.id === n.sourceDocumentId);
+                  const heading = selectedTreatment.entries.length > 1 ? `給付條件 ${index + 1}` : selectedTreatment.label;
+                  return renderNhiNoteCard(n, st, linked, heading);
+                }).join('')}</div>
+              ` : '<div class="bg-gray-50 rounded p-3"><p class="text-sm text-gray-500">尚未選擇藥物／療程</p></div>'}
             ` : `<div class="bg-gray-50 rounded p-3"><p class="text-sm text-gray-500">尚未建立藥物／療程健保資料；這不代表沒有給付。</p><button class="btn btn-secondary btn-sm mt-3" onclick="navigate('/cancer/${card.id}/nhi')">新增藥物／療程</button></div>`}
           </div>
 
@@ -1581,6 +1673,41 @@
           else sessionStorage.setItem(key, treatmentKey);
           handleRoute();
         });
+      });
+
+      document.getElementById('nhi-new-case-btn')?.addEventListener('click', () => {
+        writeNhiQueryState(card.id, { fresh: true, values: {} });
+        sessionStorage.removeItem(nhiTreatmentSessionKey(card.id));
+        showToast('已清除本次查詢條件');
+        handleRoute();
+      });
+      document.getElementById('nhi-query-open-btn')?.addEventListener('click', () => {
+        const panel = document.getElementById('nhi-query-panel');
+        panel?.classList.remove('hidden');
+        panel?.querySelector('[data-nhi-query-field]')?.focus();
+        panel?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      });
+      document.getElementById('nhi-query-cancel-btn')?.addEventListener('click', () => {
+        document.getElementById('nhi-query-panel')?.classList.add('hidden');
+      });
+      document.getElementById('nhi-query-edit-fields-btn')?.addEventListener('click', () => {
+        navigate('/cancer/' + card.id + '/precision');
+      });
+      document.getElementById('nhi-query-submit-btn')?.addEventListener('click', () => {
+        const panel = document.getElementById('nhi-query-panel');
+        if (!panel) return;
+        const controls = [...panel.querySelectorAll('[data-nhi-query-field]')];
+        const currentState = readNhiQueryState(card.id);
+        const values = { ...currentState.values };
+        affectedNhiFields.forEach((field) => {
+          const fieldControls = controls.filter(control => control.dataset.nhiQueryField === field.id);
+          values[field.id] = field.type === 'multi_select'
+            ? fieldControls.filter(control => control.checked).map(control => control.value)
+            : (fieldControls[0]?.value || '').trim();
+        });
+        writeNhiQueryState(card.id, { fresh: currentState.fresh, values });
+        showToast('已更新本次查詢條件');
+        handleRoute();
       });
 
       // 複製為文字（依計畫書第九節輸出格式）
@@ -2779,7 +2906,11 @@
     // 精準欄位填值（單選／文字／數字）；改值後重繪，讓條件連動即時反映
     window._setPfValue = async (id, value) => {
       const f = await dbGet('precisionFields', id);
-      if (f) { await dbPut('precisionFields', { ...f, value }); handleRoute(); }
+      if (f) {
+        await dbPut('precisionFields', { ...f, value });
+        clearNhiQueryState(f.cancerId);
+        handleRoute();
+      }
     };
     // 精準欄位多選：以選項 index 切換，避免特殊字元進到 onclick
     window._togglePfMulti = async (id, optIdx) => {
@@ -2790,6 +2921,7 @@
       const i = cur.indexOf(opt);
       if (i >= 0) cur.splice(i, 1); else cur.push(opt);
       await dbPut('precisionFields', { ...f, value: cur });
+      clearNhiQueryState(f.cancerId);
       handleRoute();
     };
     // 指引版本確認為最新
