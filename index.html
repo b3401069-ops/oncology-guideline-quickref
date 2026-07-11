@@ -80,6 +80,17 @@
     .tag { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 6px; background: var(--gray-100); color: var(--gray-600); }
     .tag-required { background: #fee2e2; color: #991b1b; }
     .tag-category { background: var(--blue-50); color: var(--blue-700); }
+    .nhi-treatment-options { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+    .nhi-treatment-option {
+      display: inline-flex; align-items: center; justify-content: center; min-height: 44px; max-width: 100%;
+      padding: 10px 14px; border: 1px solid var(--gray-300); border-radius: 8px; background: #fff;
+      color: var(--gray-700); font-size: 14px; font-weight: 500; line-height: 1.35; text-align: left;
+      overflow-wrap: anywhere; cursor: pointer;
+    }
+    .nhi-treatment-option[aria-pressed="true"] {
+      border-color: var(--primary-500); background: var(--primary-50); color: var(--primary-800);
+      box-shadow: 0 0 0 1px var(--primary-200);
+    }
     .list-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px 0; }
     .list-dot { color: var(--primary-500); margin-top: 2px; }
     .quick-links { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }
@@ -176,6 +187,7 @@
   <!-- Toast -->
   <div id="toast" class="toast hidden"></div>
 
+  <script src="./clinical-templates.js"></script>
   <script type="module">
     // ========== Database ==========
     const DB_NAME = 'OncologyGuidelineDB';
@@ -250,6 +262,18 @@
         const req = tx.objectStore(storeName).put(data);
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
+      });
+    }
+
+    function dbPutMany(storeName, items) {
+      if (!items.length) return Promise.resolve();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(storeName, 'readwrite');
+        const store = tx.objectStore(storeName);
+        for (const item of items) store.put(item);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error('批次寫入已中止'));
       });
     }
 
@@ -353,6 +377,74 @@
       ],
     };
 
+    const NCCN_ADDITIONAL_CATEGORIES = {
+      '消化系癌症': [
+        { id: 'ampullary_adenocarcinoma', zh: '壺腹部腺癌', en: 'Ampullary Adenocarcinoma', syn: ['ampullary cancer','ampulla of Vater cancer','壺腹癌'] },
+        { id: 'appendiceal_neoplasms', zh: '闌尾腫瘤與癌症', en: 'Appendiceal Neoplasms and Cancers', syn: ['appendiceal cancer','appendix cancer','闌尾癌'] },
+        { id: 'colon_cancer', zh: '結腸癌', en: 'Colon Cancer', syn: ['colon carcinoma'] },
+        { id: 'rectal_cancer', zh: '直腸癌', en: 'Rectal Cancer', syn: ['rectal carcinoma'] },
+        { id: 'hepatobiliary_cancers', zh: '肝膽癌症', en: 'Hepatobiliary Cancers', syn: ['liver and biliary tract cancers','肝膽腫瘤'] },
+      ],
+      '胸腔癌症': [
+        { id: 'pleural_mesothelioma', zh: '胸膜間皮瘤', en: 'Mesothelioma: Pleural', syn: ['pleural mesothelioma','malignant pleural mesothelioma','MPM'] },
+      ],
+      '婦癌': [
+        { id: 'ovarian_fallopian_peritoneal_cancers', zh: '卵巢/輸卵管/原發性腹膜癌', en: 'Ovarian Cancer/Fallopian Tube Cancer/Primary Peritoneal Cancer', syn: ['ovarian fallopian tube primary peritoneal cancer'] },
+        { id: 'uterine_neoplasms', zh: '子宮腫瘤', en: 'Uterine Neoplasms', syn: ['uterine cancer','子宮癌'] },
+      ],
+      '頭頸癌': [
+        { id: 'head_neck_cancers', zh: '頭頸部癌症', en: 'Head and Neck Cancers', syn: ['head and neck cancer','頭頸癌'] },
+      ],
+      '皮膚與黑色素細胞癌': [
+        { id: 'basal_cell_skin_cancer', zh: '基底細胞皮膚癌', en: 'Basal Cell Skin Cancer', syn: ['BCC','basal cell carcinoma','基底細胞癌'] },
+        { id: 'squamous_cell_skin_cancer', zh: '皮膚鱗狀細胞癌', en: 'Squamous Cell Skin Cancer', syn: ['cutaneous squamous cell carcinoma','cSCC','SCC','皮膚鱗癌'] },
+        { id: 'cutaneous_lymphomas', zh: '皮膚淋巴瘤', en: 'Cutaneous Lymphomas', syn: ['cutaneous lymphoma','cutaneous T-cell lymphoma','CTCL','皮膚T細胞淋巴瘤'] },
+        { id: 'dfsp', zh: '隆突性皮膚纖維肉瘤', en: 'Dermatofibrosarcoma Protuberans', syn: ['DFSP'] },
+        { id: 'kaposi_sarcoma', zh: '卡波西肉瘤', en: 'Kaposi Sarcoma', syn: ['KS'] },
+        { id: 'uveal_melanoma', zh: '葡萄膜黑色素瘤', en: 'Melanoma: Uveal', syn: ['uveal melanoma','ocular melanoma','眼黑色素瘤'] },
+      ],
+      '骨與軟組織腫瘤': [
+        { id: 'bone_cancer', zh: '骨癌', en: 'Bone Cancer', syn: ['primary bone cancer','骨腫瘤'] },
+      ],
+      '中樞神經系統腫瘤': [
+        { id: 'cns_cancers', zh: '中樞神經系統癌症', en: 'Central Nervous System Cancers', syn: ['CNS cancers','central nervous system tumors','CNS腫瘤'] },
+      ],
+      '血液腫瘤': [
+        { id: 'acute_lymphoblastic_leukemia', zh: '急性淋巴性白血病', en: 'Acute Lymphoblastic Leukemia', syn: ['ALL','acute lymphocytic leukemia','急性淋巴球性白血病'] },
+        { id: 'acute_myeloid_leukemia', zh: '急性骨髓性白血病', en: 'Acute Myeloid Leukemia', syn: ['AML','acute myelogenous leukemia'] },
+        { id: 'b_cell_lymphomas', zh: 'B 細胞淋巴瘤', en: 'B-Cell Lymphomas', syn: ['B-cell lymphoma','B cell lymphoma','B細胞淋巴瘤'] },
+        { id: 'castleman_disease', zh: 'Castleman 病', en: 'Castleman Disease', syn: ['Castleman syndrome','Castleman氏病'] },
+        { id: 'chronic_myeloid_leukemia', zh: '慢性骨髓性白血病', en: 'Chronic Myeloid Leukemia', syn: ['CML','chronic myelogenous leukemia'] },
+        { id: 'hairy_cell_leukemia', zh: '毛細胞白血病', en: 'Hairy Cell Leukemia', syn: ['HCL'] },
+        { id: 'histiocytic_neoplasms', zh: '組織細胞腫瘤', en: 'Histiocytic Neoplasms', syn: ['histiocytic neoplasm','histiocytosis'] },
+        { id: 'hodgkin_lymphoma', zh: '霍奇金淋巴瘤', en: 'Hodgkin Lymphoma', syn: ['HL','霍奇金氏淋巴瘤'] },
+        { id: 'myeloid_lymphoid_eosinophilia_tk_fusions', zh: '伴嗜酸性球增多與酪胺酸激酶融合之髓系/淋巴系腫瘤', en: 'Myeloid/Lymphoid Neoplasms with Eosinophilia and Tyrosine Kinase Gene Fusions', syn: ['MLN-TK','myeloid lymphoid neoplasms with eosinophilia','tyrosine kinase gene fusions'] },
+        { id: 'systemic_al_amyloidosis', zh: '全身性輕鏈類澱粉沉積症', en: 'Systemic Light Chain Amyloidosis', syn: ['AL amyloidosis','light chain amyloidosis'] },
+        { id: 'systemic_mastocytosis', zh: '全身性肥大細胞增生症', en: 'Systemic Mastocytosis', syn: ['SM'] },
+        { id: 't_cell_lymphomas', zh: 'T 細胞淋巴瘤', en: 'T-Cell Lymphomas', syn: ['T-cell lymphoma','T cell lymphoma','PTCL','周邊T細胞淋巴瘤'] },
+        { id: 'waldenstrom_macroglobulinemia', zh: 'Waldenstrom 巨球蛋白血症/淋巴漿細胞性淋巴瘤', en: 'Waldenstrom Macroglobulinemia/Lymphoplasmacytic Lymphoma', syn: ['WM','lymphoplasmacytic lymphoma','LPL','華氏巨球蛋白血症'] },
+      ],
+      '內分泌與神經內分泌腫瘤': [
+        { id: 'neuroendocrine_adrenal_tumors', zh: '神經內分泌與副腎腫瘤', en: 'Neuroendocrine and Adrenal Tumors', syn: ['neuroendocrine adrenal tumors','NET','adrenal tumors'] },
+      ],
+      '兒童腫瘤': [
+        { id: 'neuroblastoma', zh: '神經母細胞瘤', en: 'Neuroblastoma', syn: ['神經芽細胞瘤'] },
+        { id: 'pediatric_all', zh: '兒童急性淋巴性白血病', en: 'Pediatric Acute Lymphoblastic Leukemia', syn: ['pediatric ALL','childhood ALL'] },
+        { id: 'pediatric_aggressive_b_cell_lymphomas', zh: '兒童侵襲性成熟 B 細胞淋巴瘤', en: 'Pediatric Aggressive Mature B-Cell Lymphomas', syn: ['pediatric mature B-cell lymphoma'] },
+        { id: 'pediatric_cns_cancers', zh: '兒童中樞神經系統癌症', en: 'Pediatric Central Nervous System Cancers', syn: ['pediatric CNS cancers','childhood brain tumors'] },
+        { id: 'pediatric_hodgkin_lymphoma', zh: '兒童霍奇金淋巴瘤', en: 'Pediatric Hodgkin Lymphoma', syn: ['childhood Hodgkin lymphoma'] },
+        { id: 'pediatric_soft_tissue_sarcoma', zh: '兒童軟組織肉瘤', en: 'Pediatric Soft Tissue Sarcoma', syn: ['childhood soft tissue sarcoma'] },
+        { id: 'wilms_tumor', zh: 'Wilms 腫瘤（腎母細胞瘤）', en: 'Wilms Tumor (Nephroblastoma)', syn: ['Wilms tumor','nephroblastoma','腎母細胞瘤'] },
+      ],
+      '其他': [
+        { id: 'peritoneal_mesothelioma', zh: '腹膜間皮瘤', en: 'Mesothelioma: Peritoneal', syn: ['peritoneal mesothelioma'] },
+      ],
+    };
+
+    for (const [category, cancers] of Object.entries(NCCN_ADDITIONAL_CATEGORIES)) {
+      CATEGORIES[category] = [...(CATEGORIES[category] || []), ...cancers];
+    }
+
     const ID_MAP = {
       '食道癌':'esophageal_cancer','胃癌':'gastric_cancer','小腸癌':'small_bowel_cancer',
       '大腸直腸癌':'colorectal_cancer','肛門癌':'anal_cancer','胰臟癌':'pancreatic_cancer',
@@ -381,6 +473,79 @@
     const NHI_CHAPTER_DOWNLOAD_URL = 'https://www.nhi.gov.tw/ch/np-3397-1.html';
     const NHI_SECTION9_PDF_URL = 'https://www.nhi.gov.tw/ch/dl-55685-99c675b771ab4b2789c891bc8db447ce-1.pdf';
     const NCCN_GUIDELINES_URL = 'https://www.nccn.org/guidelines/category_1';
+
+    const NCCN_GUIDELINE_DETAIL_URL = (id) => 'https://www.nccn.org/guidelines/guidelines-detail?category=1&id=' + id;
+    const NCCN_GUIDELINES = [
+      ['1410', 'Acute Lymphoblastic Leukemia', 'acute_lymphoblastic_leukemia'],
+      ['1411', 'Acute Myeloid Leukemia', 'acute_myeloid_leukemia'],
+      ['1511', 'Ampullary Adenocarcinoma', 'ampullary_adenocarcinoma'],
+      ['1414', 'Anal Carcinoma', 'anal_cancer'],
+      ['1546', 'Appendiceal Neoplasms and Cancers', 'appendiceal_neoplasms'],
+      ['1416', 'Basal Cell Skin Cancer', 'basal_cell_skin_cancer'],
+      ['1480', 'B-Cell Lymphomas', 'b_cell_lymphomas'],
+      ['1517', 'Biliary Tract Cancers', 'biliary_tract_cancer'],
+      ['1417', 'Bladder Cancer', 'bladder_cancer'],
+      ['1418', 'Bone Cancer', 'bone_cancer'],
+      ['1419', 'Breast Cancer', 'breast_cancer'],
+      ['1518', 'Castleman Disease', 'castleman_disease'],
+      ['1425', 'Central Nervous System Cancers', 'cns_cancers'],
+      ['1426', 'Cervical Cancer', 'cervical_cancer'],
+      ['1478', 'Chronic Lymphocytic Leukemia/Small Lymphocytic Lymphoma', 'cll'],
+      ['1427', 'Chronic Myeloid Leukemia', 'chronic_myeloid_leukemia'],
+      ['1428', 'Colon Cancer', 'colon_cancer'],
+      ['1549', 'Cutaneous Lymphomas', 'cutaneous_lymphomas'],
+      ['1430', 'Dermatofibrosarcoma Protuberans', 'dfsp'],
+      ['1433', 'Esophageal and Esophagogastric Junction Cancers', 'esophageal_cancer'],
+      ['1434', 'Gastric Cancer', 'gastric_cancer'],
+      ['1507', 'Gastrointestinal Stromal Tumors', 'gist'],
+      ['1489', 'Gestational Trophoblastic Neoplasia', 'gestational_trophoblastic_disease'],
+      ['1481', 'Hairy Cell Leukemia', 'hairy_cell_leukemia'],
+      ['1437', 'Head and Neck Cancers', 'head_neck_cancers'],
+      ['1438', 'Hepatobiliary Cancers', 'hepatobiliary_cancers'],
+      ['1514', 'Hepatocellular Carcinoma', 'hepatocellular_carcinoma'],
+      ['1502', 'Histiocytic Neoplasms', 'histiocytic_neoplasms'],
+      ['1439', 'Hodgkin Lymphoma', 'hodgkin_lymphoma'],
+      ['1485', 'Kaposi Sarcoma', 'kaposi_sarcoma'],
+      ['1440', 'Kidney Cancer', 'renal_cell_carcinoma'],
+      ['1492', 'Melanoma: Cutaneous', 'melanoma'],
+      ['1488', 'Melanoma: Uveal', 'uveal_melanoma'],
+      ['1444', 'Merkel Cell Carcinoma', 'merkel_cell_carcinoma'],
+      ['1513', 'Mesothelioma: Peritoneal', 'peritoneal_mesothelioma'],
+      ['1512', 'Mesothelioma: Pleural', 'pleural_mesothelioma'],
+      ['1445', 'Multiple Myeloma', 'multiple_myeloma'],
+      ['1446', 'Myelodysplastic Syndromes', 'mds'],
+      ['1505', 'Myeloid/Lymphoid Neoplasms with Eosinophilia and Tyrosine Kinase Gene Fusions', 'myeloid_lymphoid_eosinophilia_tk_fusions'],
+      ['1477', 'Myeloproliferative Neoplasms', 'mpn'],
+      ['1520', 'Neuroblastoma', 'neuroblastoma'],
+      ['1448', 'Neuroendocrine and Adrenal Tumors', 'neuroendocrine_adrenal_tumors'],
+      ['1450', 'Non-Small Cell Lung Cancer', 'nsclc'],
+      ['1451', 'Occult Primary', 'cancer_unknown_primary'],
+      ['1453', 'Ovarian Cancer/Fallopian Tube Cancer/Primary Peritoneal Cancer', 'ovarian_fallopian_peritoneal_cancers'],
+      ['1455', 'Pancreatic Adenocarcinoma', 'pancreatic_cancer'],
+      ['1496', 'Pediatric Acute Lymphoblastic Leukemia', 'pediatric_all'],
+      ['1504', 'Pediatric Aggressive Mature B-Cell Lymphomas', 'pediatric_aggressive_b_cell_lymphomas'],
+      ['1509', 'Pediatric Central Nervous System Cancers', 'pediatric_cns_cancers'],
+      ['1498', 'Pediatric Hodgkin Lymphoma', 'pediatric_hodgkin_lymphoma'],
+      ['1519', 'Pediatric Soft Tissue Sarcoma', 'pediatric_soft_tissue_sarcoma'],
+      ['1456', 'Penile Cancer', 'penile_cancer'],
+      ['1459', 'Prostate Cancer', 'prostate_cancer'],
+      ['1461', 'Rectal Cancer', 'rectal_cancer'],
+      ['1495', 'Small Bowel Adenocarcinoma', 'small_bowel_cancer'],
+      ['1462', 'Small Cell Lung Cancer', 'sclc'],
+      ['1464', 'Soft Tissue Sarcoma', 'soft_tissue_sarcoma'],
+      ['1465', 'Squamous Cell Skin Cancer', 'squamous_cell_skin_cancer'],
+      ['1467', 'Systemic Light Chain Amyloidosis', 'systemic_al_amyloidosis'],
+      ['1490', 'Systemic Mastocytosis', 'systemic_mastocytosis'],
+      ['1483', 'T-Cell Lymphomas', 't_cell_lymphomas'],
+      ['1468', 'Testicular Cancer', 'testicular_cancer'],
+      ['1469', 'Thymomas and Thymic Carcinomas', 'thymic_tumor'],
+      ['1470', 'Thyroid Carcinoma', 'thyroid_cancer'],
+      ['1473', 'Uterine Neoplasms', 'uterine_neoplasms'],
+      ['1521', 'Vaginal Cancer', 'vaginal_cancer'],
+      ['1476', 'Vulvar Cancer', 'vulvar_cancer'],
+      ['1475', 'Waldenström Macroglobulinemia/Lymphoplasmacytic Lymphoma', 'waldenstrom_macroglobulinemia'],
+      ['1500', 'Wilms Tumor (Nephroblastoma)', 'wilms_tumor'],
+    ].map(([id, title, cardId]) => ({ id, title, cardId, url: NCCN_GUIDELINE_DETAIL_URL(id) }));
 
     const SOURCE_LINKS = [
       {
@@ -414,34 +579,23 @@
       '追蹤與監測', '健保給付規定比對',
     ];
 
-    const PRESET_CHECKLIST = [
-      { label: '確認病理診斷與亞型', category: '確認', importance: '必查' },
-      { label: '完成分期影像檢查', category: '評估', importance: '必查' },
-      { label: '確認生物標記／基因檢測狀態', category: '檢測', importance: '必查' },
-      { label: '評估體能狀態（ECOG PS）', category: '評估', importance: '必查' },
-      { label: '評估器官功能（肝、腎、心）', category: '評估', importance: '必查' },
-      { label: '比對健保給付條件與事前審查需求', category: '確認', importance: '必查' },
-      { label: 'B、C 型肝炎篩檢（全身治療前）', category: '檢測', importance: '建議' },
-      { label: '生育保存諮詢（適齡病人）', category: '處置', importance: '建議' },
-      { label: '評估臨床試驗可行性', category: '評估', importance: '參考' },
-    ];
+    const CLINICAL_TEMPLATE_VERSION = window.CLINICAL_TEMPLATES.version;
+    const PRESET_CHECKLIST = window.CLINICAL_TEMPLATES.commonChecklists;
+    const checklistTemplatesForCancer = window.CLINICAL_TEMPLATES.checklistForCancer;
 
     const PRESET_NHI = [
-      { label: '比對健保給付規定', content: '提出建議前，需比對台灣健保癌藥給付規定（以最新公告版本為準）確認適應症與給付條件。' },
-      { label: '事前審查', content: '此類藥物多需事前審查，送審前確認生物標記報告、影像與病歷資料齊全。' },
-      { label: '給付線數限制', content: '確認健保給付之治療線數限制，以及先前治療紀錄是否符合。' },
-      { label: '自費討論', content: '未符合健保給付條件時，與病人討論自費或替代方案並留下紀錄。' },
+      {
+        presetName: '完整限制條件清單', coverageStatus: 'related_with_restrictions',
+        content: '核對適應症與病期\n核對治療線別與先前治療\n核對生物標記及檢驗方式\n核對合併用藥與療程限制\n核對事前審查及最新生效版本'
+      },
+      { presetName: '事前審查條件', coverageStatus: 'related_with_restrictions', content: '確認是否需事前審查\n確認生物標記報告、影像與病歷資料齊全' },
+      { presetName: '治療線別限制', coverageStatus: 'related_with_restrictions', content: '確認給付治療線別\n確認先前治療與失敗紀錄是否符合' },
+      { presetName: '尚待核對最新給付規定', coverageStatus: 'verification_needed', content: '尚未連結或核對最新版健保給付規定\n資料不足時不得推論為沒有給付' },
     ];
 
-    // 預設精準軸（一鍵加入，皆可再修改）
-    const PRESET_PRECISION = [
-      { label: '疾病狀態', type: 'single_select', options: ['新診斷','局部晚期','不可切除','復發','轉移'] },
-      { label: '分期', type: 'single_select', options: ['I','II','III','IV'] },
-      { label: 'ECOG PS', type: 'single_select', options: ['0','1','2','3','4'] },
-      { label: '治療線數', type: 'single_select', options: ['第一線','第二線','第三線以上'] },
-      { label: '生物標記', type: 'multi_select', options: ['EGFR','ALK','ROS1','KRAS','BRAF','HER2','FGFR2','IDH1','MSI-H/dMMR','TMB-High','NTRK','PD-L1 陽性','BRCA1/2'] },
-      { label: '病理亞型', type: 'text', options: [] },
-    ];
+    // 共同欄位加上癌別專屬欄位，避免把所有生物標記塞在同一個選單。
+    const PRESET_PRECISION = window.CLINICAL_TEMPLATES.commonPrecisionFields;
+    const precisionTemplatesForCancer = window.CLINICAL_TEMPLATES.precisionForCancer;
 
     // ========== 小工具 ==========
     // 必查章節可帶頁碼與適用條件：「章節名稱|12|生物標記=FGFR2」
@@ -474,6 +628,69 @@
     // 依條件狀態排序：符合 → 無條件 → 不符合
     const condRank = (st) => st === 'met' ? 0 : st === null ? 1 : 2;
 
+    const NHI_STATUS_RELATED = 'related_with_restrictions';
+    const NHI_STATUS_VERIFY = 'verification_needed';
+    const nhiCoverageStatus = (note) => note?.coverageStatus === NHI_STATUS_RELATED ? NHI_STATUS_RELATED : NHI_STATUS_VERIFY;
+    const nhiConditionState = (cond, pfMap) => {
+      if (!cond || !cond.values?.length) return 'review';
+      const current = pfMap[cond.field] || [];
+      if (!current.length) return 'unknown';
+      return cond.values.some(value => current.includes(value)) ? 'matched' : 'unmatched';
+    };
+    const nhiConditionRank = (state) => ({ matched: 0, unknown: 1, review: 2, unmatched: 3 }[state] ?? 4);
+    const nhiConditionStateText = (state, cond) => {
+      if (state === 'matched') return '目前資料可能符合已設定條件';
+      if (state === 'unknown') return `資料不足：尚未填寫 ${cond?.field || '條件欄位'}`;
+      if (state === 'unmatched') return '目前資料未符合這一條限制';
+      return '需逐項人工核對限制條件';
+    };
+    const splitNhiRestrictions = (content) => String(content || '')
+      .split(/\r?\n|[；;]/)
+      .map(item => item.trim().replace(/^[-•]\s*/, ''))
+      .filter(Boolean);
+    const renderNhiRestrictions = (content) => {
+      const restrictions = splitNhiRestrictions(content);
+      if (!restrictions.length) return '<p class="text-sm text-gray-400 mt-2">尚未列出限制條件</p>';
+      return `<ul class="text-sm text-blue-700 mt-2 space-y-1" style="padding-left:18px;list-style:disc">${restrictions.map(item => `<li>${esc(item)}</li>`).join('')}</ul>`;
+    };
+    const renderNhiStateTag = (state, cond) => {
+      const text = esc(nhiConditionStateText(state, cond));
+      if (state === 'matched') return `<span class="tag tag-category">${text}</span>`;
+      if (state === 'unknown') return `<span class="tag" style="background:var(--amber-50);color:var(--amber-800)">${text}</span>`;
+      return `<span class="tag">${text}</span>`;
+    };
+    const renderNhiSummary = (notes) => {
+      const hasRelated = notes.some(note => nhiCoverageStatus(note) === NHI_STATUS_RELATED);
+      const title = hasRelated ? '健保有相關給付，但有限制條件' : '已建立健保查核資料，尚待確認是否有相關給付';
+      const detail = hasRelated
+        ? '請逐項核對適應症、病期、治療線別、生物標記、先前治療及事前審查；這裡不代表已通過給付資格審查。'
+        : '目前資料不足，不能推論為沒有給付；請連結最新版健保規定並完成限制條件。';
+      return `<div class="alert ${hasRelated ? 'alert-info' : 'alert-warning'} mb-3"><p class="font-semibold">${title}</p><p class="text-xs mt-1">${detail}</p></div>`;
+    };
+    const renderNhiNoteCard = (note, state, linked, heading = note.label) => `
+      <div class="bg-blue-50 rounded-lg p-3" style="${state === 'matched' ? 'outline:2px solid var(--primary-400)' : ''}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">
+          <p class="text-sm font-medium text-blue-800">${esc(heading)}</p>
+          ${renderNhiStateTag(state, note.condition)}
+        </div>
+        ${renderNhiRestrictions(note.content)}
+        ${note.condition ? `<p class="text-xs text-gray-500 mt-2">對應欄位：${esc(condLabel(note.condition))}</p>` : ''}
+        ${linked?.storageKey ? `<button class="text-sm text-blue-700 mt-2" style="font-weight:500" onclick="openPdf('${linked.storageKey}')">📄 開啟給付規定 PDF</button>` : ''}
+      </div>`;
+    const normalizeNhiTreatmentName = (value) => String(value || '')
+      .normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ');
+    const groupNhiTreatments = (entries) => {
+      const groups = new Map();
+      entries.forEach((entry) => {
+        const label = String(entry.n.label || '').trim() || '未命名藥物／療程';
+        const key = normalizeNhiTreatmentName(label);
+        if (!groups.has(key)) groups.set(key, { key, label, entries: [] });
+        groups.get(key).entries.push(entry);
+      });
+      return [...groups.values()];
+    };
+    const nhiTreatmentSessionKey = (cancerId) => `nhi-treatment:${cancerId}`;
+
     // 指引過期判斷：以最後確認日（無則匯入日）起算
     const STALE_DAYS = 180;
     const docAgeDays = (d) => Math.floor((Date.now() - new Date(d.verifiedAt || d.importedAt || Date.now())) / 86400000);
@@ -484,9 +701,12 @@
 
     // ========== 適用條件選擇器（編輯表單共用） ==========
     // selFields：此癌別的單選/多選精準欄位
-    const condPickerHTML = (selFields, existing) => {
+    const condPickerHTML = (selFields, existing, mode = 'visibility') => {
       if (!selFields.length) return `<div class="form-group"><label class="label">適用條件</label><p class="text-xs text-gray-400">尚無可用精準欄位。先到「編輯精準欄位」建立單選/多選欄位，才能設定條件。</p></div>`;
-      return `<div class="form-group"><label class="label">適用條件（可不設；設了之後，只有精準欄位填到對應值時才會浮出提醒）</label>
+      const conditionHelp = mode === 'nhi'
+        ? '對應條件（可不設；用來標示可能符合、資料不足或未符合這一條，不會隱藏健保提醒）'
+        : '適用條件（可不設；符合時提醒會優先浮出）';
+      return `<div class="form-group"><label class="label">${conditionHelp}</label>
         <select class="input" id="cond-field">
           <option value="">— 無條件（一律顯示）—</option>
           ${selFields.map(f => `<option value="${esc(f.label)}" ${existing?.field === f.label ? 'selected' : ''}>${esc(f.label)}</option>`).join('')}
@@ -516,13 +736,14 @@
     };
 
     async function seedDatabase() {
-      const count = await dbGetAll('cancerCards');
-      if (count.length > 0) return;
+      const cardsById = new Map((await dbGetAll('cancerCards')).map(card => [card.id, card]));
       const today = new Date().toISOString().split('T')[0];
       for (const [category, cancers] of Object.entries(CATEGORIES)) {
         for (const c of cancers) {
+          const id = c.id || ID_MAP[c.zh];
+          if (cardsById.has(id)) continue;
           await dbPut('cancerCards', {
-            id: ID_MAP[c.zh],
+            id,
             category,
             zhName: c.zh,
             enName: c.en,
@@ -538,8 +759,105 @@
             reviewStatus: '待維護',
             updatedAt: today,
           });
+          cardsById.set(id, await dbGet('cancerCards', id));
         }
       }
+
+      for (const guideline of NCCN_GUIDELINES) {
+        const card = cardsById.get(guideline.cardId);
+        if (!card) throw new Error('NCCN card template not found: ' + guideline.cardId);
+        const currentLinks = card.nccnGuidelines || [];
+        if (currentLinks.some(item => item.id === guideline.id)) continue;
+        const updatedCard = {
+          ...card,
+          nccnGuidelines: [...currentLinks, { id: guideline.id, title: guideline.title, url: guideline.url }],
+        };
+        await dbPut('cancerCards', updatedCard);
+        cardsById.set(card.id, updatedCard);
+      }
+
+      const normalizeClinicalLabel = (value) => String(value || '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
+      const checklistByCancer = new Map();
+      const precisionByCancer = new Map();
+      for (const item of await dbGetAll('checklists')) {
+        if (!checklistByCancer.has(item.cancerId)) checklistByCancer.set(item.cancerId, []);
+        checklistByCancer.get(item.cancerId).push(item);
+      }
+      for (const item of await dbGetAll('precisionFields')) {
+        if (!precisionByCancer.has(item.cancerId)) precisionByCancer.set(item.cancerId, []);
+        precisionByCancer.get(item.cancerId).push(item);
+      }
+
+      const pendingClinicalChecklists = [];
+      const pendingClinicalPrecision = [];
+      const pendingClinicalCards = [];
+
+      for (const [cancerId, card] of cardsById) {
+        if (Number(card.clinicalTemplateVersion || 0) >= CLINICAL_TEMPLATE_VERSION) continue;
+        const offeredKeys = new Set(card.clinicalTemplateKeys || []);
+        const checklistLabels = new Set((checklistByCancer.get(cancerId) || []).map(item => normalizeClinicalLabel(item.label)));
+        const precisionLabels = new Set((precisionByCancer.get(cancerId) || []).map(item => normalizeClinicalLabel(item.label)));
+
+        for (const template of checklistTemplatesForCancer(cancerId)) {
+          const offeredKey = 'checklist:' + template.key;
+          if (offeredKeys.has(offeredKey)) continue;
+          const knownLabels = [template.label, ...(template.aliases || [])].map(normalizeClinicalLabel);
+          if (!knownLabels.some(label => checklistLabels.has(label))) {
+            pendingClinicalChecklists.push({
+              id: 'clinical-cl:' + cancerId + ':' + template.key,
+              cancerId,
+              label: template.label,
+              category: template.category,
+              importance: template.importance,
+              condition: null,
+              checked: false,
+              sourceType: '內建癌別範本',
+              sourceDocumentId: '',
+              sourceTemplateKey: template.key,
+              templateScope: template.scope,
+              updatedAt: today,
+            });
+            checklistLabels.add(normalizeClinicalLabel(template.label));
+          }
+          offeredKeys.add(offeredKey);
+        }
+
+        for (const template of precisionTemplatesForCancer(cancerId)) {
+          const offeredKey = 'precision:' + template.key;
+          if (offeredKeys.has(offeredKey)) continue;
+          const knownLabels = [template.label, ...(template.aliases || [])].map(normalizeClinicalLabel);
+          if (!knownLabels.some(label => precisionLabels.has(label))) {
+            pendingClinicalPrecision.push({
+              id: 'clinical-pf:' + cancerId + ':' + template.key,
+              cancerId,
+              label: template.label,
+              type: template.type,
+              required: false,
+              options: [...template.options],
+              sourceType: '內建癌別範本',
+              sourceTemplateKey: template.key,
+              templateScope: template.scope,
+            });
+            precisionLabels.add(normalizeClinicalLabel(template.label));
+          }
+          offeredKeys.add(offeredKey);
+        }
+
+        const updatedCard = {
+          ...card,
+          clinicalTemplateVersion: CLINICAL_TEMPLATE_VERSION,
+          clinicalTemplateKeys: [...offeredKeys],
+          clinicalTemplateSeededAt: today,
+        };
+        pendingClinicalCards.push(updatedCard);
+        cardsById.set(cancerId, updatedCard);
+      }
+
+      await Promise.all([
+        dbPutMany('checklists', pendingClinicalChecklists),
+        dbPutMany('precisionFields', pendingClinicalPrecision),
+        dbPutMany('cancerCards', pendingClinicalCards),
+      ]);
     }
 
     // ========== PDF Helpers ==========
@@ -667,7 +985,8 @@
         c.enName.toLowerCase().includes(q) ||
         c.id.toLowerCase().includes(q) ||
         c.synonyms.some(s => s.toLowerCase().includes(q)) ||
-        c.category.toLowerCase().includes(q)
+        c.category.toLowerCase().includes(q) ||
+        (c.nccnGuidelines || []).some(g => g.title.toLowerCase().includes(q))
       );
     }
 
@@ -704,22 +1023,23 @@
       let best = null, bestScore = 0;
       for (const c of cards) {
         let score = 0;
-        if (c.zhName && filename.includes(c.zhName)) score = 5;
-        for (const n of [c.enName, ...(c.synonyms || [])]) {
+        if (c.zhName && filename.includes(c.zhName)) score = 5 + Math.min(c.zhName.length, 80) / 1000;
+        for (const n of [c.enName, ...(c.synonyms || []), ...(c.nccnGuidelines || []).map(g => g.title)]) {
           if (!n) continue;
           if (/[一-鿿]/.test(n)) {
-            if (filename.includes(n)) score = Math.max(score, 5);
+            if (filename.includes(n)) score = Math.max(score, 5 + Math.min(n.length, 80) / 1000);
             continue;
           }
           const ln = n.toLowerCase();
+          const specificityBonus = Math.min(ln.length, 80) / 1000;
           if (!ln.includes(' ') && /^[a-z0-9]{2,6}$/.test(ln)) {
             // 縮寫要求整個 token 完全一致，避免 mm/hl 之類誤中
             if (tokens.has(ln)) score = Math.max(score, ln.length >= 3 ? 3 : 2);
           } else if (norm.includes(ln)) {
-            score = Math.max(score, 4);
+            score = Math.max(score, 4 + specificityBonus);
           } else {
             const words = ln.split(/\s+/).filter(w => !NAME_STOPWORDS.has(w));
-            if (words.length && words.every(w => tokens.has(w))) score = Math.max(score, 4);
+            if (words.length && words.every(w => tokens.has(w))) score = Math.max(score, 4 + specificityBonus);
           }
         }
         if (score > bestScore) { bestScore = score; best = c; }
@@ -895,6 +1215,17 @@
       clearBtn.addEventListener('click', () => { input.value = ''; input.dispatchEvent(new Event('input')); });
     }
 
+    function renderNccnGuidelineLinks(guidelines) {
+      if (!guidelines?.length) return '';
+      return `
+        <div class="border-t pt-3 mt-3">
+          <p class="text-sm font-medium text-gray-700 mb-2">NCCN \u5b98\u65b9\u5206\u985e\u6307\u5f15\uff1a</p>
+          <div class="space-y-2">
+            ${guidelines.map(g => `<a class="btn btn-ghost btn-sm" href="${esc(g.url)}" target="_blank" rel="noopener" style="justify-content:flex-start;text-align:left">${esc(g.title)} &#8599;</a>`).join('')}
+          </div>
+        </div>
+      `;
+    }
     function renderCancerCardItem(card) {
       const statusClass = card.reviewStatus === '已維護' ? 'status-maintained' :
         card.reviewStatus === '部分維護' ? 'status-partial' : 'status-pending';
@@ -952,6 +1283,7 @@
       const jumpDoc = currentDocs.find(d => d.storageKey);
       const pfMap = buildPfMap(precisionFields);
       const filledPf = precisionFields.filter(hasPfValue);
+      const nhiEntries = [...nhiNotes].map(n => ({ n, st: nhiConditionState(n.condition, pfMap) })).sort((a, b) => nhiConditionRank(a.st) - nhiConditionRank(b.st));
 
       // Update last used
       await dbPut('cancerCards', { ...card, lastUsedAt: new Date().toISOString() });
@@ -984,6 +1316,7 @@
             ${card.primaryGuideline ? `<p class="text-sm text-gray-700 mb-2">${esc(card.primaryGuideline)}</p>` :
               '<p class="text-sm text-gray-400 mb-2">尚未設定主要指引</p>'}
             ${card.secondaryGuidelines.length ? `<div class="text-sm text-gray-500"><p class="mb-1">其他指引：</p><ul>${card.secondaryGuidelines.map(g => `<li>• ${esc(g)}</li>`).join('')}</ul></div>` : ''}
+            ${renderNccnGuidelineLinks(card.nccnGuidelines)}
             <div class="border-t pt-3 mt-3">
               <p class="text-sm font-medium text-gray-700 mb-2">本機 PDF：</p>
               ${currentDocs.length === 0 ? '<p class="text-sm text-gray-400">尚未匯入</p>' :
@@ -1064,13 +1397,13 @@
             '<p class="text-sm text-gray-400">尚未設定精準化欄位，可由下方「編輯精準欄位」建立</p>'}
           </div>
 
-          <!-- NHI Notes（依情境浮出） -->
+          <!-- NHI Notes（保留所有狀態，資料不足時不推論為無給付） -->
           <div class="card section">
-            <h2 class="section-title">🏥 健保提醒</h2>
-            ${nhiNotes.length ? `<div class="space-y-2">${[...nhiNotes].map(n => ({ n, st: condState(n.condition, pfMap) })).sort((a, b) => condRank(a.st) - condRank(b.st)).map(({ n, st }) => {
+            <h2 class="section-title">🏥 健保給付</h2>
+            ${nhiNotes.length ? `${renderNhiSummary(nhiNotes)}<div class="space-y-2">${nhiEntries.map(({ n, st }) => {
               const linked = docs.find(d => d.id === n.sourceDocumentId);
-              return `<div class="bg-blue-50 rounded-lg p-3" style="${st === 'unmet' ? 'opacity:.5' : ''}${st === 'met' ? 'outline:2px solid var(--primary-400)' : ''}"><p class="text-sm font-medium text-blue-800">${esc(n.label)}${st === 'met' ? ' <span class="tag tag-category">↳ 因 ' + esc(condLabel(n.condition)) + '</span>' : st === 'unmet' ? ' <span class="tag">僅當 ' + esc(condLabel(n.condition)) + '</span>' : ''}</p><p class="text-sm text-blue-700 mt-1">${esc(n.content)}</p>${linked?.storageKey ? `<button class="text-sm text-blue-700 mt-2" style="font-weight:500" onclick="openPdf('${linked.storageKey}')">📄 開啟給付規定 PDF</button>` : ''}</div>`;
-            }).join('')}</div>` : '<p class="text-sm text-gray-400">尚未設定健保提醒</p>'}
+              return renderNhiNoteCard(n, st, linked);
+            }).join('')}</div>` : '<p class="text-sm text-gray-400">尚未建立相關健保給付資料；這不代表沒有給付。</p>'}
           </div>
 
           <!-- External Links -->
@@ -1088,7 +1421,7 @@
             <button class="btn btn-secondary" onclick="navigate('/cancer/${card.id}/edit')">✏️ 編輯此癌別</button>
             <button class="btn btn-ghost" onclick="navigate('/cancer/${card.id}/checklist')">編輯 Checklist</button>
             <button class="btn btn-ghost" onclick="navigate('/cancer/${card.id}/precision')">編輯精準欄位</button>
-            <button class="btn btn-ghost" onclick="navigate('/cancer/${card.id}/nhi')">編輯健保提醒</button>
+            <button class="btn btn-ghost" onclick="navigate('/cancer/${card.id}/nhi')">編輯藥物／療程健保</button>
           </div>
           ${renderNav('')}
         </div>
@@ -1110,7 +1443,7 @@
       const isEmpty = card.reviewStatus === '待維護';
       const filledPf = precisionFields.filter(hasPfValue);
       const unfilledPf = precisionFields.filter(f => !hasPfValue(f));
-      // 依情境過濾：符合條件與無條件者顯示，不符合者收起（僅計數）
+      // 章節與 checklist 依情境過濾；健保條件全部保留並標示符合、未知或不符合。
       const pfMap = buildPfMap(precisionFields);
       const secAll = card.mustReadSections.map(parseSection).map(ps => ({ ps, st: condState(ps.cond, pfMap) }));
       const secVisible = secAll.filter(x => x.st !== 'unmet');
@@ -1118,9 +1451,12 @@
       const clAll = [...checklists].map(c => ({ c, st: condState(c.condition, pfMap) }));
       const clVisible = clAll.filter(x => x.st !== 'unmet').sort((a, b) => condRank(a.st) - condRank(b.st));
       const clHidden = clAll.length - clVisible.length;
-      const nhiAll = [...nhiNotes].map(n => ({ n, st: condState(n.condition, pfMap) }));
-      const nhiVisible = nhiAll.filter(x => x.st !== 'unmet').sort((a, b) => condRank(a.st) - condRank(b.st));
-      const nhiHidden = nhiAll.length - nhiVisible.length;
+      const nhiAll = [...nhiNotes].map(n => ({ n, st: nhiConditionState(n.condition, pfMap) }));
+      const nhiVisible = nhiAll.sort((a, b) => nhiConditionRank(a.st) - nhiConditionRank(b.st));
+      const treatmentGroups = groupNhiTreatments(nhiVisible);
+      const selectedTreatmentKey = sessionStorage.getItem(nhiTreatmentSessionKey(card.id));
+      const selectedTreatment = treatmentGroups.find(group => group.key === selectedTreatmentKey);
+      if (selectedTreatmentKey && !selectedTreatment) sessionStorage.removeItem(nhiTreatmentSessionKey(card.id));
       const missingItems = [];
       if (!card.primaryGuideline) missingItems.push('尚未設定主要指引');
       if (!card.mustReadSections.length) missingItems.push('尚未設定必查章節');
@@ -1195,16 +1531,19 @@
             </div>
           ` : ''}
 
-          ${nhiNotes.length ? `
-            <div class="card section">
-              <h2 class="section-title">🏥 健保提醒</h2>
-              ${nhiVisible.length ? `<div class="space-y-2">${nhiVisible.map(({ n, st }) => {
+          <div class="card section">
+            <h2 class="section-title">💊 選擇藥物／療程查健保</h2>
+            ${treatmentGroups.length ? `
+              <div class="nhi-treatment-options" role="group" aria-label="藥物或療程">
+                ${treatmentGroups.map(group => `<button type="button" class="nhi-treatment-option" data-nhi-treatment-key="${esc(group.key)}" aria-pressed="${group.key === selectedTreatment?.key}">${esc(group.label)}</button>`).join('')}
+              </div>
+              ${selectedTreatment ? `${renderNhiSummary(selectedTreatment.entries.map(({ n }) => n))}<div class="space-y-2">${selectedTreatment.entries.map(({ n, st }, index) => {
                 const linked = docs.find(d => d.id === n.sourceDocumentId);
-                return `<div class="bg-blue-50 rounded-lg p-3" style="${st === 'met' ? 'outline:2px solid var(--primary-400)' : ''}"><p class="text-sm text-blue-800">${st === 'met' ? '↳ 因 ' + esc(condLabel(n.condition)) + '：' : ''}${esc(n.content)}</p>${linked?.storageKey ? `<button class="text-sm text-blue-700 mt-2" style="font-weight:500" onclick="openPdf('${linked.storageKey}')">📄 開啟給付規定 PDF</button>` : ''}</div>`;
-              }).join('')}${nhiHidden ? `<p class="text-xs text-gray-400 mt-1">另有 ${nhiHidden} 項情境相關健保提醒未符合目前輸入</p>` : ''}</div>` :
-              `<p class="text-sm text-gray-400">目前情境無對應健保提醒（共 ${nhiHidden} 項情境相關）</p>`}
-            </div>
-          ` : ''}
+                const heading = selectedTreatment.entries.length > 1 ? `給付條件 ${index + 1}` : selectedTreatment.label;
+                return renderNhiNoteCard(n, st, linked, heading);
+              }).join('')}</div>` : '<div class="bg-gray-50 rounded p-3"><p class="text-sm text-gray-500">尚未選擇藥物／療程</p></div>'}
+            ` : `<div class="bg-gray-50 rounded p-3"><p class="text-sm text-gray-500">尚未建立藥物／療程健保資料；這不代表沒有給付。</p><button class="btn btn-secondary btn-sm mt-3" onclick="navigate('/cancer/${card.id}/nhi')">新增藥物／療程</button></div>`}
+          </div>
 
           ${missingItems.length ? `
             <div class="card section" style="border-color:var(--orange-200);background:var(--orange-50)">
@@ -1234,6 +1573,16 @@
         </div>
       `;
 
+      app.querySelectorAll('[data-nhi-treatment-key]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const key = nhiTreatmentSessionKey(card.id);
+          const treatmentKey = button.dataset.nhiTreatmentKey;
+          if (sessionStorage.getItem(key) === treatmentKey) sessionStorage.removeItem(key);
+          else sessionStorage.setItem(key, treatmentKey);
+          handleRoute();
+        });
+      });
+
       // 複製為文字（依計畫書第九節輸出格式）
       document.getElementById('copy-quickref-btn').addEventListener('click', async () => {
         const lines = ['快速參考：' + card.zhName, ''];
@@ -1256,9 +1605,21 @@
           lines.push('', '精準化資訊：');
           filledPf.forEach(f => lines.push('- ' + f.label + '：' + pfValueText(f)));
         }
-        if (nhiVisible.length) {
-          lines.push('', '健保提醒：');
-          nhiVisible.forEach(({ n, st }) => lines.push('- ' + n.label + '：' + n.content + (st === 'met' ? '（↳ 因 ' + condLabel(n.condition) + '）' : '')));
+        lines.push('', '健保給付：');
+        if (selectedTreatment) {
+          const selectedNotes = selectedTreatment.entries.map(({ n }) => n);
+          const hasRelatedCoverage = selectedNotes.some(note => nhiCoverageStatus(note) === NHI_STATUS_RELATED);
+          lines.push('- 已選擇：' + selectedTreatment.label);
+          lines.push('- ' + (hasRelatedCoverage ? '健保有相關給付，但有限制條件' : '尚待確認是否有相關給付'));
+          selectedTreatment.entries.forEach(({ n, st }, index) => {
+            const ruleLabel = selectedTreatment.entries.length > 1 ? '給付條件 ' + (index + 1) : '給付條件';
+            lines.push('- ' + ruleLabel + ' [' + nhiConditionStateText(st, n.condition) + ']');
+            splitNhiRestrictions(n.content).forEach(item => lines.push('  • ' + item));
+          });
+        } else if (treatmentGroups.length) {
+          lines.push('- 尚未選擇藥物／療程');
+        } else {
+          lines.push('- 尚未建立藥物／療程健保資料；這不代表沒有給付');
         }
         if (missingItems.length) {
           lines.push('', '目前資訊不足：');
@@ -1373,6 +1734,7 @@
       const card = await dbGet('cancerCards', routeParams.cancerId);
       if (!card) { navigate('/'); return; }
       const items = (await dbGetAll('checklists')).filter(c => c.cancerId === card.id);
+      const templates = checklistTemplatesForCancer(card.id);
       const selFields = (await dbGetAll('precisionFields')).filter(p => p.cancerId === card.id && (p.type === 'single_select' || p.type === 'multi_select'));
 
       app.innerHTML = `
@@ -1383,8 +1745,9 @@
 
           <div class="flex gap-2 mb-4">
             <button class="btn btn-primary flex-1" id="add-checklist-btn">+ 新增項目</button>
-            <button class="btn btn-secondary flex-1" id="add-preset-checklist-btn">📋 加入常用項目</button>
+            <button class="btn btn-secondary flex-1" id="add-preset-checklist-btn">📋 加入本癌別範本</button>
           </div>
+          <p class="text-xs text-gray-400 mb-4">已預載共同防漏項目與本癌別專屬檢查；此按鈕可補回你主動刪除的範本，不會改動既有內容。</p>
           <div id="checklist-form" class="hidden card mb-4"></div>
           <div id="checklist-list"></div>
           ${renderNav('')}
@@ -1399,7 +1762,7 @@
             ${item ? '' : `<div class="form-group"><label class="label">常用範本（選擇後自動填入，可再修改）</label>
               <select class="input" id="cl-preset">
                 <option value="">— 自行輸入 —</option>
-                ${PRESET_CHECKLIST.map((p, i) => `<option value="${i}">${esc(p.label)}</option>`).join('')}
+                ${templates.map((p, i) => `<option value="${i}">${p.scope === 'cancer' ? '本癌別｜' : '共同｜'}${esc(p.label)}</option>`).join('')}
               </select>
             </div>`}
             <div class="form-group"><label class="label">項目名稱</label><input class="input" id="cl-label" value="${esc(item?.label || '')}" placeholder="確認生物標記狀態"></div>
@@ -1422,7 +1785,7 @@
         `;
         wireCondPicker(selFields, item?.condition);
         document.getElementById('cl-preset')?.addEventListener('change', (e) => {
-          const p = PRESET_CHECKLIST[Number(e.target.value)];
+          const p = templates[Number(e.target.value)];
           if (!p) return;
           document.getElementById('cl-label').value = p.label;
           document.getElementById('cl-cat').value = p.category;
@@ -1456,19 +1819,20 @@
 
       // 一鍵加入所有常用項目（已存在同名者跳過）
       document.getElementById('add-preset-checklist-btn').addEventListener('click', async () => {
-        const existing = new Set(items.map(i => i.label));
+        const existing = new Set(items.map(i => String(i.label || '').trim().toLocaleLowerCase()));
         const today = new Date().toISOString().split('T')[0];
         let added = 0;
-        for (const p of PRESET_CHECKLIST) {
-          if (existing.has(p.label)) continue;
+        for (const p of templates) {
+          if ([p.label, ...(p.aliases || [])].some(label => existing.has(String(label).trim().toLocaleLowerCase()))) continue;
           await dbPut('checklists', {
             id: crypto.randomUUID(), cancerId: card.id,
             label: p.label, category: p.category, importance: p.importance,
-            sourceType: '個人備註', sourceDocumentId: '', updatedAt: today,
+            condition: null, checked: false, sourceType: '內建癌別範本',
+            sourceDocumentId: '', sourceTemplateKey: p.key, templateScope: p.scope, updatedAt: today,
           });
           added++;
         }
-        showToast(added ? `已加入 ${added} 項常用項目` : '常用項目皆已存在');
+        showToast(added ? `已加入 ${added} 項本癌別範本` : '本癌別範本皆已存在');
         navigate('/cancer/' + card.id + '/checklist');
       });
 
@@ -1485,6 +1849,7 @@
                 <div class="flex gap-2 mt-1" style="flex-wrap:wrap">
                   <span class="tag">${esc(item.category)}</span>
                   <span class="tag ${impClass}">${esc(item.importance)}</span>
+                  ${item.sourceType === '內建癌別範本' ? '<span class="tag tag-category">內建範本</span>' : ''}
                   ${item.condition ? `<span class="tag tag-category">僅當 ${esc(condLabel(item.condition))}</span>` : ''}
                 </div>
               </div>
@@ -1513,6 +1878,7 @@
       const card = await dbGet('cancerCards', routeParams.cancerId);
       if (!card) { navigate('/'); return; }
       const items = (await dbGetAll('precisionFields')).filter(p => p.cancerId === card.id);
+      const templates = precisionTemplatesForCancer(card.id);
 
       app.innerHTML = `
         <div class="container">
@@ -1522,9 +1888,9 @@
 
           <div class="flex gap-2 mb-4">
             <button class="btn btn-primary flex-1" id="add-precision-btn">+ 新增欄位</button>
-            <button class="btn btn-secondary flex-1" id="add-preset-precision-btn">🎯 加入常用軸</button>
+            <button class="btn btn-secondary flex-1" id="add-preset-precision-btn">🎯 加入本癌別範本</button>
           </div>
-          <p class="text-xs text-gray-400 mb-4">精準軸（如疾病狀態、生物標記）建立後，可在 checklist／健保提醒設定「適用條件」，讓對應提醒依填入的值自動浮出。</p>
+          <p class="text-xs text-gray-400 mb-4">已預載共同欄位與本癌別專屬的分期、病理、PD-L1／基因等欄位。可自行刪改；留白不阻擋快速參考輸出。</p>
           <div id="precision-form" class="hidden card mb-4"></div>
           <div id="precision-list"></div>
           ${renderNav('')}
@@ -1539,7 +1905,7 @@
             ${item ? '' : `<div class="form-group"><label class="label">常用範本（選擇後自動填入，可再修改）</label>
               <select class="input" id="pf-preset">
                 <option value="">— 自行輸入 —</option>
-                ${PRESET_PRECISION.map((p, i) => `<option value="${i}">${esc(p.label)}</option>`).join('')}
+                ${templates.map((p, i) => `<option value="${i}">${p.scope === 'cancer' ? '本癌別｜' : '共同｜'}${esc(p.label)}</option>`).join('')}
               </select>
             </div>`}
             <div class="form-group"><label class="label">欄位名稱</label><input class="input" id="pf-label" value="${esc(item?.label || '')}" placeholder="疾病狀態"></div>
@@ -1571,7 +1937,7 @@
         toggleOpts();
 
         document.getElementById('pf-preset')?.addEventListener('change', (e) => {
-          const p = PRESET_PRECISION[Number(e.target.value)];
+          const p = templates[Number(e.target.value)];
           if (!p) return;
           document.getElementById('pf-label').value = p.label;
           typeEl.value = p.type; toggleOpts();
@@ -1604,14 +1970,14 @@
 
       // 一鍵加入常用精準軸（已存在同名者跳過）
       document.getElementById('add-preset-precision-btn').addEventListener('click', async () => {
-        const existing = new Set(items.map(i => i.label));
+        const existing = new Set(items.map(i => String(i.label || '').trim().toLocaleLowerCase()));
         let added = 0;
-        for (const p of PRESET_PRECISION) {
-          if (existing.has(p.label)) continue;
-          await dbPut('precisionFields', { id: crypto.randomUUID(), cancerId: card.id, label: p.label, type: p.type, required: false, options: [...p.options] });
+        for (const p of templates) {
+          if ([p.label, ...(p.aliases || [])].some(label => existing.has(String(label).trim().toLocaleLowerCase()))) continue;
+          await dbPut('precisionFields', { id: crypto.randomUUID(), cancerId: card.id, label: p.label, type: p.type, required: false, options: [...p.options], sourceType: '內建癌別範本', sourceTemplateKey: p.key, templateScope: p.scope });
           added++;
         }
-        showToast(added ? `已加入 ${added} 個常用精準軸` : '常用軸皆已存在');
+        showToast(added ? `已加入 ${added} 個本癌別欄位` : '本癌別欄位皆已存在');
         navigate('/cancer/' + card.id + '/precision');
       });
 
@@ -1628,6 +1994,7 @@
                 <div class="flex gap-2 mt-1">
                   <span class="tag" style="background:var(--blue-50);color:var(--blue-700)">${esc(typeLabel)}</span>
                   ${item.required ? '<span class="tag tag-required">必填</span>' : ''}
+                  ${item.sourceType === '內建癌別範本' ? '<span class="tag tag-category">內建範本</span>' : ''}
                 </div>
                 ${item.options.length ? `<p class="text-xs text-gray-400 mt-1">選項：${esc(item.options.join('、'))}</p>` : ''}
               </div>
@@ -1661,15 +2028,17 @@
       const isNhiDoc = (d) => /健保|nhi/i.test((d.source || '') + ' ' + (d.title || ''));
       const linkableDocs = [...allDocs.filter(d => isNhiDoc(d) && !d.archived), ...allDocs.filter(d => !isNhiDoc(d) && !d.archived)];
       const docMap = {}; allDocs.forEach(d => docMap[d.id] = d);
-      const selFields = (await dbGetAll('precisionFields')).filter(p => p.cancerId === card.id && (p.type === 'single_select' || p.type === 'multi_select'));
+      const precisionFields = (await dbGetAll('precisionFields')).filter(p => p.cancerId === card.id);
+      const pfMap = buildPfMap(precisionFields);
+      const selFields = precisionFields.filter(p => p.type === 'single_select' || p.type === 'multi_select');
 
       app.innerHTML = `
         <div class="container">
           <button class="back-btn" onclick="navigate('/cancer/${card.id}')">← 返回</button>
-          <h1 class="text-2xl font-bold mb-1">健保提醒</h1>
+          <h1 class="text-2xl font-bold mb-1">藥物／療程健保資料</h1>
           <p class="text-sm text-gray-500 mb-6">${esc(card.zhName)}</p>
 
-          <button class="btn btn-primary mb-4" id="add-nhi-btn">+ 新增提醒</button>
+          <button class="btn btn-primary mb-4" id="add-nhi-btn">+ 新增藥物／療程</button>
           <div id="nhi-form" class="hidden card mb-4"></div>
           <div id="nhi-list"></div>
           ${renderNav('')}
@@ -1677,25 +2046,35 @@
       `;
 
       const renderForm = (item) => {
+        const selectedCoverageStatus = item ? nhiCoverageStatus(item) : NHI_STATUS_RELATED;
         document.getElementById('nhi-form').classList.remove('hidden');
         document.getElementById('nhi-form').innerHTML = `
-          <h2 class="font-semibold text-gray-800 mb-3">${item ? '編輯提醒' : '新增提醒'}</h2>
+          <h2 class="font-semibold text-gray-800 mb-3">${item ? '編輯藥物／療程' : '新增藥物／療程'}</h2>
           <div class="space-y-3">
             ${item ? '' : `<div class="form-group"><label class="label">常用範本（選擇後自動填入，可再修改）</label>
               <select class="input" id="nhi-preset">
                 <option value="">— 自行輸入 —</option>
-                ${PRESET_NHI.map((p, i) => `<option value="${i}">${esc(p.label)}</option>`).join('')}
+                ${PRESET_NHI.map((p, i) => `<option value="${i}">${esc(p.presetName || p.label)}</option>`).join('')}
               </select>
             </div>`}
-            <div class="form-group"><label class="label">提醒標題</label><input class="input" id="nhi-label" value="${esc(item?.label || '')}" placeholder="健保可近性提醒"></div>
-            <div class="form-group"><label class="label">提醒內容</label><textarea class="input" id="nhi-content" rows="4" placeholder="需查健保癌藥給付規定">${esc(item?.content || '')}</textarea></div>
+            <div class="form-group"><label class="label">給付資料狀態</label>
+              <select class="input" id="nhi-status">
+                <option value="related_with_restrictions" ${selectedCoverageStatus === NHI_STATUS_RELATED ? 'selected' : ''}>健保有相關給付，但有限制條件</option>
+                <option value="verification_needed" ${selectedCoverageStatus === NHI_STATUS_VERIFY ? 'selected' : ''}>尚待核對是否有相關給付</option>
+              </select>
+              <p class="text-xs text-gray-400 mt-1">沒有完整資料時選「尚待核對」，不要推論成沒有給付。</p>
+            </div>
+            <div class="form-group"><label class="label">藥物／療程名稱</label><input class="input" id="nhi-label" value="${esc(item?.label || '')}" placeholder="例如：Osimertinib 或 FOLFOX"><p class="text-xs text-gray-400 mt-1">相同名稱會在快速參考合併為同一個選項。</p></div>
+            <div class="form-group"><label class="label">限制條件（每行一項）</label><textarea class="input" id="nhi-content" rows="6" placeholder="適應症與病期&#10;治療線別與先前治療&#10;生物標記及檢驗方式&#10;事前審查需求">${esc(item?.content || '')}</textarea>
+              <p class="text-xs text-gray-400 mt-1">每行或以分號分隔一項限制，顯示時會自動條列。</p>
+            </div>
             <div class="form-group"><label class="label">連結給付規定文件（比對用，可不選）</label>
               ${linkableDocs.length ? `<select class="input" id="nhi-doc">
                 <option value="">不連結</option>
                 ${linkableDocs.map(d => `<option value="${d.id}" ${item?.sourceDocumentId === d.id ? 'selected' : ''}>${esc(d.title)}${d.version ? '（' + esc(d.version) + '）' : ''}</option>`).join('')}
               </select>` : `<p class="text-xs text-gray-400">尚未匯入健保文件。可至 PDF 文件庫匯入，來源選「健保給付規定」。</p>`}
             </div>
-            ${condPickerHTML(selFields, item?.condition)}
+            ${condPickerHTML(selFields, item?.condition, 'nhi')}
             <div class="flex gap-2">
               <button class="btn btn-primary flex-1" id="nhi-save">儲存</button>
               <button class="btn btn-secondary flex-1" id="nhi-cancel">取消</button>
@@ -1706,8 +2085,9 @@
         document.getElementById('nhi-preset')?.addEventListener('change', (e) => {
           const p = PRESET_NHI[Number(e.target.value)];
           if (!p) return;
-          document.getElementById('nhi-label').value = p.label;
+          if (p.label) document.getElementById('nhi-label').value = p.label;
           document.getElementById('nhi-content').value = p.content;
+          document.getElementById('nhi-status').value = p.coverageStatus || NHI_STATUS_VERIFY;
         });
         document.getElementById('nhi-save').addEventListener('click', async () => {
           const label = document.getElementById('nhi-label').value.trim();
@@ -1716,6 +2096,7 @@
           await dbPut('nhiNotes', {
             id: item?.id || crypto.randomUUID(),
             cancerId: card.id, label, content,
+            coverageStatus: document.getElementById('nhi-status').value,
             sourceDocumentId: document.getElementById('nhi-doc')?.value || '',
             condition: readCond(),
             updatedAt: new Date().toISOString().split('T')[0],
@@ -1732,22 +2113,29 @@
 
       const listEl = document.getElementById('nhi-list');
       if (items.length === 0) {
-        listEl.innerHTML = '<div class="card text-center" style="padding:32px"><p class="text-gray-400">尚未新增任何提醒</p></div>';
+        listEl.innerHTML = '<div class="card text-center" style="padding:32px"><p class="text-gray-400">尚未建立藥物／療程健保資料；這不代表沒有給付。</p></div>';
       } else {
-        listEl.innerHTML = items.map(item => `
-          <div class="card flex-between items-start gap-3">
-            <div class="min-w-0 flex-1">
-              <p class="font-medium text-gray-900">${esc(item.label)}</p>
-              <p class="text-sm text-gray-600 mt-1">${esc(item.content)}</p>
-              ${item.condition ? `<span class="tag tag-category mt-1" style="display:inline-block">僅當 ${esc(condLabel(item.condition))}</span>` : ''}
-              ${docMap[item.sourceDocumentId]?.storageKey ? `<button class="text-sm mt-2" style="display:block;color:var(--primary-600);font-weight:500" onclick="openPdf('${docMap[item.sourceDocumentId].storageKey}')">📄 開啟 ${esc(docMap[item.sourceDocumentId].title)}</button>` : ''}
-            </div>
-            <div class="flex gap-1">
-              <button class="btn btn-ghost btn-sm" onclick="window._editNhi('${item.id}')">編輯</button>
-              <button class="btn btn-ghost btn-sm text-red-500" onclick="window._deleteNhi('${item.id}')">刪除</button>
-            </div>
-          </div>
-        `).join('');
+        listEl.innerHTML = items.map(item => {
+          const state = nhiConditionState(item.condition, pfMap);
+          const coverageLabel = nhiCoverageStatus(item) === NHI_STATUS_RELATED
+            ? '健保有相關給付，但有限制條件'
+            : '尚待核對是否有相關給付';
+          return `
+            <div class="card flex-between items-start gap-3">
+              <div class="min-w-0 flex-1">
+                <p class="font-medium text-gray-900">${esc(item.label)}</p>
+                <p class="text-xs mt-1" style="color:var(--blue-700)">${coverageLabel}</p>
+                <div class="mt-2">${renderNhiStateTag(state, item.condition)}</div>
+                ${renderNhiRestrictions(item.content)}
+                ${item.condition ? `<p class="text-xs text-gray-500 mt-2">對應欄位：${esc(condLabel(item.condition))}</p>` : ''}
+                ${docMap[item.sourceDocumentId]?.storageKey ? `<button class="text-sm mt-2" style="display:block;color:var(--primary-600);font-weight:500" onclick="openPdf('${docMap[item.sourceDocumentId].storageKey}')">📄 開啟 ${esc(docMap[item.sourceDocumentId].title)}</button>` : ''}
+              </div>
+              <div class="flex gap-1">
+                <button class="btn btn-ghost btn-sm" onclick="window._editNhi('${item.id}')">編輯</button>
+                <button class="btn btn-ghost btn-sm text-red-500" onclick="window._deleteNhi('${item.id}')">刪除</button>
+              </div>
+            </div>`;
+        }).join('');
       }
 
       window._editNhi = async (id) => {
@@ -2419,7 +2807,7 @@
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('./sw.js').then(
-          (reg) => console.log('SW registered:', reg.scope),
+          (reg) => console.log('SW registered:', reg?.scope || 'disabled'),
           (err) => console.log('SW registration failed:', err)
         );
       });
