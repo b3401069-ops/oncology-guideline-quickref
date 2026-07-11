@@ -6,6 +6,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#1e40af" />
   <meta name="description" content="腫瘤指引快速查 - 個人本機腫瘤指引查閱與防漏工具" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="腫瘤指引" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <link rel="manifest" href="./manifest.json" />
   <link rel="apple-touch-icon" href="./icons/icon-192.png" />
   <title>腫瘤指引快速查</title>
@@ -155,6 +158,13 @@
     .filter-bar { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 16px; }
     .filter-chip { padding: 6px 12px; border-radius: 999px; font-size: 14px; white-space: nowrap; border: none; cursor: pointer; background: var(--gray-100); color: var(--gray-600); }
     .filter-chip.active { background: var(--primary-600); color: #fff; }
+    .source-card { display: block; text-decoration: none; color: inherit; }
+    .source-actions { display: grid; grid-template-columns: 1fr; gap: 8px; margin-top: 12px; }
+    .source-actions .btn { text-decoration: none; }
+    .source-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .step-list { counter-reset: step; list-style: none; }
+    .step-list li { counter-increment: step; position: relative; padding-left: 32px; margin-bottom: 12px; color: var(--gray-700); font-size: 14px; line-height: 1.5; }
+    .step-list li::before { content: counter(step); position: absolute; left: 0; top: 0; width: 22px; height: 22px; border-radius: 50%; background: var(--primary-600); color: #fff; font-size: 12px; display: inline-flex; align-items: center; justify-content: center; font-weight: 600; }
     .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 100; display: flex; align-items: flex-end; justify-content: center; }
     .modal-content { background: #fff; border-radius: 20px 20px 0 0; width: 100%; max-width: 480px; max-height: 80vh; overflow-y: auto; padding: 24px; }
     @media (min-width: 480px) { .modal-content { border-radius: 20px; margin-bottom: 20px; } }
@@ -367,6 +377,31 @@
 
     // 健保署藥品給付規定官方頁面（腫瘤科查第9節 抗癌瘤藥物）
     const NHI_DRUG_URL = 'https://www.nhi.gov.tw/ch/np-2505-1.html';
+    const NHI_FULL_DOWNLOAD_URL = 'https://www.nhi.gov.tw/ch/np-2508-1.html';
+    const NHI_CHAPTER_DOWNLOAD_URL = 'https://www.nhi.gov.tw/ch/np-3397-1.html';
+    const NHI_SECTION9_PDF_URL = 'https://www.nhi.gov.tw/ch/dl-55685-99c675b771ab4b2789c891bc8db447ce-1.pdf';
+    const NCCN_GUIDELINES_URL = 'https://www.nccn.org/guidelines/category_1';
+
+    const SOURCE_LINKS = [
+      {
+        id: 'nhi-section9', icon: '🏥', title: '健保第 9 節：抗癌瘤藥物', source: '健保署',
+        description: '腫瘤用藥給付最常用入口。可先開第 9 節 PDF，下載後回 app 匯入，來源填「健保給付規定」。',
+        version: '官方頁更新後請以分章節頁為準', primaryUrl: NHI_SECTION9_PDF_URL,
+        secondaryUrl: NHI_CHAPTER_DOWNLOAD_URL, primaryLabel: '開啟第 9 節 PDF', secondaryLabel: '看分章節清單'
+      },
+      {
+        id: 'nhi-full', icon: '📘', title: '健保藥品給付規定：整份帶走', source: '健保署',
+        description: '需要全章節檢索或備份時使用。檔案較大，匯入 app 前可優先使用第 9 節。',
+        version: '完整給付規定', primaryUrl: NHI_FULL_DOWNLOAD_URL,
+        secondaryUrl: NHI_DRUG_URL, primaryLabel: '開啟整份帶走', secondaryLabel: '健保給付規定首頁'
+      },
+      {
+        id: 'nccn', icon: '🧭', title: 'NCCN Guidelines 官方入口', source: 'NCCN',
+        description: 'NCCN 通常需要在官方網站登入與逐份下載。此 app 不保存帳密、不批量抓取，避免違反授權或網站使用規則。',
+        version: '登入後下載 PDF', primaryUrl: NCCN_GUIDELINES_URL,
+        secondaryUrl: '', primaryLabel: '開啟 NCCN 指引頁', secondaryLabel: ''
+      }
+    ];
 
     // ========== 預設範本（下拉／快速加入用，皆可再手動修改） ==========
     const PRESET_SOURCES = ['NCCN', 'ESMO', 'ASCO', '健保給付規定', 'TCOG', 'AJCC', 'WHO'];
@@ -758,6 +793,8 @@
         await renderPrecision(app);
       } else if (routeParams.sub === 'nhi') {
         await renderNhi(app);
+      } else if (currentRoute === '/sources') {
+        await renderSourceHub(app);
       } else if (currentRoute === '/pdf-library' && !routeParams.docId) {
         await renderPdfLibrary(app);
       } else if (currentRoute === '/pdf-library/batch') {
@@ -807,6 +844,10 @@
               <div class="quick-link" onclick="navigate('/pdf-library')">
                 <span class="quick-link-icon">📄</span>
                 <span class="quick-link-label">PDF 文件庫</span>
+              </div>
+              <div class="quick-link" onclick="navigate('/sources')">
+                <span class="quick-link-icon">🌐</span>
+                <span class="quick-link-label">來源中心</span>
               </div>
               <div class="quick-link" onclick="navigate('/settings')">
                 <span class="quick-link-icon">⚙️</span>
@@ -879,6 +920,7 @@
       const items = [
         { path: '/', id: 'search', icon: '🔍', label: '搜尋' },
         { path: '/pdf-library', id: 'pdf', icon: '📄', label: '文件庫' },
+        { path: '/sources', id: 'sources', icon: '🌐', label: '來源' },
         { path: '/settings', id: 'settings', icon: '⚙️', label: '設定' },
       ];
       return `
@@ -1722,18 +1764,110 @@
 
     // 只封存「所有對應癌別都被新文件涵蓋」的舊版本；
     // 共用多癌別的文件若還有其他癌別依賴它，保留 current
+    function normalizeGuidelineSource(source) {
+      return (source || '').normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
+    }
+
+    function normalizeGuidelineSeries(title) {
+      return (title || '').normalize('NFKC')
+        .replace(/\.pdf$/i, ' ')
+        .replace(/\b20\d{2}\s*[._ -]*(?:v(?:ersion)?\s*)?\d+(?:\.\d+)*\b/gi, ' ')
+        .replace(/\b(?:version|ver|v)?\s*\d+(?:\.\d+)*\s*[._ -]+20\d{2}\b/gi, ' ')
+        .replace(/\b(?:version|ver|v)\s*\d+(?:\.\d+)*\b/gi, ' ')
+        .replace(/\b20\d{2}\b/g, ' ')
+        .replace(/[_\-.+()[\]{}]+/g, ' ')
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    function isSameGuidelineSeries(existingDoc, newDoc) {
+      const existingSource = normalizeGuidelineSource(existingDoc.source);
+      const newSource = normalizeGuidelineSource(newDoc.source);
+      if (!existingSource || existingSource !== newSource) return false;
+      const existingSeries = normalizeGuidelineSeries(existingDoc.title || existingDoc.fileName);
+      const newSeries = normalizeGuidelineSeries(newDoc.title || newDoc.fileName);
+      return !!existingSeries && existingSeries === newSeries;
+    }
+
     async function archiveSupersededDocs(newDoc) {
       const all = await dbGetAll('documents');
       for (const r of all) {
         if (r.id === newDoc.id || !r.current) continue;
-        const sharesCancer = r.cancerIds?.some(cid => newDoc.cancerIds.includes(cid));
-        const fullyCovered = r.cancerIds?.every(cid => newDoc.cancerIds.includes(cid));
-        if (sharesCancer && fullyCovered) {
+        const existingCancerIds = r.cancerIds || [];
+        const newCancerIds = newDoc.cancerIds || [];
+        const sharesCancer = existingCancerIds.some(cid => newCancerIds.includes(cid));
+        const fullyCovered = existingCancerIds.every(cid => newCancerIds.includes(cid));
+        if (sharesCancer && fullyCovered && isSameGuidelineSeries(r, newDoc)) {
           await dbPut('documents', { ...r, current: false, archived: true });
         }
       }
     }
 
+    async function renderSourceHub(app) {
+      const docs = await dbGetAll('documents');
+      const staleDocs = docs.filter(isStaleDoc);
+      const nhiDocs = docs.filter(d => /健保|nhi/i.test((d.source || '') + ' ' + (d.title || '')) && !d.archived);
+      const nccnDocs = docs.filter(d => /nccn/i.test((d.source || '') + ' ' + (d.title || '')) && !d.archived);
+
+      app.innerHTML = `
+        <div class="container">
+          <div class="mb-6">
+            <h1 class="text-2xl font-bold">來源中心</h1>
+            <p class="text-sm text-gray-500 mt-1">把官方下載入口集中在這裡；下載 PDF 後再回 app 匯入。</p>
+          </div>
+
+          ${staleDocs.length ? `<div class="alert alert-warning" style="cursor:pointer" onclick="navigate('/pdf-library')">⏰ 有 <strong>${staleDocs.length}</strong> 份文件超過 6 個月未確認版本，點此前往文件庫。</div>` : ''}
+
+          <div class="card mb-4">
+            <h2 class="font-semibold text-gray-800 mb-2">目前文件狀態</h2>
+            <div class="source-meta">
+              <span class="tag tag-category">健保文件 ${nhiDocs.length}</span>
+              <span class="tag tag-category">NCCN 文件 ${nccnDocs.length}</span>
+              <span class="tag ${staleDocs.length ? 'tag-required' : 'tag-category'}">待確認 ${staleDocs.length}</span>
+            </div>
+          </div>
+
+          ${SOURCE_LINKS.map(src => `
+            <div class="card source-card">
+              <div class="flex items-start gap-3">
+                <span class="quick-link-icon" style="font-size:28px;margin:0">${src.icon}</span>
+                <div class="min-w-0 flex-1">
+                  <p class="font-semibold text-gray-900">${esc(src.title)}</p>
+                  <p class="text-sm text-gray-600 mt-1">${esc(src.description)}</p>
+                  <div class="source-meta">
+                    <span class="tag tag-category">${esc(src.source)}</span>
+                    <span class="tag">${esc(src.version)}</span>
+                  </div>
+                </div>
+              </div>
+              <div class="source-actions">
+                <a class="btn btn-primary btn-sm" href="${esc(src.primaryUrl)}" target="_blank" rel="noopener">${esc(src.primaryLabel)} ↗</a>
+                ${src.secondaryUrl ? `<a class="btn btn-secondary btn-sm" href="${esc(src.secondaryUrl)}" target="_blank" rel="noopener">${esc(src.secondaryLabel)} ↗</a>` : ''}
+                <button class="btn btn-ghost btn-sm" onclick="navigate('/pdf-library/import')">下載後匯入 PDF</button>
+              </div>
+            </div>
+          `).join('')}
+
+          <div class="card mb-4">
+            <h2 class="font-semibold text-gray-800 mb-3">建議流程</h2>
+            <ol class="step-list">
+              <li>從上方官方入口開啟文件，確認版本日期與章節。</li>
+              <li>在手機瀏覽器下載 PDF，或在 NCCN 登入後逐份下載需要的 guideline。</li>
+              <li>回到本 app，按「下載後匯入 PDF」，來源填 NCCN 或健保給付規定，版本填官方版本或日期。</li>
+              <li>把新版設為目前版本，舊版會保留在封存區，方便追溯。</li>
+            </ol>
+          </div>
+
+          <div class="card mb-4" style="border-color:var(--amber-200);background:var(--amber-50)">
+            <h2 class="font-semibold mb-3" style="color:var(--amber-800)">NCCN 自動下載邊界</h2>
+            <p class="text-sm" style="color:var(--amber-700);line-height:1.6">可以自動做的是：提醒哪些本機 NCCN PDF 已久未確認、集中開官方頁、協助匯入與版本管理。暫時不建議在純前端 app 裡自動登入、批量抓取或代存 NCCN PDF，因為官方登入、版權與使用條款需要由使用者在 NCCN 網站完成。</p>
+          </div>
+
+          ${renderNav('sources')}
+        </div>
+      `;
+    }
     async function renderPdfLibrary(app) {
       const docs = await dbGetAll('documents');
       const cancerCards = await dbGetAll('cancerCards');
@@ -1752,13 +1886,13 @@
             </div>
           </div>
 
-          <a href="${NHI_DRUG_URL}" target="_blank" rel="noopener" class="bg-blue-50 rounded-lg p-3 mb-4" style="display:flex;align-items:center;gap:8px;text-decoration:none">
-            <span>🏥</span>
+          <div class="bg-blue-50 rounded-lg p-3 mb-4" style="display:flex;align-items:center;gap:8px;cursor:pointer" onclick="navigate('/sources')">
+            <span>🌐</span>
             <div class="min-w-0 flex-1">
-              <p class="text-sm font-medium text-blue-800">下載健保藥品給付規定 ↗</p>
-              <p class="text-xs text-blue-600">健保署官網 · 腫瘤科查「第9節 抗癌瘤藥物」完整版 PDF</p>
+              <p class="text-sm font-medium text-blue-800">不知道文件去哪下載？開啟來源中心</p>
+              <p class="text-xs text-blue-600">健保第 9 節 PDF、整份給付規定、NCCN 官方入口都集中在這裡</p>
             </div>
-          </a>
+          </div>
 
           <div class="filter-bar">
             <button class="filter-chip active" data-source="">全部</button>
@@ -1993,7 +2127,7 @@
             </div>
             <div class="form-group"><label class="label">指引名稱 *</label><input class="input" id="imp-title" value="${esc(existingDoc?.title || '')}" required placeholder="NCCN Biliary Tract Cancers"></div>
             <div class="form-group"><label class="label">來源</label><input class="input" id="imp-source" list="source-presets" value="${esc(existingDoc?.source || '')}" placeholder="NCCN、ESMO、健保給付規定">${sourceDatalist()}
-              <a href="${NHI_DRUG_URL}" target="_blank" rel="noopener" class="text-xs" style="color:var(--primary-600);text-decoration:none">🏥 到健保署下載藥品給付規定 ↗</a>
+              <button type="button" class="text-xs" style="color:var(--primary-600);text-decoration:none;border:none;background:none;padding:0;cursor:pointer" onclick="navigate('/sources')">🌐 找健保/NCCN 下載入口</button>
             </div>
             <div class="form-group"><label class="label">版本</label><input class="input" id="imp-version" value="${esc(existingDoc?.version || '')}" placeholder="2026.V2"></div>
 
@@ -2100,6 +2234,14 @@
           </div>
 
           <div class="card mb-4">
+            <h2 class="font-semibold text-gray-800 mb-3">📱 手機安裝</h2>
+            <div class="space-y-3 text-sm text-gray-600">
+              <p><strong>iPhone / iPad：</strong>用 Safari 開啟正式網址，按分享，再選「加入主畫面」。</p>
+              <p><strong>Android：</strong>用 Chrome 開啟正式網址，選「安裝應用程式」或「加入主畫面」。</p>
+              <p class="text-xs text-gray-400">需要 HTTPS 網址（例如 GitHub Pages）才能完整啟用安裝與離線快取。</p>
+            </div>
+          </div>
+          <div class="card mb-4">
             <h2 class="font-semibold text-gray-800 mb-3">📊 資料庫資訊</h2>
             <p class="text-sm text-gray-600">目前使用空間：${dbSize}</p>
             <p class="text-sm text-gray-600 mt-1">持久儲存：${persistStatus}</p>
@@ -2126,7 +2268,7 @@
             <h2 class="font-semibold mb-3" style="color:var(--amber-800)">⚠️ 使用邊界提醒</h2>
             <ul class="space-y-2 text-sm" style="color:var(--amber-700)">
               <li>• 本 App 不是院級醫療資訊系統</li>
-              <li>• 不串接病人資料、不自動下載指引</li>
+              <li>• 不串接病人資料、不代替官方登入或批量下載受授權限制的指引</li>
               <li>• 不輸出「最終治療建議」</li>
               <li>• 不上傳資料到雲端</li>
               <li>• 本 App 僅供個人查閱參考使用</li>
