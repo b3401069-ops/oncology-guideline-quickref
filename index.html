@@ -489,6 +489,30 @@
     const NCCN_GUIDELINES_URL = 'https://www.nccn.org/guidelines/category_1';
 
     const NCCN_GUIDELINE_DETAIL_URL = (id) => 'https://www.nccn.org/guidelines/guidelines-detail?category=1&id=' + id;
+    // NCCN 有些合併指引會同時涵蓋 App 內多個便於搜尋的細分類。
+    const NCCN_GUIDELINE_CARD_COVERAGE = {
+      '1416': ['non_melanoma_skin_cancer'],
+      '1444': ['non_melanoma_skin_cancer'],
+      '1465': ['non_melanoma_skin_cancer'],
+      '1480': ['lymphoma'],
+      '1549': ['lymphoma'],
+      '1439': ['lymphoma'],
+      '1483': ['lymphoma'],
+      '1417': ['renal_pelvis_ureter_cancer'],
+      '1418': ['osteosarcoma', 'ewing_sarcoma'],
+      '1425': ['brain_tumor', 'spinal_cord_tumor', 'brain_metastasis'],
+      '1428': ['colorectal_cancer'],
+      '1461': ['colorectal_cancer'],
+      '1437': ['oral_cavity_cancer', 'oropharyngeal_cancer', 'hypopharyngeal_cancer', 'laryngeal_cancer', 'nasopharyngeal_cancer', 'salivary_gland_cancer'],
+      '1438': ['biliary_tract_cancer', 'hepatocellular_carcinoma'],
+      '1517': ['hepatobiliary_cancers'],
+      '1514': ['hepatobiliary_cancers'],
+      '1448': ['neuroendocrine_tumor', 'adrenal_tumor'],
+      '1453': ['ovarian_cancer', 'fallopian_tube_cancer', 'primary_peritoneal_cancer'],
+      '1473': ['endometrial_cancer'],
+      '1512': ['mesothelioma'],
+      '1513': ['mesothelioma'],
+    };
     const NCCN_GUIDELINES = [
       ['1410', 'Acute Lymphoblastic Leukemia', 'acute_lymphoblastic_leukemia'],
       ['1411', 'Acute Myeloid Leukemia', 'acute_myeloid_leukemia'],
@@ -559,7 +583,13 @@
       ['1476', 'Vulvar Cancer', 'vulvar_cancer'],
       ['1475', 'Waldenström Macroglobulinemia/Lymphoplasmacytic Lymphoma', 'waldenstrom_macroglobulinemia'],
       ['1500', 'Wilms Tumor (Nephroblastoma)', 'wilms_tumor'],
-    ].map(([id, title, cardId]) => ({ id, title, cardId, url: NCCN_GUIDELINE_DETAIL_URL(id) }));
+    ].map(([id, title, cardId]) => ({
+      id,
+      title,
+      cardId,
+      cardIds: [...new Set([cardId, ...(NCCN_GUIDELINE_CARD_COVERAGE[id] || [])])],
+      url: NCCN_GUIDELINE_DETAIL_URL(id),
+    }));
 
     const SOURCE_LINKS = [
       {
@@ -815,17 +845,20 @@
       }
 
       for (const guideline of NCCN_GUIDELINES) {
-        const card = cardsById.get(guideline.cardId);
-        if (!card) throw new Error('NCCN card template not found: ' + guideline.cardId);
-        const currentLinks = card.nccnGuidelines || [];
-        if (currentLinks.some(item => item.id === guideline.id)) continue;
-        const updatedCard = {
-          ...card,
-          nccnGuidelines: [...currentLinks, { id: guideline.id, title: guideline.title, url: guideline.url }],
-        };
-        await dbPut('cancerCards', updatedCard);
-        cardsById.set(card.id, updatedCard);
+        for (const cardId of guideline.cardIds) {
+          const card = cardsById.get(cardId);
+          if (!card) throw new Error('NCCN card template not found: ' + cardId);
+          const currentLinks = card.nccnGuidelines || [];
+          if (currentLinks.some(item => item.id === guideline.id)) continue;
+          const updatedCard = {
+            ...card,
+            nccnGuidelines: [...currentLinks, { id: guideline.id, title: guideline.title, url: guideline.url }],
+          };
+          await dbPut('cancerCards', updatedCard);
+          cardsById.set(card.id, updatedCard);
+        }
       }
+      await syncNccnDocumentCoverage(cardsById);
 
       const normalizeClinicalLabel = (value) => String(value || '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
       const checklistByCancer = new Map();
@@ -1101,7 +1134,59 @@
       return m ? m[0] : '';
     }
 
+    function normalizeNccnTitle(value) {
+      return String(value || '')
+        .toLowerCase()
+        .replace(/\.pdf$/i, '')
+        .replace(/\bnccn\b|\bguidelines?\b|\bversion\b|\b20\d{2}\b|\bv\d+\b/g, ' ')
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim()
+        .replace(/\s+/g, ' ');
+    }
+
+    function findNccnGuideline(value) {
+      const normalized = normalizeNccnTitle(value);
+      if (!normalized) return null;
+      return NCCN_GUIDELINES
+        .map(guideline => ({ guideline, title: normalizeNccnTitle(guideline.title) }))
+        .filter(item => item.title && (` ${normalized} `).includes(` ${item.title} `))
+        .sort((a, b) => b.title.length - a.title.length)[0]?.guideline || null;
+    }
+
+    function nccnGuidelineForDocument(doc) {
+      const stored = NCCN_GUIDELINES.find(guideline => guideline.id === doc.nccnGuidelineId);
+      if (stored) return stored;
+      const text = [doc.fileName, doc.title].filter(Boolean).join(' ');
+      const matched = findNccnGuideline(text);
+      const looksNccn = /nccn/i.test([doc.source, text].filter(Boolean).join(' '));
+      if (matched && looksNccn) return matched;
+      if (!looksNccn) return null;
+      const linked = NCCN_GUIDELINES.filter(g => doc.cancerIds?.includes(g.cardId));
+      return linked.length === 1 ? linked[0] : null;
+    }
+
+    async function syncNccnDocumentCoverage(cardsById) {
+      const today = new Date().toISOString().split('T')[0];
+      for (const doc of await dbGetAll('documents')) {
+        const guideline = nccnGuidelineForDocument(doc);
+        if (!guideline) continue;
+        const cancerIds = [...new Set([...(doc.cancerIds || []), ...guideline.cardIds])];
+        if (cancerIds.length !== (doc.cancerIds || []).length || doc.nccnGuidelineId !== guideline.id) {
+          await dbPut('documents', { ...doc, cancerIds, nccnGuidelineId: guideline.id });
+        }
+        for (const cardId of guideline.cardIds) {
+          const card = cardsById.get(cardId);
+          if (!card || card.documentIds.includes(doc.id)) continue;
+          const updatedCard = { ...card, documentIds: [...card.documentIds, doc.id], updatedAt: today };
+          await dbPut('cancerCards', updatedCard);
+          cardsById.set(cardId, updatedCard);
+        }
+      }
+    }
+
     function guessCancer(filename, cards) {
+      const nccnGuideline = findNccnGuideline(filename);
+      if (nccnGuideline) return cards.find(card => card.id === nccnGuideline.cardId) || null;
       const norm = filename.toLowerCase().replace(/\.pdf$/i, '').replace(/[_\-.+()\[\]]+/g, ' ');
       const tokens = new Set(norm.split(/\s+/).filter(Boolean));
       for (const [hint, id] of Object.entries(FILENAME_HINTS)) {
@@ -1219,8 +1304,15 @@
 
     async function renderHomePage(app) {
       const cards = await dbGetAll('cancerCards');
-      const pending = cards.filter(c => c.reviewStatus === '待維護').length;
       const docs = await dbGetAll('documents');
+      const currentDocs = docs.filter(doc => doc.current && !doc.archived);
+      const coveredCardIds = new Set(currentDocs.flatMap(doc => doc.cancerIds || []));
+      const currentNccnGuidelines = currentDocs.map(nccnGuidelineForDocument).filter(Boolean);
+      const currentNccnGuidelineIds = new Set(currentNccnGuidelines.map(guideline => guideline.id));
+      const coveredNccnCardIds = new Set(currentNccnGuidelines.flatMap(guideline => guideline.cardIds));
+      const expectedNccnCardIds = new Set(NCCN_GUIDELINES.flatMap(guideline => guideline.cardIds));
+      const coveredNccnCount = [...expectedNccnCardIds].filter(id => coveredNccnCardIds.has(id)).length;
+      const missingNccnGuidelineCount = NCCN_GUIDELINES.length - currentNccnGuidelineIds.size;
       const staleCount = docs.filter(isStaleDoc).length;
       // 備份提醒：有匯入文件才提醒（代表已有實際資料）
       const lastBackupAt = localStorage.getItem('lastBackupAt');
@@ -1241,12 +1333,12 @@
               placeholder="搜尋癌別、英文名或同義詞..." />
             <button id="search-clear" class="search-clear hidden">✕</button>
           </div>
-          ${pending > 0 ? `<div class="alert alert-warning">⚠️ 有 <strong>${pending}</strong> 個癌別待維護</div>` : ''}
+          <div class="alert ${missingNccnGuidelineCount ? 'alert-warning' : 'alert-info'}">${missingNccnGuidelineCount ? '⚠️' : '✅'} NCCN 目前版本：已辨識 <strong>${currentNccnGuidelineIds.size} / ${NCCN_GUIDELINES.length}</strong> 份指引，覆蓋 <strong>${coveredNccnCount} / ${expectedNccnCardIds.size}</strong> 個對應癌別${missingNccnGuidelineCount ? `；尚有 ${missingNccnGuidelineCount} 份未辨識或未匯入` : ''}</div>
           ${staleCount > 0 ? `<div class="alert alert-warning" style="cursor:pointer" onclick="navigate('/pdf-library')">⏰ 有 <strong>${staleCount}</strong> 份指引超過 6 個月未確認版本，點此前往文件庫</div>` : ''}
           ${needBackup ? `<div class="alert alert-info" style="cursor:pointer" onclick="navigate('/settings')">💾 ${backupDays === null ? '尚未匯出過備份' : '已 ' + backupDays + ' 天未備份'}，點此前往設定頁備份</div>` : ''}
           <div id="search-results" class="hidden"></div>
           <div id="home-content">
-            ${recent.length ? `<div class="category-title">🕐 最近使用</div>${recent.map(c => renderCancerCardItem(c)).join('')}<div style="height:12px"></div>` : ''}
+            ${recent.length ? `<div class="category-title">🕐 最近使用</div>${recent.map(c => renderCancerCardItem(c, coveredCardIds, expectedNccnCardIds)).join('')}<div style="height:12px"></div>` : ''}
             <div class="quick-links">
               <div class="quick-link" onclick="navigate('/pdf-library')">
                 <span class="quick-link-icon">📄</span>
@@ -1273,7 +1365,7 @@
       const catEl = document.getElementById('category-list');
       catEl.innerHTML = Object.entries(grouped).map(([cat, items]) => `
         <div class="category-title">${esc(cat)}</div>
-        ${items.map(c => renderCancerCardItem(c)).join('')}
+        ${items.map(c => renderCancerCardItem(c, coveredCardIds, expectedNccnCardIds)).join('')}
       `).join('');
 
       // Search
@@ -1292,7 +1384,7 @@
           resultsEl.innerHTML = `
             <p class="text-sm text-gray-500 mb-3">找到 ${filtered.length} 個結果</p>
             ${filtered.length === 0 ? '<div class="card text-center" style="padding:32px"><p class="text-gray-400">找不到符合的癌別</p></div>' :
-              filtered.map(c => renderCancerCardItem(c)).join('')}
+              filtered.map(c => renderCancerCardItem(c, coveredCardIds, expectedNccnCardIds)).join('')}
           `;
         } else {
           homeEl.classList.remove('hidden');
@@ -1313,16 +1405,17 @@
         </div>
       `;
     }
-    function renderCancerCardItem(card) {
-      const statusClass = card.reviewStatus === '已維護' ? 'status-maintained' :
-        card.reviewStatus === '部分維護' ? 'status-partial' : 'status-pending';
-      const hasDocs = card.documentIds.length > 0;
+    function renderCancerCardItem(card, coveredCardIds, expectedNccnCardIds) {
+      const hasDocs = coveredCardIds.has(card.id);
+      const expectsNccn = expectedNccnCardIds.has(card.id);
+      const statusClass = hasDocs ? 'status-maintained' : 'status-pending';
+      const statusText = hasDocs ? '已有指引' : expectsNccn ? '缺 PDF' : '自訂分類';
       return `
         <div class="cancer-item" onclick="navigate('/cancer/${card.id}')">
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2 mb-1">
               <span class="cancer-name truncate">${esc(card.zhName)}</span>
-              <span class="status ${statusClass}">${esc(card.reviewStatus)}</span>
+              <span class="status ${statusClass}">${statusText}</span>
             </div>
             <p class="cancer-en truncate">${esc(card.enName)}</p>
           </div>
@@ -1387,7 +1480,7 @@
               <p class="text-sm text-gray-500">${esc(card.enName)}</p>
               ${card.synonyms.length ? `<p class="text-xs text-gray-400 mt-1">同義詞：${esc(card.synonyms.join('、'))}</p>` : ''}
             </div>
-            <span class="status ${statusClass} shrink-0">${esc(card.reviewStatus)}</span>
+            <span class="status ${statusClass} shrink-0">${esc({ '待維護': '內容待整理', '部分維護': '內容部分整理', '已維護': '內容已整理' }[card.reviewStatus] || card.reviewStatus)}</span>
           </div>
 
           ${filledPf.length ? `<div class="mb-4" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
@@ -1527,7 +1620,8 @@
 
       const hasDocs = currentDocs.length > 0;
       const jumpDoc = currentDocs.find(d => d.storageKey);
-      const isEmpty = card.reviewStatus === '待維護';
+      const effectivePrimaryGuideline = card.primaryGuideline || card.nccnGuidelines?.[0]?.title || '';
+      const isEmpty = !hasDocs && card.reviewStatus === '待維護';
       const queryState = readNhiQueryState(card.id);
       const queryPrecisionFields = applyNhiQueryState(precisionFields, queryState);
       const filledPf = queryPrecisionFields.filter(hasPfValue);
@@ -1562,7 +1656,7 @@
         : selectedMatchedEntries.length ? 'matched'
         : selectedTreatment ? 'review' : '';
       const missingItems = [];
-      if (!card.primaryGuideline) missingItems.push('尚未設定主要指引');
+      if (!effectivePrimaryGuideline) missingItems.push('尚未設定主要指引');
       if (!card.mustReadSections.length) missingItems.push('尚未設定必查章節');
       if (!checklists.length) missingItems.push('尚未建立 checklist');
       if (!precisionFields.length) missingItems.push('尚未設定精準化欄位');
@@ -1578,7 +1672,7 @@
 
           <div class="card section">
             <h2 class="section-title">📄 應查指引</h2>
-            ${card.primaryGuideline ? `<p class="text-sm text-gray-700">${esc(card.primaryGuideline)}</p>${card.secondaryGuidelines.map(g => `<p class="text-sm text-gray-500">${esc(g)}</p>`).join('')}` :
+            ${effectivePrimaryGuideline ? `<p class="text-sm text-gray-700">${esc(effectivePrimaryGuideline)}</p>${card.secondaryGuidelines.map(g => `<p class="text-sm text-gray-500">${esc(g)}</p>`).join('')}` :
               '<p class="text-sm text-gray-400">尚未設定</p>'}
           </div>
 
@@ -1698,7 +1792,7 @@
           <button class="btn btn-secondary" id="copy-quickref-btn">📋 複製為文字</button>
 
           <div class="text-xs text-gray-400 text-center mt-4 mb-8">
-            <p>來源：${esc(card.primaryGuideline || '待維護')}</p>
+            <p>來源：${esc(effectivePrimaryGuideline || '尚未設定')}</p>
             <p>更新日期：${esc(card.updatedAt)}</p>
             <p class="mt-2">此為快速參考，非最終治療建議</p>
           </div>
@@ -1755,7 +1849,7 @@
       document.getElementById('copy-quickref-btn').addEventListener('click', async () => {
         const lines = ['快速參考：' + card.zhName, ''];
         lines.push('應查指引：');
-        lines.push('- ' + (card.primaryGuideline || '待維護'));
+        lines.push('- ' + (effectivePrimaryGuideline || '尚未設定'));
         card.secondaryGuidelines.forEach(g => lines.push('- ' + g));
         lines.push('- 本機狀態：' + (hasDocs ? currentDocs.map(d => '已匯入 ' + (d.version || d.title)).join('、') : '尚未匯入'));
         if (filledPf.length) lines.push('- 目前情境：' + filledPf.map(f => pfValueText(f)).join('、'));
@@ -1825,7 +1919,7 @@
               <div class="form-group"><label class="label">中文名稱</label><input class="input" id="edit-zh" value="${esc(card.zhName)}"></div>
               <div class="form-group"><label class="label">英文名稱</label><input class="input" id="edit-en" value="${esc(card.enName)}"></div>
               <div class="form-group"><label class="label">同義詞（用「、」分隔）</label><input class="input" id="edit-syn" value="${esc(card.synonyms.join('、'))}" placeholder="cholangiocarcinoma、gallbladder cancer"></div>
-              <div class="form-group"><label class="label">審核狀態</label>
+              <div class="form-group"><label class="label">內容整理狀態（與 PDF 無關）</label>
                 <select class="input" id="edit-status">
                   <option value="待維護" ${card.reviewStatus==='待維護'?'selected':''}>待維護</option>
                   <option value="部分維護" ${card.reviewStatus==='部分維護'?'selected':''}>部分維護</option>
@@ -2567,6 +2661,7 @@
       `;
 
       const PAGE_SIZE = 10;
+      const cancerNameById = Object.fromEntries(cancerCards.map(card => [card.id, card.zhName]));
       let pending = [];
       let pageIndex = 0;
       let importing = false;
@@ -2636,7 +2731,12 @@
           const item = pending[Number(row.dataset.row)];
           if (!item || item.status === 'done') return;
           item.title = row.querySelector('.b-title').value.trim();
-          item.cancerId = row.querySelector('.b-cancer').value;
+          const selectedCancerId = row.querySelector('.b-cancer').value;
+          if (selectedCancerId !== item.cancerId) {
+            item.cancerIds = selectedCancerId ? [selectedCancerId] : [];
+            item.guidelineId = '';
+          }
+          item.cancerId = selectedCancerId;
           item.source = row.querySelector('.b-source').value.trim();
           item.version = row.querySelector('.b-version').value.trim();
         });
@@ -2662,7 +2762,7 @@
                 <option value="">（不指定，之後再編輯）</option>
                 ${cancerOptions(item.cancerId)}
               </select>
-              ${item.cancerId ? '' : '<p class="text-xs mt-1" style="color:var(--amber-700)">無法從檔名判斷，請手動選擇</p>'}
+              ${item.cancerIds?.length > 1 ? `<p class="text-xs mt-1" style="color:var(--primary-600)">此 NCCN 指引自動對應 ${item.cancerIds.length} 個分類：${esc(item.cancerIds.map(id => cancerNameById[id] || id).join('、'))}</p>` : item.cancerId ? '' : '<p class="text-xs mt-1" style="color:var(--amber-700)">無法從檔名判斷，請手動選擇</p>'}
             </div>
             <div class="form-row">
               <div class="form-group"><label class="label">來源</label><input class="input b-source" list="source-presets" value="${esc(item.source)}" ${locked ? 'disabled' : ''}></div>
@@ -2700,11 +2800,15 @@
         rejectedCount = selected.length - pdfFiles.length;
         pending = pdfFiles.map(file => {
           const base = file.name.replace(/\.pdf$/i, '');
+          const matchedGuideline = findNccnGuideline(file.name);
+          const guessedCancer = guessCancer(file.name, cancerCards);
           return {
             file,
             title: base.replace(/[_]+/g, ' ').trim(),
-            cancerId: guessCancer(file.name, cancerCards)?.id || '',
-            source: guessSource(file.name),
+            cancerId: matchedGuideline?.cardId || guessedCancer?.id || '',
+            cancerIds: matchedGuideline?.cardIds || (guessedCancer ? [guessedCancer.id] : []),
+            guidelineId: matchedGuideline?.id || '',
+            source: guessSource(file.name) || (matchedGuideline ? 'NCCN' : ''),
             version: guessVersion(base),
             status: 'queued',
             error: '',
@@ -2749,7 +2853,8 @@
               title: item.title,
               source: item.source,
               version: item.version,
-              cancerIds: item.cancerId ? [item.cancerId] : [],
+              nccnGuidelineId: item.guidelineId || '',
+              cancerIds: item.cancerIds || (item.cancerId ? [item.cancerId] : []),
               fileName: item.file.name,
               storageKey,
               pageCount: 0,
@@ -2764,13 +2869,13 @@
               try { await deletePdf(storageKey); } catch {}
               throw error;
             }
-            if (item.cancerId) {
-              const card = await dbGet('cancerCards', item.cancerId);
+            for (const cardId of docData.cancerIds) {
+              const card = await dbGet('cancerCards', cardId);
               if (card && !card.documentIds.includes(docData.id)) {
                 await dbPut('cancerCards', { ...card, documentIds: [...card.documentIds, docData.id], updatedAt: today });
               }
-              if (setAsCurrent) await archiveSupersededDocs(docData);
             }
+            if (setAsCurrent && docData.cancerIds.length) await archiveSupersededDocs(docData);
             item.status = 'done';
             successCount++;
           } catch (error) {
@@ -2834,6 +2939,7 @@
                   </label>
                 `).join('')}
               </div>
+              <p id="imp-auto-map" class="text-xs mt-2 hidden" style="color:var(--primary-600)"></p>
             </div>
 
             <label class="checkbox-wrap mb-4"><input type="checkbox" id="imp-current" ${existingDoc ? (existingDoc.current ? 'checked' : '') : 'checked'}> <span class="text-sm text-gray-700">設為目前版本</span></label>
@@ -2845,6 +2951,26 @@
           ${renderNav('pdf')}
         </div>
       `;
+
+      document.getElementById('pdf-file').addEventListener('change', (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+        const base = file.name.replace(/\.pdf$/i, '');
+        const guideline = findNccnGuideline(file.name);
+        if (!document.getElementById('imp-title').value.trim()) document.getElementById('imp-title').value = base.replace(/[_]+/g, ' ').trim();
+        if (!document.getElementById('imp-source').value.trim()) document.getElementById('imp-source').value = guessSource(file.name) || (guideline ? 'NCCN' : '');
+        if (!document.getElementById('imp-version').value.trim()) document.getElementById('imp-version').value = guessVersion(base);
+        const note = document.getElementById('imp-auto-map');
+        if (guideline) {
+          document.querySelectorAll('.cancer-cb').forEach(cb => { cb.checked = guideline.cardIds.includes(cb.value); });
+          const names = guideline.cardIds.map(id => cancerCards.find(card => card.id === id)?.zhName || id);
+          note.textContent = `已依 NCCN 合併指引自動選取 ${names.length} 個分類：${names.join('、')}`;
+          note.classList.remove('hidden');
+        } else {
+          note.textContent = '';
+          note.classList.add('hidden');
+        }
+      });
 
       document.getElementById('import-form').addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -2862,6 +2988,7 @@
         }
 
         const selectedCancers = [...document.querySelectorAll('.cancer-cb:checked')].map(cb => cb.value);
+        const selectedNccnGuideline = findNccnGuideline(file?.name || title);
         const setAsCurrent = document.getElementById('imp-current').checked;
 
         const docData = {
@@ -2869,6 +2996,7 @@
           title,
           source: document.getElementById('imp-source').value.trim(),
           version: document.getElementById('imp-version').value.trim(),
+          nccnGuidelineId: selectedNccnGuideline?.id || existingDoc?.nccnGuidelineId || '',
           cancerIds: selectedCancers,
           fileName: file?.name || existingDoc?.fileName || '',
           storageKey,
