@@ -100,6 +100,11 @@
     .nhi-query-toolbar { display: flex; gap: 8px; }
     .nhi-query-toolbar .btn { min-width: 0; }
     @media (max-width: 360px) { .nhi-query-toolbar { flex-direction: column; } }
+    .batch-summary { padding: 12px; border: 1px solid var(--blue-100); border-radius: 8px; background: var(--blue-50); margin-bottom: 12px; }
+    .batch-progress { padding: 12px; border: 1px solid var(--gray-200); border-radius: 8px; background: #fff; margin-bottom: 12px; }
+    .batch-pagination { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 12px 0 16px; }
+    .batch-pagination .btn { width: auto; min-width: 88px; }
+    .batch-file-error { color: var(--red-500); overflow-wrap: anywhere; }
     .list-item { display: flex; align-items: flex-start; gap: 8px; padding: 8px 0; }
     .list-dot { color: var(--primary-500); margin-top: 2px; }
     .quick-links { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }
@@ -907,15 +912,47 @@
     }
 
     // ========== PDF Helpers ==========
+    function pdfStorageError(error) {
+      const name = error?.name || '';
+      if (name === 'QuotaExceededError') return new Error('瀏覽器儲存空間不足');
+      return new Error('無法儲存 PDF' + (name ? `（${name}）` : ''));
+    }
+
+    async function validatePdfFile(file) {
+      if (!file?.size) throw new Error('檔案大小為 0；雲端檔案可能尚未下載到裝置');
+      let header;
+      try {
+        const bytes = new Uint8Array(await file.slice(0, 1024).arrayBuffer());
+        header = String.fromCharCode(...bytes);
+      } catch {
+        throw new Error('無法讀取雲端檔案；請先下載到裝置後再重試');
+      }
+      if (!header.includes('%PDF-')) throw new Error('檔案內容不是有效的 PDF');
+    }
+
     async function storePdf(file) {
+      await validatePdfFile(file);
       const pdfDb = await openPdfDB();
       const key = 'pdf-' + crypto.randomUUID();
-      const buf = await file.arrayBuffer();
+      const pdfBlob = file.type === 'application/pdf' ? file : new Blob([file], { type: 'application/pdf' });
       return new Promise((resolve, reject) => {
         const tx = pdfDb.transaction('pdfs', 'readwrite');
-        tx.objectStore('pdfs').put(buf, key);
-        tx.oncomplete = () => { pdfDb.close(); resolve(key); };
-        tx.onerror = () => { pdfDb.close(); reject(new Error('無法儲存 PDF')); };
+        let settled = false;
+        const finish = (callback) => {
+          if (settled) return;
+          settled = true;
+          pdfDb.close();
+          callback();
+        };
+        tx.oncomplete = () => finish(() => resolve(key));
+        const fail = () => finish(() => reject(pdfStorageError(tx.error)));
+        tx.onerror = fail;
+        tx.onabort = fail;
+        try {
+          tx.objectStore('pdfs').put(pdfBlob, key);
+        } catch (error) {
+          finish(() => reject(pdfStorageError(error)));
+        }
       });
     }
 
@@ -926,7 +963,11 @@
         const req = tx.objectStore('pdfs').get(key);
         req.onsuccess = () => {
           pdfDb.close();
-          resolve(req.result ? new Blob([req.result], { type: 'application/pdf' }) : null);
+          const stored = req.result;
+          if (stored == null) { resolve(null); return; }
+          resolve(stored instanceof Blob && stored.type === 'application/pdf'
+            ? stored
+            : new Blob([stored], { type: 'application/pdf' }));
         };
         req.onerror = () => { pdfDb.close(); reject(new Error('無法讀取 PDF')); };
       });
@@ -2515,90 +2556,201 @@
             <input type="file" id="batch-files" accept=".pdf,application/pdf" multiple class="input" style="padding:8px">
           </div>
           <label class="checkbox-wrap mb-4"><input type="checkbox" id="batch-current" checked> <span class="text-sm text-gray-700">全部設為目前版本</span></label>
+          <div id="batch-summary" class="hidden" aria-live="polite"></div>
+          <div id="batch-progress" class="batch-progress hidden" aria-live="polite"></div>
           <div id="batch-list"></div>
+          <div id="batch-pagination" class="batch-pagination hidden"></div>
           ${sourceDatalist()}
           <button class="btn btn-primary hidden mb-4" id="batch-submit"></button>
           ${renderNav('pdf')}
         </div>
       `;
 
+      const PAGE_SIZE = 10;
       let pending = [];
+      let pageIndex = 0;
+      let importing = false;
+      let storageEstimate = null;
+      let rejectedCount = 0;
       const listEl = document.getElementById('batch-list');
+      const summaryEl = document.getElementById('batch-summary');
+      const progressEl = document.getElementById('batch-progress');
+      const paginationEl = document.getElementById('batch-pagination');
       const submitBtn = document.getElementById('batch-submit');
 
-      const renderRows = () => {
-        submitBtn.classList.toggle('hidden', pending.length === 0);
-        submitBtn.textContent = '匯入全部（' + pending.length + ' 份）';
-        listEl.innerHTML = pending.map((p, i) => `
-          <div class="card" data-row="${i}">
-            <p class="text-xs text-gray-400 truncate mb-2">📄 ${esc(p.file.name)}</p>
-            <div class="form-group"><label class="label">指引名稱</label><input class="input b-title" value="${esc(p.title)}"></div>
-            <div class="form-group"><label class="label">癌別</label>
-              <select class="input b-cancer">
-                <option value="">（不指定，之後再編輯）</option>
-                ${cancerOptions(p.cancerId)}
-              </select>
-              ${p.cancerId ? '' : '<p class="text-xs mt-1" style="color:var(--amber-700)">⚠️ 無法從檔名判斷，請手動選擇</p>'}
-            </div>
-            <div class="form-row">
-              <div class="form-group"><label class="label">來源</label><input class="input b-source" list="source-presets" value="${esc(p.source)}"></div>
-              <div class="form-group"><label class="label">版本</label><input class="input b-version" value="${esc(p.version)}"></div>
-            </div>
-            <button class="btn btn-ghost btn-sm text-red-500 b-remove">移除此筆</button>
-          </div>
-        `).join('');
-        listEl.querySelectorAll('.b-remove').forEach(btn => btn.addEventListener('click', () => {
-          const idx = Number(btn.closest('[data-row]').dataset.row);
-          syncRows();
-          pending.splice(idx, 1);
-          renderRows();
-        }));
+      const formatBytes = (bytes) => {
+        if (!Number.isFinite(bytes) || bytes <= 0) return '0 MB';
+        if (bytes >= 1024 ** 3) return (bytes / 1024 ** 3).toFixed(2) + ' GB';
+        return (bytes / 1024 ** 2).toFixed(1) + ' MB';
+      };
+      const getStorageEstimate = async () => {
+        if (!navigator.storage?.estimate) return null;
+        try { return await navigator.storage.estimate(); } catch { return null; }
+      };
+      const actionableItems = () => pending.filter(item => item.status !== 'done');
+      const storageState = () => {
+        const remaining = storageEstimate?.quota != null
+          ? Math.max(0, storageEstimate.quota - (storageEstimate.usage || 0))
+          : null;
+        const required = actionableItems().reduce((sum, item) => sum + (item.file.size || 0), 0);
+        return { remaining, required, blocked: remaining != null && required > remaining * 0.95 };
+      };
+      const statusTag = (item) => {
+        if (item.status === 'done') return '<span class="status status-maintained">已完成</span>';
+        if (item.status === 'error') return '<span class="tag tag-required">失敗</span>';
+        if (item.status === 'importing') return '<span class="tag tag-category">匯入中</span>';
+        return '<span class="tag">待匯入</span>';
+      };
+
+      const renderSummary = () => {
+        if (!pending.length) {
+          summaryEl.classList.add('hidden');
+          submitBtn.classList.add('hidden');
+          return false;
+        }
+        const doneCount = pending.filter(item => item.status === 'done').length;
+        const errorCount = pending.filter(item => item.status === 'error').length;
+        const waitingCount = pending.length - doneCount - errorCount;
+        const totalBytes = pending.reduce((sum, item) => sum + (item.file.size || 0), 0);
+        const storage = storageState();
+        summaryEl.classList.remove('hidden');
+        summaryEl.innerHTML = `<div class="batch-summary">
+          <p class="font-semibold text-blue-800">已選 ${pending.length} 份 PDF · ${formatBytes(totalBytes)}</p>
+          <p class="text-xs text-blue-700 mt-1">已完成 ${doneCount} · 待處理 ${waitingCount} · 失敗 ${errorCount}${rejectedCount ? ` · 非 PDF ${rejectedCount}` : ''}</p>
+          ${storage.remaining != null ? `<p class="text-xs text-blue-700 mt-1">瀏覽器估計可用空間：${formatBytes(storage.remaining)}</p>` : ''}
+          ${storage.blocked ? `<p class="text-xs mt-2" style="color:var(--red-500)">所需空間超過瀏覽器目前估計可用空間</p>` : ''}
+        </div>`;
+
+        const actionCount = actionableItems().length;
+        submitBtn.classList.toggle('hidden', actionCount === 0);
+        submitBtn.disabled = importing || storage.blocked || actionCount === 0;
+        if (importing) submitBtn.textContent = '匯入中…';
+        else if (errorCount && waitingCount === 0) submitBtn.textContent = '重試失敗（' + errorCount + ' 份）';
+        else if (doneCount) submitBtn.textContent = '繼續匯入（' + actionCount + ' 份）';
+        else submitBtn.textContent = '匯入全部（' + actionCount + ' 份）';
+        return storage.blocked;
       };
 
       const syncRows = () => {
         listEl.querySelectorAll('[data-row]').forEach(row => {
-          const p = pending[Number(row.dataset.row)];
-          if (!p) return;
-          p.title = row.querySelector('.b-title').value.trim();
-          p.cancerId = row.querySelector('.b-cancer').value;
-          p.source = row.querySelector('.b-source').value.trim();
-          p.version = row.querySelector('.b-version').value.trim();
+          const item = pending[Number(row.dataset.row)];
+          if (!item || item.status === 'done') return;
+          item.title = row.querySelector('.b-title').value.trim();
+          item.cancerId = row.querySelector('.b-cancer').value;
+          item.source = row.querySelector('.b-source').value.trim();
+          item.version = row.querySelector('.b-version').value.trim();
         });
       };
 
-      document.getElementById('batch-files').addEventListener('change', (e) => {
-        pending = [...e.target.files].filter(f => f.type === 'application/pdf' || /\.pdf$/i.test(f.name)).map(f => {
-          const base = f.name.replace(/\.pdf$/i, '');
+      const renderRows = () => {
+        const pageCount = Math.max(1, Math.ceil(pending.length / PAGE_SIZE));
+        pageIndex = Math.max(0, Math.min(pageIndex, pageCount - 1));
+        const start = pageIndex * PAGE_SIZE;
+        const visible = pending.slice(start, start + PAGE_SIZE);
+        listEl.innerHTML = visible.map((item, offset) => {
+          const index = start + offset;
+          const locked = importing || item.status === 'done';
+          return `<div class="card" data-row="${index}">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+              <p class="text-xs text-gray-400 truncate mb-2" style="min-width:0">📄 ${esc(item.file.name)}</p>
+              ${statusTag(item)}
+            </div>
+            ${item.error ? `<p class="text-xs batch-file-error mb-3">${esc(item.error)}</p>` : ''}
+            <div class="form-group"><label class="label">指引名稱</label><input class="input b-title" value="${esc(item.title)}" ${locked ? 'disabled' : ''}></div>
+            <div class="form-group"><label class="label">癌別</label>
+              <select class="input b-cancer" ${locked ? 'disabled' : ''}>
+                <option value="">（不指定，之後再編輯）</option>
+                ${cancerOptions(item.cancerId)}
+              </select>
+              ${item.cancerId ? '' : '<p class="text-xs mt-1" style="color:var(--amber-700)">無法從檔名判斷，請手動選擇</p>'}
+            </div>
+            <div class="form-row">
+              <div class="form-group"><label class="label">來源</label><input class="input b-source" list="source-presets" value="${esc(item.source)}" ${locked ? 'disabled' : ''}></div>
+              <div class="form-group"><label class="label">版本</label><input class="input b-version" value="${esc(item.version)}" ${locked ? 'disabled' : ''}></div>
+            </div>
+            ${!locked ? '<button class="btn btn-ghost btn-sm text-red-500 b-remove">移除此筆</button>' : ''}
+          </div>`;
+        }).join('');
+
+        paginationEl.classList.toggle('hidden', pending.length <= PAGE_SIZE);
+        paginationEl.innerHTML = pending.length > PAGE_SIZE ? `
+          <button type="button" class="btn btn-ghost btn-sm" id="batch-prev" ${pageIndex === 0 || importing ? 'disabled' : ''}>上一頁</button>
+          <span class="text-sm text-gray-500">${pageIndex + 1} / ${pageCount}</span>
+          <button type="button" class="btn btn-ghost btn-sm" id="batch-next" ${pageIndex >= pageCount - 1 || importing ? 'disabled' : ''}>下一頁</button>
+        ` : '';
+
+        listEl.querySelectorAll('.b-remove').forEach(button => button.addEventListener('click', () => {
+          syncRows();
+          pending.splice(Number(button.closest('[data-row]').dataset.row), 1);
+          renderRows();
+        }));
+        document.getElementById('batch-prev')?.addEventListener('click', () => {
+          syncRows(); pageIndex--; renderRows(); window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+        document.getElementById('batch-next')?.addEventListener('click', () => {
+          syncRows(); pageIndex++; renderRows(); window.scrollTo({ top: 0, behavior: 'smooth' });
+        });
+        renderSummary();
+      };
+
+      document.getElementById('batch-files').addEventListener('change', async (event) => {
+        if (importing) return;
+        const selected = [...event.target.files];
+        const pdfFiles = selected.filter(file => file.type === 'application/pdf' || /\.pdf$/i.test(file.name));
+        rejectedCount = selected.length - pdfFiles.length;
+        pending = pdfFiles.map(file => {
+          const base = file.name.replace(/\.pdf$/i, '');
           return {
-            file: f,
+            file,
             title: base.replace(/[_]+/g, ' ').trim(),
-            cancerId: guessCancer(f.name, cancerCards)?.id || '',
-            source: guessSource(f.name),
+            cancerId: guessCancer(file.name, cancerCards)?.id || '',
+            source: guessSource(file.name),
             version: guessVersion(base),
+            status: 'queued',
+            error: '',
           };
         });
+        pageIndex = 0;
+        progressEl.classList.add('hidden');
+        storageEstimate = await getStorageEstimate();
         renderRows();
       });
 
       submitBtn.addEventListener('click', async () => {
+        if (importing) return;
         syncRows();
-        const missingTitle = pending.findIndex(p => !p.title);
-        if (missingTitle >= 0) { showToast('第 ' + (missingTitle + 1) + ' 筆缺指引名稱'); return; }
+        const targets = actionableItems();
+        const missingTitle = targets.findIndex(item => !item.title);
+        if (missingTitle >= 0) { showToast('待處理檔案中有一筆缺少指引名稱'); return; }
+        storageEstimate = await getStorageEstimate();
+        if (renderSummary()) { showToast('瀏覽器儲存空間不足'); return; }
+
+        targets.forEach(item => { item.status = 'queued'; item.error = ''; });
+        importing = true;
         const setAsCurrent = document.getElementById('batch-current').checked;
-        submitBtn.disabled = true;
         const today = new Date().toISOString().split('T')[0];
-        let done = 0;
-        try {
-          for (const p of pending) {
-            submitBtn.textContent = '匯入中（' + (done + 1) + '/' + pending.length + '）…';
-            const storageKey = await storePdf(p.file);
+        let successCount = 0;
+        let failureCount = 0;
+        let stoppedForQuota = false;
+        let wakeLock = null;
+        try { wakeLock = await navigator.wakeLock?.request('screen'); } catch {}
+        renderRows();
+
+        for (let index = 0; index < targets.length; index++) {
+          const item = targets[index];
+          item.status = 'importing';
+          progressEl.classList.remove('hidden');
+          progressEl.innerHTML = `<p class="font-semibold text-gray-800">匯入中 ${index + 1} / ${targets.length}</p><p class="text-xs text-gray-500 mt-1 truncate">${esc(item.file.name)}</p>`;
+          renderSummary();
+          try {
+            const storageKey = await storePdf(item.file);
             const docData = {
               id: crypto.randomUUID(),
-              title: p.title,
-              source: p.source,
-              version: p.version,
-              cancerIds: p.cancerId ? [p.cancerId] : [],
-              fileName: p.file.name,
+              title: item.title,
+              source: item.source,
+              version: item.version,
+              cancerIds: item.cancerId ? [item.cancerId] : [],
+              fileName: item.file.name,
               storageKey,
               pageCount: 0,
               importedAt: today,
@@ -2606,23 +2758,48 @@
               archived: false,
               notes: '',
             };
-            await dbPut('documents', docData);
-            if (p.cancerId) {
-              const card = await dbGet('cancerCards', p.cancerId);
+            try {
+              await dbPut('documents', docData);
+            } catch (error) {
+              try { await deletePdf(storageKey); } catch {}
+              throw error;
+            }
+            if (item.cancerId) {
+              const card = await dbGet('cancerCards', item.cancerId);
               if (card && !card.documentIds.includes(docData.id)) {
                 await dbPut('cancerCards', { ...card, documentIds: [...card.documentIds, docData.id], updatedAt: today });
               }
               if (setAsCurrent) await archiveSupersededDocs(docData);
             }
-            done++;
+            item.status = 'done';
+            successCount++;
+          } catch (error) {
+            item.status = 'error';
+            item.error = error?.message || '未知錯誤';
+            failureCount++;
+            if (item.error.includes('儲存空間不足')) { stoppedForQuota = true; break; }
           }
-          showToast('已匯入 ' + done + ' 份 PDF');
-          navigate('/pdf-library');
-        } catch (e) {
-          submitBtn.disabled = false;
-          renderRows();
-          showToast('第 ' + (done + 1) + ' 筆匯入失敗：' + e.message + '（前 ' + done + ' 筆已完成）');
+          await new Promise(resolve => setTimeout(resolve, 0));
         }
+
+        try { await wakeLock?.release(); } catch {}
+        importing = false;
+        storageEstimate = await getStorageEstimate();
+        const firstFailure = pending.findIndex(item => item.status === 'error');
+        if (firstFailure >= 0) pageIndex = Math.floor(firstFailure / PAGE_SIZE);
+        renderRows();
+
+        const allDone = pending.length > 0 && pending.every(item => item.status === 'done');
+        if (allDone) {
+          progressEl.innerHTML = `<p class="font-semibold text-gray-800">已完成 ${pending.length} 份 PDF</p>`;
+          showToast('已匯入 ' + pending.length + ' 份 PDF');
+          navigate('/pdf-library');
+          return;
+        }
+        const remainingCount = actionableItems().length;
+        progressEl.classList.remove('hidden');
+        progressEl.innerHTML = `<p class="font-semibold text-gray-800">本次完成 ${successCount} 份，失敗 ${failureCount} 份</p><p class="text-xs text-gray-500 mt-1">尚有 ${remainingCount} 份可繼續或重試${stoppedForQuota ? '；目前儲存空間不足' : ''}</p>`;
+        showToast('已保留成功項目，可只重試失敗檔案');
       });
     }
 
