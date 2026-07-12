@@ -1159,7 +1159,9 @@
       const text = [doc.fileName, doc.title].filter(Boolean).join(' ');
       const matched = findNccnGuideline(text);
       const looksNccn = /nccn/i.test([doc.source, text].filter(Boolean).join(' '));
-      if (matched && looksNccn) return matched;
+      const exactTitleMatch = matched && normalizeNccnTitle(doc.title) === normalizeNccnTitle(matched.title);
+      const linkedToMatchedCard = matched && matched.cardIds.some(cardId => doc.cancerIds?.includes(cardId));
+      if (matched && (looksNccn || exactTitleMatch || linkedToMatchedCard)) return matched;
       if (!looksNccn) return null;
       const linked = NCCN_GUIDELINES.filter(g => doc.cancerIds?.includes(g.cardId));
       return linked.length === 1 ? linked[0] : null;
