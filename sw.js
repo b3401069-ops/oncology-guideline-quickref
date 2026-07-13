@@ -1,8 +1,12 @@
-const CACHE_NAME = 'oncology-guideline-v12';
+const CACHE_NAME = 'oncology-guideline-v14';
 const ASSETS = [
   './',
   './index.html',
   './clinical-templates.js',
+  './nhi-parser.js',
+  './nccn-parser.js',
+  './vendor/pdf.min.mjs',
+  './vendor/pdf.worker.min.mjs',
   './manifest.json',
   './icon.svg',
   './icons/icon-192.png',

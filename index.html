@@ -202,6 +202,8 @@
   <div id="toast" class="toast hidden"></div>
 
   <script src="./clinical-templates.js"></script>
+  <script src="./nhi-parser.js"></script>
+  <script src="./nccn-parser.js"></script>
   <script type="module">
     // ========== Database ==========
     const DB_NAME = 'OncologyGuidelineDB';
@@ -671,6 +673,76 @@
     };
     // 依條件狀態排序：符合 → 無條件 → 不符合
     const condRank = (st) => st === 'met' ? 0 : st === null ? 1 : 2;
+    const fieldValueByTemplateKey = (fields, key) => fields.find(field => field.sourceTemplateKey === key)?.value;
+    const nccnClinicalKeywords = (fields) => {
+      const values = fields.flatMap(field => Array.isArray(field.value) ? field.value : (hasPfValue(field) ? [field.value] : []));
+      const keywords = new Set();
+      for (const raw of values) {
+        const value = String(raw).toLowerCase();
+        if (/轉移|全身性/.test(value)) keywords.add('metastatic');
+        if (/局部晚期|不可切除/.test(value)) keywords.add('unresectable');
+        if (/初診局限|可切除/.test(value)) keywords.add('resectable');
+        if (/第一線/.test(value)) keywords.add('first-line');
+        if (/第二線|第三線|後線/.test(value)) keywords.add('second-line');
+        if (/術前|誘導/.test(value)) keywords.add('neoadjuvant');
+        if (/術後|鞏固/.test(value)) keywords.add('adjuvant');
+        if (/poorly differentiated nec/.test(value)) keywords.add('poorly differentiated nec');
+        if (/well-differentiated net/.test(value)) keywords.add('well-differentiated net');
+        for (const marker of ['pd-l1','her2','egfr','alk','braf','brca','ntrk','ret','kras','sstr','ki-67','msi-h/dmmr','tmb-h']) {
+          if (value.includes(marker)) keywords.add(marker);
+        }
+      }
+      return keywords;
+    };
+    const nccnTreatmentMatches = (documents, fields) => {
+      const wanted = nccnClinicalKeywords(fields);
+      const matches = [];
+      for (const doc of documents) {
+        for (const page of doc.nccnStructure?.treatmentPages || []) {
+          const pageKeywords = new Set((page.keywords || []).map(value => String(value).toLowerCase()));
+          let score = page.types?.includes('systemic') ? 1 : 0;
+          const reasons = [];
+          for (const keyword of wanted) {
+            if (pageKeywords.has(keyword)) { score += 3; reasons.push(keyword); }
+          }
+          if (score > 0) matches.push({ doc, page, score, reasons });
+        }
+      }
+      return matches.sort((a, b) => b.score - a.score || a.page.page - b.page.page).slice(0, 8);
+    };
+    const nccnClinicalConflicts = (cancerId, fields) => {
+      const warnings = [];
+      if (['neuroendocrine_tumor','neuroendocrine_adrenal_tumors'].includes(cancerId)) {
+        const differentiation = fieldValueByTemplateKey(fields, 'net-differentiation');
+        const grade = fieldValueByTemplateKey(fields, 'net-grade');
+        if (differentiation === 'poorly differentiated NEC' && ['G1','G2'].includes(grade)) {
+          warnings.push('「poorly differentiated NEC」與「NET grade ' + grade + '」不一致；低分化 NEC 應先確認病理分類與分級，再套用治療路徑。');
+        }
+      }
+      return warnings;
+    };
+    const nccnReasonText = (reasons) => {
+      const labels = {
+        'metastatic': '轉移／全身性', 'unresectable': '不可切除', 'resectable': '可切除',
+        'first-line': '第一線', 'second-line': '第二線／後線', 'neoadjuvant': '術前', 'adjuvant': '術後',
+        'poorly differentiated nec': '低分化 NEC', 'well-differentiated net': '高分化 NET',
+      };
+      return reasons.map(reason => labels[reason] || reason.toUpperCase()).join('、');
+    };
+    const renderNccnTreatmentMatch = ({ doc, page, reasons }) => {
+      const options = (page.options || []).slice(0, 10);
+      const pageLabel = [page.sectionCode, page.sectionPart ? page.sectionPart + (page.sectionTotal ? '/' + page.sectionTotal : '') : ''].filter(Boolean).join(' ');
+      return `<div class="bg-blue-50 rounded-lg p-3">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+          <div class="min-w-0">
+            <p class="text-sm font-semibold text-blue-900">${esc(pageLabel || page.title)}</p>
+            <p class="text-xs text-blue-700 mt-1">${reasons.length ? '符合目前條件：' + esc(nccnReasonText(reasons)) : '系統治療相關頁面'}</p>
+          </div>
+          ${doc.storageKey ? `<button class="btn btn-ghost btn-sm" style="width:auto;white-space:nowrap" onclick="openPdf('${doc.storageKey}', ${page.page})">p.${page.page}</button>` : ''}
+        </div>
+        ${options.length ? `<ul class="text-sm text-gray-700 mt-3 space-y-1" style="padding-left:18px;list-style:disc">${options.map(option => `<li>${esc(option)}</li>`).join('')}</ul>` : '<p class="text-xs text-gray-500 mt-2">此頁表格無法可靠拆成單一療程，請開啟原頁核對。</p>'}
+      </div>`;
+    };
 
     const NHI_STATUS_RELATED = 'related_with_restrictions';
     const NHI_STATUS_VERIFY = 'verification_needed';
@@ -714,12 +786,16 @@
     const renderNhiNoteCard = (note, state, linked, heading = note.label) => `
       <div class="bg-blue-50 rounded-lg p-3" style="${state === 'matched' ? 'outline:2px solid var(--primary-400)' : ''}">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">
-          <p class="text-sm font-medium text-blue-800">${esc(heading)}</p>
+          <div>
+            <p class="text-sm font-medium text-blue-800">${esc(heading)}</p>
+            ${note.autoExtracted ? `<span class="tag tag-category mt-1">PDF 自動擷取${note.sourceSection ? ' · ' + esc(note.sourceSection) : ''}</span>` : ''}
+          </div>
           ${renderNhiStateTag(state, note.condition)}
         </div>
+        ${note.extractedConditionHints?.length ? `<p class="text-xs text-gray-500 mt-2">條文涉及：${esc(note.extractedConditionHints.join('、'))}</p>` : ''}
         ${renderNhiRestrictions(note.content)}
         ${note.condition ? `<p class="text-xs text-gray-500 mt-2">對應欄位：${esc(condLabel(note.condition))}</p>` : ''}
-        ${linked?.storageKey ? `<button class="text-sm text-blue-700 mt-2" style="font-weight:500" onclick="openPdf('${linked.storageKey}')">📄 開啟給付規定 PDF</button>` : ''}
+        ${linked?.storageKey ? `<button class="text-sm text-blue-700 mt-2" style="font-weight:500" onclick="openPdf('${linked.storageKey}', ${Number(note.sourcePageStart) || 1})">📄 開啟給付規定 PDF${note.sourcePageStart ? ' · p.' + esc(note.sourcePageStart) : ''}</button>` : ''}
       </div>`;
     const normalizeNhiTreatmentName = (value) => String(value || '')
       .normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -1114,7 +1190,7 @@
     const SOURCE_PATTERNS = [
       ['NCCN', /nccn/i], ['ESMO', /esmo/i], ['ASCO', /asco/i], ['NICE', /nice/i],
       ['JSCO', /jsco/i], ['TCOG', /tcog/i], ['AJCC', /ajcc/i], ['WHO', /\bwho\b/i],
-      ['健保', /健保|nhi/i],
+      ['健保', /健保|nhi|dl-\d+-[a-f0-9-]{16,}/i],
     ];
     // 常見指引檔名縮寫 → 癌別 id（synonyms 沒涵蓋的）
     const FILENAME_HINTS = { nscl: 'nsclc' };
@@ -1628,6 +1704,9 @@
       const queryPrecisionFields = applyNhiQueryState(precisionFields, queryState);
       const filledPf = queryPrecisionFields.filter(hasPfValue);
       const unfilledPf = queryPrecisionFields.filter(field => !hasPfValue(field));
+      const parsedNccnDocs = currentDocs.filter(doc => doc.nccnStructure?.schemaVersion);
+      const nccnMatches = nccnTreatmentMatches(parsedNccnDocs, queryPrecisionFields);
+      const nccnConflicts = nccnClinicalConflicts(card.id, queryPrecisionFields);
       // 章節與 checklist 依情境過濾；健保條件全部保留並標示符合、未知或不符合。
       const pfMap = buildPfMap(queryPrecisionFields);
       const secAll = card.mustReadSections.map(parseSection).map(ps => ({ ps, st: condState(ps.cond, pfMap) }));
@@ -1659,7 +1738,7 @@
         : selectedTreatment ? 'review' : '';
       const missingItems = [];
       if (!effectivePrimaryGuideline) missingItems.push('尚未設定主要指引');
-      if (!card.mustReadSections.length) missingItems.push('尚未設定必查章節');
+      if (!card.mustReadSections.length && !parsedNccnDocs.some(doc => doc.nccnStructure?.sections?.length)) missingItems.push('尚未建立指引章節索引');
       if (!checklists.length) missingItems.push('尚未建立 checklist');
       if (!precisionFields.length) missingItems.push('尚未設定精準化欄位');
       else unfilledPf.filter(field => field.required).forEach(field => missingItems.push('尚未輸入' + field.label));
@@ -1735,6 +1814,18 @@
               <div class="space-y-1">${filledPf.map(f => `<p class="text-sm text-gray-700">${esc(f.label)}：${esc(pfValueText(f))}</p>`).join('')}</div>
             </div>
           ` : ''}
+
+
+          <div class="card section">
+            <h2 class="section-title">🧭 NCCN 治療選項</h2>
+            ${nccnConflicts.length ? `<div class="alert alert-warning mb-3"><p class="font-semibold">先確認資料矛盾</p><ul class="text-sm mt-2 space-y-1">${nccnConflicts.map(item => `<li>• ${esc(item)}</li>`).join('')}</ul></div>` : ''}
+            ${nccnMatches.length ? `
+              <div class="alert alert-info mb-3"><p class="font-semibold">依目前條件找到 ${nccnMatches.length} 個優先查閱頁面</p><p class="text-xs mt-1">以下是 PDF 自動擷取的指引候選選項；請以原頁流程、腳註及完整病況確認，不代表系統已替您決定治療。</p></div>
+              <div class="space-y-3">${nccnMatches.map(renderNccnTreatmentMatch).join('')}</div>
+            ` : parsedNccnDocs.length ? '<div class="bg-gray-50 rounded p-3"><p class="text-sm text-gray-500">已解析指引，但目前輸入條件尚未找到明確對應治療頁；請補充病期、線別、病理分類或生物標記。</p></div>' :
+              hasDocs ? `<div class="bg-gray-50 rounded p-3"><p class="text-sm text-gray-600">PDF 已匯入，但尚未建立內部章節索引。</p><button class="btn btn-secondary btn-sm mt-3" onclick="navigate('/pdf-library')">前往解析 NCCN 指引</button></div>` :
+              '<p class="text-sm text-gray-400">請先匯入 NCCN PDF。</p>'}
+          </div>
 
           <div class="card section">
             <h2 class="section-title">💊 選擇藥物／療程查健保</h2>
@@ -2289,8 +2380,7 @@
       const items = (await dbGetAll('nhiNotes')).filter(n => n.cancerId === card.id);
       const allDocs = await dbGetAll('documents');
       // 健保相關文件優先，其餘文件也可選（供比對給付規定用）
-      const isNhiDoc = (d) => /健保|nhi/i.test((d.source || '') + ' ' + (d.title || ''));
-      const linkableDocs = [...allDocs.filter(d => isNhiDoc(d) && !d.archived), ...allDocs.filter(d => !isNhiDoc(d) && !d.archived)];
+      const linkableDocs = [...allDocs.filter(d => NHI_PARSER.isNhiDocument(d) && !d.archived), ...allDocs.filter(d => !NHI_PARSER.isNhiDocument(d) && !d.archived)];
       const docMap = {}; allDocs.forEach(d => docMap[d.id] = d);
       const precisionFields = (await dbGetAll('precisionFields')).filter(p => p.cancerId === card.id);
       const pfMap = buildPfMap(precisionFields);
@@ -2389,10 +2479,12 @@
               <div class="min-w-0 flex-1">
                 <p class="font-medium text-gray-900">${esc(item.label)}</p>
                 <p class="text-xs mt-1" style="color:var(--blue-700)">${coverageLabel}</p>
+                ${item.autoExtracted ? `<span class="tag tag-category mt-1">PDF 自動擷取${item.sourceSection ? ' · ' + esc(item.sourceSection) : ''}</span>` : ''}
                 <div class="mt-2">${renderNhiStateTag(state, item.condition)}</div>
+                ${item.extractedConditionHints?.length ? `<p class="text-xs text-gray-500 mt-2">條文涉及：${esc(item.extractedConditionHints.join('、'))}</p>` : ''}
                 ${renderNhiRestrictions(item.content)}
                 ${item.condition ? `<p class="text-xs text-gray-500 mt-2">對應欄位：${esc(condLabel(item.condition))}</p>` : ''}
-                ${docMap[item.sourceDocumentId]?.storageKey ? `<button class="text-sm mt-2" style="display:block;color:var(--primary-600);font-weight:500" onclick="openPdf('${docMap[item.sourceDocumentId].storageKey}')">📄 開啟 ${esc(docMap[item.sourceDocumentId].title)}</button>` : ''}
+                ${docMap[item.sourceDocumentId]?.storageKey ? `<button class="text-sm mt-2" style="display:block;color:var(--primary-600);font-weight:500" onclick="openPdf('${docMap[item.sourceDocumentId].storageKey}', ${Number(item.sourcePageStart) || 1})">📄 開啟 ${esc(docMap[item.sourceDocumentId].title)}${item.sourcePageStart ? ' · p.' + esc(item.sourcePageStart) : ''}</button>` : ''}
               </div>
               <div class="flex gap-1">
                 <button class="btn btn-ghost btn-sm" onclick="window._editNhi('${item.id}')">編輯</button>
@@ -2459,7 +2551,7 @@
     async function renderSourceHub(app) {
       const docs = await dbGetAll('documents');
       const staleDocs = docs.filter(isStaleDoc);
-      const nhiDocs = docs.filter(d => /健保|nhi/i.test((d.source || '') + ' ' + (d.title || '')) && !d.archived);
+      const nhiDocs = docs.filter(d => NHI_PARSER.isNhiDocument(d) && !d.archived);
       const nccnDocs = docs.filter(d => /nccn/i.test((d.source || '') + ' ' + (d.title || '')) && !d.archived);
 
       app.innerHTML = `
@@ -2527,6 +2619,10 @@
       cancerCards.forEach(c => nameMap[c.id] = c.zhName);
 
       const sources = [...new Set(docs.map(d => d.source).filter(Boolean))].sort();
+      const nccnDocs = docs.filter(doc => NCCN_PARSER.isNccnDocument(doc) && doc.current && !doc.archived && doc.storageKey);
+      const nccnParsedCount = nccnDocs.filter(doc => doc.nccnStructure?.schemaVersion).length;
+      const nccnReviewCount = nccnDocs.filter(doc => !doc.nccnStructure?.schemaVersion && doc.nccnParseError).length;
+      const nccnPendingCount = nccnDocs.length - nccnParsedCount - nccnReviewCount;
 
       app.innerHTML = `
         <div class="container">
@@ -2543,6 +2639,16 @@
             <div class="min-w-0 flex-1">
               <p class="text-sm font-medium text-blue-800">不知道文件去哪下載？開啟來源中心</p>
               <p class="text-xs text-blue-600">健保第 9 節 PDF、整份給付規定、NCCN 官方入口都集中在這裡</p>
+            </div>
+          </div>
+
+          <div class="alert ${nccnPendingCount || nccnReviewCount ? 'alert-warning' : 'alert-info'} mb-4">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+              <div>
+                <p class="font-semibold">NCCN 章節索引：${nccnParsedCount} / ${nccnDocs.length} 份完成${nccnReviewCount ? ' · ' + nccnReviewCount + ' 份待核對' : ''}</p>
+                <p class="text-xs mt-1">${nccnPendingCount ? '尚有 ' + nccnPendingCount + ' 份可在本機解析；既有 PDF 不必重新匯入。' : nccnReviewCount ? '其餘文件已完成；待核對文件可在卡片上查看原因並單獨重試。' : '目前 NCCN PDF 均已建立可查頁碼與治療頁索引。'}</p>
+              </div>
+              <button type="button" class="btn btn-primary btn-sm" id="parse-all-nccn-btn" style="width:auto" ${nccnPendingCount ? '' : 'disabled'}>${nccnPendingCount ? '解析全部 NCCN' : '沒有待解析文件'}</button>
             </div>
           </div>
 
@@ -2588,10 +2694,13 @@
                   </div>
                   <p class="text-xs text-gray-500 mt-1">${esc(doc.source)} · ${esc(doc.version)}${doc.verifiedAt ? ` · 已確認 ${esc(doc.verifiedAt)}` : ''}</p>
                   ${isStaleDoc(doc) ? `<p class="text-xs mt-1" style="color:var(--amber-700)">⏰ 超過 6 個月未確認版本 <button class="text-xs" style="color:var(--primary-600);font-weight:500;border:none;background:none;cursor:pointer" onclick="window._verifyDoc('${doc.id}')">確認為最新</button></p>` : ''}
+                  ${doc.nhiExtraction ? `<p class="text-xs mt-1" style="color:var(--blue-700)">健保解析：${doc.nhiExtraction.noteCount || 0} 筆資料 · ${doc.nhiExtraction.cancerCount || 0} 個癌別 · ${esc(doc.nhiExtraction.extractedAt || '')}</p>` : ''}
+                  ${doc.nccnStructure ? '<p class="text-xs mt-1" style="color:var(--blue-700)">NCCN 索引：' + (doc.nccnStructure.sections?.length || 0) + ' 個章節頁 · ' + (doc.nccnStructure.treatmentPages?.length || 0) + ' 個治療相關頁 · ' + esc(doc.nccnStructure.version || doc.version || '') + '</p>' : ''}
+                  ${doc.nccnParseError ? '<p class="text-xs mt-1" style="color:var(--amber-700)">NCCN 待核對：' + esc(doc.nccnParseError.message || '無法建立章節索引') + '</p>' : ''}
                 </div>
               </div>
               ${tags ? `<div class="flex gap-1 mb-3">${tags}</div>` : ''}
-              <div class="flex gap-2">
+              <div class="flex gap-2" style="flex-wrap:wrap">
                 ${doc.storageKey ? `<button class="btn btn-ghost btn-sm flex-1" onclick="openPdf('${doc.storageKey}')">開啟</button>` :
                   '<span class="btn btn-ghost btn-sm flex-1 text-gray-400" style="cursor:default">需重新匯入</span>'}
                 <button class="btn btn-ghost btn-sm" onclick="navigate('/pdf-library/import/${doc.id}')">編輯</button>
@@ -2599,6 +2708,8 @@
                 ${!doc.archived ? `<button class="btn btn-ghost btn-sm text-gray-500" onclick="window._archiveDoc('${doc.id}')">封存</button>` : ''}
                 <button class="btn btn-ghost btn-sm text-red-500" onclick="window._deleteDoc('${doc.id}')">刪除</button>
               </div>
+              ${doc.storageKey && NHI_PARSER.isNhiDocument(doc) && !doc.archived ? `<button class="btn btn-secondary btn-sm mt-3" onclick="window._parseNhiDoc('${doc.id}')">${doc.nhiExtraction ? '重新解析健保規定' : '解析健保規定'}</button>` : ''}
+              ${doc.storageKey && NCCN_PARSER.isNccnDocument(doc) && !doc.archived ? '<button class="btn btn-secondary btn-sm mt-3" onclick="window._parseNccnDoc(\'' + doc.id + '\')">' + (doc.nccnStructure ? '重新解析 NCCN 結構' : '解析 NCCN 結構') + '</button>' : ''}
             </div>
           `;
         }).join('');
@@ -2614,6 +2725,153 @@
       });
       document.getElementById('show-archived').addEventListener('change', renderList);
       renderList();
+
+      const showNhiParseModal = (title, body, busy = true) => {
+        document.getElementById('nhi-parse-modal')?.remove();
+        const wrapper = document.createElement('div');
+        wrapper.id = 'nhi-parse-modal';
+        wrapper.className = 'modal-overlay';
+        wrapper.innerHTML = `<div class="modal-content"><h2 class="text-xl font-bold mb-3">${esc(title)}</h2><div id="nhi-parse-body">${body}</div>${busy ? '' : '<button class="btn btn-primary mt-4" id="nhi-parse-close">完成</button>'}</div>`;
+        document.body.appendChild(wrapper);
+        document.getElementById('nhi-parse-close')?.addEventListener('click', () => { wrapper.remove(); navigate('/pdf-library'); });
+        return wrapper;
+      };
+
+      const parseNccnDocument = async (doc, onProgress) => {
+        if (!doc?.storageKey) throw new Error('此文件需要重新匯入 PDF');
+        const blob = await getPdfBlob(doc.storageKey);
+        if (!blob) throw new Error('找不到 PDF 檔案本體');
+        const result = await NCCN_PARSER.extractAndParse(blob, {
+          moduleUrl: new URL('./vendor/pdf.min.mjs', location.href).href,
+          workerUrl: new URL('./vendor/pdf.worker.min.mjs', location.href).href,
+          onProgress,
+        });
+        if (!result.sections.length) throw new Error('沒有辨識到 NCCN 章節代碼；PDF 可能是掃描檔或版面不支援');
+        await dbPut('documents', { ...doc, version: result.version || doc.version, pageCount: result.pageCount, nccnStructure: result, nccnParseError: null });
+        return result;
+      };
+
+      window._parseNccnDoc = async (id) => {
+        const doc = await dbGet('documents', id);
+        if (!doc?.storageKey) { showToast('此文件需要重新匯入 PDF'); return; }
+        if (!confirm('開始解析「' + doc.title + '」？全程只在本機進行。')) return;
+        const modal = showNhiParseModal('解析 NCCN 指引', '<p class="text-sm text-gray-600">準備讀取 PDF…</p>');
+        try {
+          const result = await parseNccnDocument(doc, ({ pageNumber, pageCount }) => {
+            const body = modal.querySelector('#nhi-parse-body');
+            if (body) body.innerHTML = '<p class="text-sm text-gray-700">正在擷取第 ' + pageNumber + ' / ' + pageCount + ' 頁</p><div style="height:8px;background:var(--gray-100);border-radius:4px;overflow:hidden;margin-top:10px"><div style="height:100%;width:' + Math.round(pageNumber / pageCount * 100) + '%;background:var(--primary-500)"></div></div>';
+          });
+          showNhiParseModal('NCCN 指引解析完成', '<div class="alert alert-info"><p class="font-semibold">已建立 ' + result.sections.length + ' 個章節頁索引</p><p class="text-xs mt-1">其中 ' + result.treatmentPages.length + ' 頁與治療、系統治療、手術或放療相關。</p></div>', false);
+        } catch (error) {
+          const message = error?.message || '解析失敗';
+          await dbPut('documents', { ...doc, nccnParseError: { message, checkedAt: new Date().toISOString() } });
+          showNhiParseModal('無法完成解析', '<div class="alert alert-warning"><p class="font-semibold">' + esc(message) + '</p></div><p class="text-xs text-gray-500">原 PDF 與既有索引均未變更。</p>', false);
+        }
+      };
+
+      window._parseAllNccnDocs = async () => {
+        const targets = nccnDocs.filter(doc => !doc.nccnStructure?.schemaVersion && !doc.nccnParseError);
+        if (!targets.length) { showToast('目前 NCCN PDF 均已完成解析'); return; }
+        if (!confirm('開始依序解析 ' + targets.length + ' 份 NCCN PDF？全程只在本機進行，請保持 App 開啟。')) return;
+        const modal = showNhiParseModal('建立 NCCN 章節索引', '<p class="text-sm text-gray-600">準備讀取 PDF…</p>');
+        let completed = 0;
+        const failures = [];
+        for (let index = 0; index < targets.length; index++) {
+          const doc = targets[index];
+          try {
+            await parseNccnDocument(doc, ({ pageNumber, pageCount }) => {
+              const body = modal.querySelector('#nhi-parse-body');
+              if (!body) return;
+              const percent = Math.round(pageNumber / pageCount * 100);
+              body.innerHTML = '<p class="font-semibold text-gray-800">第 ' + (index + 1) + ' / ' + targets.length + ' 份</p>' +
+                '<p class="text-sm text-gray-600 mt-1">' + esc(doc.title) + '</p>' +
+                '<p class="text-xs text-gray-500 mt-2">正在擷取第 ' + pageNumber + ' / ' + pageCount + ' 頁</p>' +
+                '<div style="height:8px;background:var(--gray-100);border-radius:4px;overflow:hidden;margin-top:10px"><div style="height:100%;width:' + percent + '%;background:var(--primary-500)"></div></div>';
+            });
+            completed++;
+          } catch (error) {
+            const message = error?.message || '解析失敗';
+            await dbPut('documents', { ...doc, nccnParseError: { message, checkedAt: new Date().toISOString() } });
+            failures.push(doc.title + '：' + message);
+          }
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+        const failureHtml = failures.length ? '<div class="alert alert-warning mt-3"><p class="font-semibold">' + failures.length + ' 份需要核對</p><ul class="text-xs mt-2" style="padding-left:18px;list-style:disc">' + failures.slice(0, 10).map(item => '<li>' + esc(item) + '</li>').join('') + '</ul></div>' : '';
+        showNhiParseModal('NCCN 索引完成', '<div class="alert alert-info"><p class="font-semibold">已完成 ' + completed + ' / ' + targets.length + ' 份</p><p class="text-xs mt-1">已建立版本、章節代碼、治療相關頁與原始 PDF 頁碼。</p></div>' + failureHtml, false);
+      };
+
+      document.getElementById('parse-all-nccn-btn')?.addEventListener('click', () => window._parseAllNccnDocs());
+      window._parseNhiDoc = async (id) => {
+        const doc = await dbGet('documents', id);
+        if (!doc?.storageKey) { showToast('此文件需要重新匯入 PDF'); return; }
+        if (!confirm(`開始解析「${doc.title}」？解析會在本機進行，可能需要一些時間。`)) return;
+        const modal = showNhiParseModal('解析健保給付規定', '<p class="text-sm text-gray-600">準備讀取 PDF…</p>');
+        try {
+          const blob = await getPdfBlob(doc.storageKey);
+          if (!blob) throw new Error('找不到 PDF 檔案本體');
+          const cards = await dbGetAll('cancerCards');
+          const result = await NHI_PARSER.extractAndParse(blob, cards, {
+            moduleUrl: new URL('./vendor/pdf.min.mjs', location.href).href,
+            workerUrl: new URL('./vendor/pdf.worker.min.mjs', location.href).href,
+            documentTitle: doc.title,
+            onProgress: ({ pageNumber, pageCount }) => {
+              const body = modal.querySelector('#nhi-parse-body');
+              if (body) body.innerHTML = `<p class="text-sm text-gray-700">正在擷取第 ${pageNumber} / ${pageCount} 頁</p><div style="height:8px;background:var(--gray-100);border-radius:4px;overflow:hidden;margin-top:10px"><div style="height:100%;width:${Math.round(pageNumber / pageCount * 100)}%;background:var(--primary-500)"></div></div>`;
+            },
+          });
+          if (!result.entries.length) throw new Error('沒有辨識到第 9 節藥物條目；若 PDF 是掃描影像，需要 OCR 後再匯入');
+
+          const uniqueCandidates = [...new Map(result.candidates.map(candidate => [`${candidate.sourceSection}:${candidate.cancerId}`, candidate])).values()];
+          if (!uniqueCandidates.length) throw new Error('已讀取 PDF，但沒有找到可對應的癌別；請確認是否為抗癌瘤藥物給付規定');
+          const allNotes = await dbGetAll('nhiNotes');
+          const oldAutoNotes = allNotes.filter(note => note.autoExtracted && (
+            note.sourceDocumentId === doc.id || (doc.current && note.autoExtractionScope === result.scope)
+          ));
+          const today = new Date().toISOString().split('T')[0];
+          const notes = uniqueCandidates.map(candidate => ({
+            id: `nhi-auto-${doc.id}-${candidate.sourceSection.replace(/[^a-z0-9.]/gi, '-')}-${candidate.cancerId}`,
+            cancerId: candidate.cancerId,
+            label: candidate.label,
+            content: candidate.content,
+            coverageStatus: candidate.coverageStatus,
+            condition: null,
+            sourceDocumentId: doc.id,
+            sourcePageStart: candidate.sourcePageStart,
+            sourcePageEnd: candidate.sourcePageEnd,
+            sourceSection: candidate.sourceSection,
+            extractedConditionHints: candidate.conditionHints,
+            extractionStatus: candidate.extractionStatus,
+            autoExtracted: true,
+            autoExtractionScope: result.scope,
+            updatedAt: today,
+          }));
+          await dbPutMany('nhiNotes', notes);
+          const newNoteIds = new Set(notes.map(note => note.id));
+          for (const note of oldAutoNotes) {
+            if (!newNoteIds.has(note.id)) await dbDelete('nhiNotes', note.id);
+          }
+          const cancerCount = new Set(notes.map(note => note.cancerId)).size;
+          const reviewCount = notes.filter(note => note.extractionStatus === 'review_needed').length;
+          await dbPut('documents', {
+            ...doc,
+            pageCount: result.pageCount,
+            nhiExtraction: {
+              extractedAt: today,
+              entryCount: result.entries.length,
+              noteCount: notes.length,
+              cancerCount,
+              unmatchedCount: result.unmatched.length,
+              reviewCount,
+              lowTextPages: result.lowTextPages,
+              scope: result.scope,
+            },
+          });
+          const warning = result.lowTextPages ? `<p class="text-xs mt-2" style="color:var(--amber-700)">有 ${result.lowTextPages} 頁文字很少，可能包含掃描頁或表格，建議抽查。</p>` : '';
+          showNhiParseModal('健保規定解析完成', `<div class="alert alert-info"><p class="font-semibold">已載入 ${notes.length} 筆藥物／癌別資料</p><p class="text-xs mt-1">辨識 ${result.entries.length} 個條目，對應 ${cancerCount} 個癌別；${result.unmatched.length} 個條目未找到癌別，${reviewCount} 筆標示待核對。</p>${warning}</div><p class="text-xs text-gray-500">清楚條文已載入為「有相關給付但有限制條件」；個案是否符合仍需依條文與必要文件核對。</p>`, false);
+        } catch (error) {
+          showNhiParseModal('無法完成解析', `<div class="alert alert-warning"><p class="font-semibold">${esc(error?.message || '解析失敗')}</p></div><p class="text-xs text-gray-500">原 PDF 與既有手動健保資料均未變更。</p>`, false);
+        }
+      };
 
       window._setCurrent = async (id) => {
         const doc = await dbGet('documents', id);
