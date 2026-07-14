@@ -1,0 +1,8 @@
+{
+  "name": "oncology-guideline-quickref",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.cjs",
+    "audit:nccn": "node tests/nccn-pdf-audit.cjs"
+  }
+}

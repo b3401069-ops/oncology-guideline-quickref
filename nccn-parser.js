@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const SCHEMA_VERSION = 3;
+  const SCHEMA_VERSION = 5;
   let pdfJsPromise;
   const PAGE_TYPES = [
     ['systemic', /PRINCIPLES OF (?:SYSTEMIC|ANTI-TUMOR)|SYSTEMIC (?:ANTI-TUMOR )?THERAPY/i],
@@ -11,10 +11,11 @@
     ['pathology', /PRINCIPLES OF PATHOLOGY|PATHOLOGIC (?:EVALUATION|ASSESSMENT)/i],
     ['biomarker', /BIOMARKER|MOLECULAR (?:TESTING|ANALYSIS|PROFILING)/i],
     ['imaging', /PRINCIPLES OF IMAGING|IMAGING (?:WORKUP|EVALUATION)/i],
-    ['followup', /SURVEILLANCE|FOLLOW-UP/i],
+    ['followup', /SURVEILLANCE|FOLLOW-UP|FOLLOW UP|MONITORING|POST-TREATMENT/i],
   ];
-  const OPTION_SIGNAL = /\b(?:therapy|chemotherapy|immunotherapy|radiotherapy|resection|surgery|observation|observe|clinical trial|transplant|ablation|embolization)\b|\b(?:RT|CRT|PRRT)\b|(?:mab|nib|limus|reotide|platin|taxel|mycin|rubicin|citabine|trexate|zolomide|toposide|otecan|folfox|folfiri|folfirinox|capox|capeox|chop|abvd|gemox)/i;
+  const OPTION_SIGNAL = /\b(?:therapy|chemotherapy|immunotherapy|radiotherapy|resection|surgery|observation|observe|monitoring|surveillance|follow-up|clinical trial|transplant|ablation|embolization|excision|dissection|lobectomy|mastectomy|colectomy|prostatectomy|metastasectomy)\b|\b(?:RT|CRT|PRRT|SBRT|SRS|EBRT|IMRT|ADT|ARPI|SSA)\b|(?:mab|nib|limus|reotide|platin|taxel|mycin|rubicin|citabine|trexate|zolomide|toposide|otecan|lutamide|folfox|folfiri|folfirinox|capox|capeox|chop|abvd|gemox)/i;
   const BOILERPLATE = /^(?:Version |NCCN Guidelines|Note:|Table of Contents|Discussion|References?|Preferred$|Other Recommended$|Useful in Certain Circumstances$|All recommendations|PRINCIPLES OF |PLEASE NOTE|Printed by|Copyright)/i;
+  const CITATION_LINE = /\bet al\b|J Clin Oncol|N Engl J Med|Lancet|Cancer Res|Ann Oncol|Radiat Oncol|\bdoi\b|\b20\d{2};\d+/i;
   const BULLET = /^[\u0017\u2022\u25ca\u25e6\u25aa\u25cf\u25a0\u25c6\uf0b7]/u;
   const CATEGORY_DEFS = [
     { id: 'preferred', label: 'Preferred', pattern: /^Preferred(?: Regimens?)?$/i },
@@ -40,13 +41,25 @@
   function detectVersionDate(text) {
     return text.match(/Version\s+\d+(?:\.\d+)+\s*[\u2014-]\s*([A-Za-z]+\s+\d{1,2},\s+20\d{2})/i)?.[1] || '';
   }
-  function detectSectionCode(text) {
+  const SECTION_CODE = /^([A-Z][A-Z0-9]{1,10}(?:-[A-Z0-9]{1,8})+)(?:\s+(\d+)\s+OF\s+(\d+))?$/i;
+  const NON_SECTION_CODES = /^(?:LOW-RISK|HIGH-RISK|INTERMEDIATE-RISK|VERY-HIGH-RISK|RE-EVALUATE|FIRST-LINE|SECOND-LINE|SUBSEQUENT-LINE|POST-TREATMENT)$/i;
+  function sectionMatch(value) {
+    const match = cleanLine(value).match(SECTION_CODE);
+    if (!match || NON_SECTION_CODES.test(match[1])) return null;
+    return { code: match[1].toUpperCase(), part: Number(match[2]) || null, total: Number(match[3]) || null };
+  }
+  function detectSectionCode(text, rows = []) {
+    const footerMatches = rows
+      .filter(row => row.y <= 55)
+      .map(row => sectionMatch(rowText(row)))
+      .filter(Boolean);
+    if (footerMatches.length) return footerMatches[0];
     const lines = text.split('\n').map(cleanLine).filter(Boolean);
     const paged = lines.slice(0, 80).join(' ').match(/\b([A-Z][A-Z0-9]{1,10}(?:-[A-Z0-9]{1,8})+)\s+(\d+)\s+OF\s+(\d+)\b/i);
-    if (paged) return { code: paged[1].toUpperCase(), part: Number(paged[2]), total: Number(paged[3]) };
+    if (paged && !NON_SECTION_CODES.test(paged[1])) return { code: paged[1].toUpperCase(), part: Number(paged[2]), total: Number(paged[3]) };
     for (let i = 0; i < lines.length; i++) {
-      const match = lines[i].match(/^([A-Z][A-Z0-9]{1,10}(?:-[A-Z0-9]{1,8})+)(?:\s+(\d+)\s+OF\s+(\d+))?$/i);
-      if (match) return { code: match[1].toUpperCase(), part: Number(match[2]) || null, total: Number(match[3]) || null };
+      const match = sectionMatch(lines[i]);
+      if (match) return match;
     }
     return { code: '', part: null, total: null };
   }
@@ -91,7 +104,15 @@
       ['MSI-H/dMMR', /MSI-H|dMMR/i], ['TMB-H', /TMB-H|tumor mutational burden-high/i],
       ['PD-L1', /PD\s*-?\s*L1/i], ['HER2', /HER\s*-?\s*2/i], ['EGFR', /\bEGFR\b/i], ['ALK', /\bALK\b/i],
       ['BRAF', /\bBRAF\b/i], ['BRCA', /\bBRCA1?\/?2?\b/i], ['NTRK', /\bNTRK\b/i], ['RET', /\bRET\b/i],
-      ['KRAS', /\bKRAS\b/i], ['SSTR', /\bSSTR\b/i], ['Ki-67', /Ki\s*-?\s*67/i],
+      ['KRAS', /\bKRAS\b/i], ['ROS1', /\bROS1\b/i], ['MET', /\bMET\b/i], ['FGFR', /\bFGFR[1-4]?\b/i],
+      ['IDH', /\bIDH[12]?\b/i], ['NRG1', /\bNRG1\b/i], ['CLDN18.2', /CLDN\s*18\.2/i], ['HRD', /\bHRD\b/i],
+      ['FOLR1', /FOLR1|FR\s*alpha|FRα/i], ['PSMA', /\bPSMA\b/i], ['PIK3CA', /\bPIK3CA\b/i],
+      ['ESR1', /\bESR1\b/i], ['AKT1', /\bAKT1\b/i], ['PTEN', /\bPTEN\b/i], ['POLE', /\bPOLE\b/i],
+      ['FLT3', /\bFLT3\b/i], ['NPM1', /\bNPM1\b/i], ['SSTR', /\bSSTR\b/i], ['Ki-67', /Ki\s*-?\s*67/i],
+      ['limited-stage-sclc', /limited[- ]stage/i], ['extensive-stage-sclc', /extensive[- ]stage/i],
+      ['bclc-0', /BCLC\s*(?:stage\s*)?0\b/i], ['bclc-a', /BCLC\s*(?:stage\s*)?A\b/i],
+      ['bclc-b', /BCLC\s*(?:stage\s*)?B\b/i], ['bclc-c', /BCLC\s*(?:stage\s*)?C\b/i], ['bclc-d', /BCLC\s*(?:stage\s*)?D\b/i],
+      ['recurrent', /recurren|relapse/i], ['followup', /surveillance|follow-up|monitoring/i],
       ['poorly differentiated NEC', /poorly differentiated[\s\S]{0,80}(?:NEC|neuroendocrine carcinoma)/i],
       ['well-differentiated NET', /well differentiated[\s\S]{0,80}(?:NET|neuroendocrine tumor)/i],
     ];
@@ -147,6 +168,15 @@
   function isGroupHeading(text) {
     return /^(?:Chemotherapy|Immunotherapy|Targeted therapy|Systemic therapy|Radiation therapy|Chemoradiation|Endocrine therapy|Surgery|Local therapy|Other therapy|Treatment):$/i.test(text);
   }
+  function classifyModality(value, pageTypes = []) {
+    const text = normalizeText(value);
+    if (/surg|resect|excision|dissection|ectomy|transplant|operative/i.test(text)) return 'surgery';
+    if (/radiation|radiotherapy|\bRT\b|SBRT|SRS|EBRT|IMRT|brachy/i.test(text)) return 'radiation';
+    if (/surveillance|follow-up|monitoring|observation|restaging/i.test(text)) return 'followup';
+    if (/systemic|chemotherapy|immunotherapy|targeted|endocrine|\bADT\b|\bARPI\b|\bSSA\b|mab|nib|platin|taxel|rubicin|citabine|lutamide/i.test(text)) return 'systemic';
+    for (const type of ['surgery', 'radiation', 'followup', 'systemic']) if (pageTypes.includes(type)) return type;
+    return 'other';
+  }
   function normalizeTreatmentOption(raw, metadata) {
     const sourceText = normalizeText(raw).replace(/([A-Za-z])-\s+([a-z])/g, '$1-$2').replace(/\s+([,.;:)\]])/g, '$1');
     if (!sourceText) return null;
@@ -161,9 +191,9 @@
     }).replace(/\s+/g, ' ').trim();
     label = label.replace(/[;,.]+$/, '').trim();
     const needsReview = (label.match(/\(/g) || []).length !== (label.match(/\)/g) || []).length ||
-      label.length > 100 ||
+      label.length > 140 ||
       (!OPTION_SIGNAL.test(label) && !/^None$/i.test(label));
-    if (label.length < 2 || label.length > 100) return null;
+    if (label.length < 2 || label.length > 220) return null;
     return {
       label,
       recommendation: metadata.id,
@@ -173,6 +203,7 @@
       conditions,
       references,
       needsReview,
+      modality: classifyModality([metadata.group, metadata.context, label].filter(Boolean).join(' '), metadata.pageTypes || []),
       sourceText,
     };
   }
@@ -192,6 +223,7 @@
           ...header,
           group: current.group,
           context: nearestContext(contexts, current.y),
+          pageTypes: header.pageTypes || [],
         });
         if (option) options.push(option);
         current = null;
@@ -220,7 +252,7 @@
     }
     return options;
   }
-  function fallbackBulletOptions(rows) {
+  function fallbackBulletOptions(rows, pageTypes = []) {
     const options = [];
     const bulletXs = [...new Set(rows.flatMap(row => row.items.filter(item => BULLET.test(item.text)).map(item => Math.round(item.x))))].sort((a, b) => a - b);
     let group = '';
@@ -256,9 +288,9 @@
           continue;
         }
         const option = normalizeTreatmentOption(cleaned, {
-          id: 'review', label: 'Needs source review', context: '', group,
+          id: 'review', label: 'Needs source review', context: '', group, pageTypes,
         });
-        if (option && !option.needsReview) options.push(option);
+        if (option) options.push(option);
         if (options.length >= 40) break;
       }
       if (options.length >= 40) break;
@@ -268,19 +300,56 @@
   function deduplicateOptions(options) {
     const seen = new Set();
     return options.filter(option => {
-      const key = [option.label, option.recommendation, option.context].join('|').toLowerCase();
+      const key = option.label.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     }).slice(0, 60);
   }
-  function extractTreatmentOptions(layout) {
+  function fallbackSignalOptions(rows, pageTypes = []) {
+    const options = [];
+    for (const row of rows) {
+      const text = rowText(row);
+      if (text.length < 3 || text.length > 220 || BOILERPLATE.test(text) || CITATION_LINE.test(text) || !OPTION_SIGNAL.test(text)) continue;
+      const option = normalizeTreatmentOption(text, {
+        id: 'review', label: 'Needs source review', context: '', group: '', pageTypes,
+      });
+      if (option) options.push(option);
+      if (options.length >= 40) break;
+    }
+    return options;
+  }
+  function extractTreatmentOptions(layout, pageTypes = []) {
     const options = [];
     for (let index = 0; index < layout.rows.length; index++) {
       const headers = recommendationHeaders(layout.rows[index]);
-      if (headers.length >= 2) options.push(...parseRecommendationTable(layout.rows, index, headers));
+      if (headers.length >= 2) options.push(...parseRecommendationTable(layout.rows, index, headers.map(header => ({ ...header, pageTypes }))));
     }
-    return deduplicateOptions(options.length ? options : fallbackBulletOptions(layout.rows));
+    options.push(...fallbackBulletOptions(layout.rows, pageTypes));
+    if (!options.length) options.push(...fallbackSignalOptions(layout.rows, pageTypes));
+    return deduplicateOptions(options);
+  }
+  function detectPageRole(text, options = []) {
+    if (options.some(option => typeof option !== 'string' && ['preferred', 'other', 'useful'].includes(option.recommendation))) {
+      return 'recommendation';
+    }
+    if (/PRINCIPLES OF/i.test(text)) return 'principles';
+    if (/(?:^|\n)\s*(?:WORKUP|EVALUATION|DIAGNOSIS)(?:\s|$)/i.test(text)) return 'workup';
+    if (/(?:^|\n)\s*(?:(?:PRIMARY|INITIAL|SUBSEQUENT|ADJUVANT|NEOADJUVANT)\s+)?(?:TREATMENT|THERAPY|SURVEILLANCE)(?:\s|$)/i.test(text)) return 'pathway';
+    return 'supporting';
+  }
+  function extractNextStepReferences(text, currentCode) {
+    const output = [];
+    for (const line of text.split('\n').map(cleanLine).filter(Boolean)) {
+      if (!/workup|treatment|follow-up|surveillance|monitoring|progression|recurrence|relapse|next|see principles/i.test(line)) continue;
+      for (const match of line.matchAll(/\(?([A-Z][A-Z0-9]{1,10}(?:-[A-Z0-9]{1,8})+)\)?/g)) {
+        const code = match[1].toUpperCase();
+        if (code === currentCode || NON_SECTION_CODES.test(code) || output.some(item => item.code === code)) continue;
+        output.push({ code, label: line.slice(0, 160) });
+      }
+      if (output.length >= 12) break;
+    }
+    return output;
   }
   async function loadPdfJs(moduleUrl, workerUrl) {
     if (!pdfJsPromise) pdfJsPromise = import(moduleUrl).then(pdfjs => {
@@ -323,19 +392,45 @@
           if (!redirectGuidelines.length) redirectGuidelines = detectRedirectGuidelines(text);
         }
         if (text.replace(/\s/g, '').length < 30) lowTextPages++;
-        const section = detectSectionCode(text);
+        const section = detectSectionCode(text, layout.rows);
         const types = detectPageTypes(text);
         const navigationPage = isNavigationIndexPage(text);
+        const pageLines = text.split('\n').map(cleanLine).filter(Boolean);
+        const citationLineCount = pageLines.filter(line => CITATION_LINE.test(line)).length;
+        const updatePage = /UPDATES? IN VERSION|SUMMARY OF (?:THE )?GUIDELINE UPDATES|New section added:|Footnote [a-z]+ (?:added|modified):/i.test(text);
+        const supportingPage = /^(?:MS|ABBR)-/.test(section.code) || updatePage ||
+          pageLines.some(line => /^(?:FOOTNOTES|REFERENCES|ABBREVIATIONS)$/.test(line)) ||
+          citationLineCount >= Math.max(6, Math.ceil(pageLines.length * 0.2));
         if (section.code && !navigationPage) sections.push({ ...section, page: pageNumber, title: pageTitle(text, section), types });
-        if (section.code && !navigationPage && types.some(type => ['systemic', 'treatment', 'radiation', 'surgery'].includes(type))) {
-          const treatmentOptions = extractTreatmentOptions(layout);
+        if (section.code && !navigationPage && !supportingPage && types.some(type => ['systemic', 'treatment', 'radiation', 'surgery', 'followup'].includes(type))) {
+          const treatmentOptions = extractTreatmentOptions(layout, types);
           if (treatmentOptions.length) treatmentPages.push({
             page: pageNumber, sectionCode: section.code, sectionPart: section.part, sectionTotal: section.total,
-            title: pageTitle(text, section), types, keywords: pageKeywords(text), options: treatmentOptions,
+            title: pageTitle(text, section), types, role: detectPageRole(text, treatmentOptions),
+            keywords: pageKeywords(text), options: treatmentOptions,
+            nextStepRefs: extractNextStepReferences(text, section.code),
           });
         }
         page.cleanup();
         await new Promise(resolve => setTimeout(resolve, 0));
+      }
+      const sectionsByCode = new Map();
+      for (const section of sections) {
+        if (!sectionsByCode.has(section.code)) sectionsByCode.set(section.code, []);
+        sectionsByCode.get(section.code).push(section);
+      }
+      for (const page of treatmentPages) {
+        const refs = [...(page.nextStepRefs || [])];
+        if (page.sectionPart && page.sectionTotal && page.sectionPart < page.sectionTotal) {
+          const nextPart = (sectionsByCode.get(page.sectionCode) || []).find(section => section.part === page.sectionPart + 1);
+          if (nextPart) refs.unshift({ code: page.sectionCode, label: page.sectionCode + ' ' + nextPart.part + '/' + nextPart.total, page: nextPart.page });
+        }
+        page.nextSteps = refs.map(ref => {
+          const target = ref.page ? { page: ref.page } : (sectionsByCode.get(ref.code) || [])[0];
+          return target ? { code: ref.code, label: ref.label, page: target.page } : null;
+        }).filter(Boolean).filter((item, index, all) => all.findIndex(other => other.code === item.code && other.page === item.page) === index).slice(0, 8);
+        for (const option of page.options) if (typeof option !== 'string') option.referencePages = (option.references || []).map(code => ({ code, page: (sectionsByCode.get(code) || [])[0]?.page })).filter(item => item.page);
+        delete page.nextStepRefs;
       }
       return {
         schemaVersion: SCHEMA_VERSION, parsedAt: new Date().toISOString(), version, versionDate, pageCount: pdf.numPages,
@@ -357,6 +452,11 @@
     isNavigationIndexPage,
     extractOptionLines,
     extractTreatmentOptions,
+    pageKeywords,
+    classifyModality,
+    normalizeTreatmentOption,
+    detectPageRole,
+    extractNextStepReferences,
     extractAndParse,
   };
 })();

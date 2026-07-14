@@ -202,6 +202,7 @@
   <div id="toast" class="toast hidden"></div>
 
   <script src="./clinical-templates.js"></script>
+  <script src="./clinical-matcher.js"></script>
   <script src="./nhi-parser.js"></script>
   <script src="./nccn-parser.js"></script>
   <script type="module">
@@ -674,43 +675,10 @@
     // 依條件狀態排序：符合 → 無條件 → 不符合
     const condRank = (st) => st === 'met' ? 0 : st === null ? 1 : 2;
     const fieldValueByTemplateKey = (fields, key) => fields.find(field => field.sourceTemplateKey === key)?.value;
-    const nccnClinicalKeywords = (fields) => {
-      const values = fields.flatMap(field => Array.isArray(field.value) ? field.value : (hasPfValue(field) ? [field.value] : []));
-      const keywords = new Set();
-      for (const raw of values) {
-        const value = String(raw).toLowerCase();
-        if (/轉移|全身性/.test(value)) keywords.add('metastatic');
-        if (/局部晚期|不可切除/.test(value)) keywords.add('unresectable');
-        if (/初診局限|可切除/.test(value)) keywords.add('resectable');
-        if (/第一線/.test(value)) keywords.add('first-line');
-        if (/第二線|第三線|後線/.test(value)) keywords.add('second-line');
-        if (/術前|誘導/.test(value)) keywords.add('neoadjuvant');
-        if (/術後|鞏固/.test(value)) keywords.add('adjuvant');
-        if (/poorly differentiated nec/.test(value)) keywords.add('poorly differentiated nec');
-        if (/well-differentiated net/.test(value)) keywords.add('well-differentiated net');
-        for (const marker of ['pd-l1','her2','egfr','alk','braf','brca','ntrk','ret','kras','sstr','ki-67','msi-h/dmmr','tmb-h']) {
-          if (value.includes(marker)) keywords.add(marker);
-        }
-      }
-      return keywords;
-    };
     const isCurrentNccnStructure = (doc) =>
       doc?.nccnStructure?.schemaVersion === NCCN_PARSER.schemaVersion;
     const nccnTreatmentMatches = (documents, fields) => {
-      const wanted = nccnClinicalKeywords(fields);
-      const matches = [];
-      for (const doc of documents) {
-        for (const page of doc.nccnStructure?.treatmentPages || []) {
-          const pageKeywords = new Set((page.keywords || []).map(value => String(value).toLowerCase()));
-          let score = page.types?.includes('systemic') ? 1 : 0;
-          const reasons = [];
-          for (const keyword of wanted) {
-            if (pageKeywords.has(keyword)) { score += 3; reasons.push(keyword); }
-          }
-          if (score > 0) matches.push({ doc, page, score, reasons });
-        }
-      }
-      return matches.sort((a, b) => b.score - a.score || a.page.page - b.page.page).slice(0, 8);
+      return window.CLINICAL_MATCHER.matchTreatmentPages(documents, fields);
     };
     const nccnClinicalConflicts = (cancerId, fields) => {
       const warnings = [];
@@ -724,12 +692,7 @@
       return warnings;
     };
     const nccnReasonText = (reasons) => {
-      const labels = {
-        'metastatic': '轉移／全身性', 'unresectable': '不可切除', 'resectable': '可切除',
-        'first-line': '第一線', 'second-line': '第二線／後線', 'neoadjuvant': '術前', 'adjuvant': '術後',
-        'poorly differentiated nec': '低分化 NEC', 'well-differentiated net': '高分化 NET',
-      };
-      return reasons.map(reason => labels[reason] || reason.toUpperCase()).join('、');
+      return reasons.map(reason => window.CLINICAL_MATCHER.featureLabel(reason)).join('、');
     };
     const nccnRecommendationMeta = {
       preferred: { label: '優先建議', color: '#166534', background: '#dcfce7' },
@@ -737,33 +700,7 @@
       useful: { label: '特定情況可用', color: '#92400e', background: '#fef3c7' },
       review: { label: '需開原頁核對', color: '#4b5563', background: '#f3f4f6' },
     };
-    const nccnOptionReasonScore = (option, reasons) => {
-      if (!option || typeof option === 'string') return 0;
-      const text = [option.context, ...(option.conditions || [])].join(' ').toLowerCase();
-      const patterns = {
-        metastatic: /metastatic|distant metast/,
-        unresectable: /unresectable/,
-        resectable: /(?:^|[^a-z])resectable/,
-        'first-line': /first[- ]line|initial/,
-        'second-line': /second[- ]line|subsequent|progression/,
-        neoadjuvant: /neoadjuvant|preoperative/,
-        adjuvant: /adjuvant|postoperative/,
-        'msi-h\/dmmr': /msi-h|dmmr/,
-        'tmb-h': /tmb-h|10 mut\/mb/,
-        'pd-l1': /pd-?l1/,
-        her2: /her-?2/,
-        egfr: /egfr/,
-        alk: /(?:^|[^a-z])alk(?:[^a-z]|$)/,
-        braf: /braf/,
-        brca: /brca/,
-        ntrk: /ntrk/,
-        ret: /(?:^|[^a-z])ret(?:[^a-z]|$)/,
-        kras: /kras/,
-        sstr: /sstr/,
-        'ki-67': /ki-?67/,
-      };
-      return reasons.reduce((score, reason) => score + (patterns[reason]?.test(text) ? 1 : 0), 0);
-    };
+    const nccnOptionAssessment = (option, features) => window.CLINICAL_MATCHER.optionAssessment(option, features);
     const renderNccnTreatmentOption = (option, doc, page) => {
       const openAttrs = doc.storageKey ? `role="button" tabindex="0" onclick="openPdf('${doc.storageKey}', ${page.page})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openPdf('${doc.storageKey}', ${page.page})}"` : '';
       const openStyle = doc.storageKey ? 'cursor:pointer;' : '';
@@ -771,10 +708,15 @@
       const meta = nccnRecommendationMeta[option.recommendation] || nccnRecommendationMeta.review;
       const conditions = (option.conditions || []).filter(Boolean);
       const references = (option.references || []).filter(Boolean);
+      const modalityLabels = {
+        surgery: '手術', radiation: '放射治療', systemic: '藥物／全身治療',
+        followup: '追蹤／監測', other: '其他處置',
+      };
       return `<li ${openAttrs} style="padding:9px 0;border-top:1px solid #dbeafe;list-style:none;${openStyle}">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
           <div class="min-w-0" style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">
             <span class="text-xs font-medium" style="color:${meta.color};background:${meta.background};padding:2px 7px;border-radius:999px">${meta.label}</span>
+            ${option.modality ? `<span class="tag">${esc(modalityLabels[option.modality] || option.modality)}</span>` : ''}
             <span class="text-sm font-semibold text-gray-900" style="overflow-wrap:anywhere">${esc(option.label)}</span>
           </div>
           ${doc.storageKey ? `<span class="text-xs text-blue-700" style="white-space:nowrap;padding-top:3px">PDF p.${page.page} ›</span>` : ''}
@@ -785,28 +727,30 @@
         ${option.needsReview ? '<p class="text-xs text-gray-500 mt-1">此項切分不確定，請開啟原頁核對。</p>' : ''}
       </li>`;
     };
-    const renderNccnTreatmentMatch = ({ doc, page, reasons }) => {
+    const renderNccnTreatmentMatch = ({ doc, page, reasons, features }) => {
       const allOptions = page.options || [];
       const ranked = allOptions.map((option, index) => ({
         option,
         index,
-        score: nccnOptionReasonScore(option, reasons),
+        assessment: nccnOptionAssessment(option, features),
         rank: typeof option === 'string' ? 4 : ({ preferred: 0, other: 1, useful: 2, review: 3 }[option.recommendation] ?? 4),
-      })).sort((a, b) => b.score - a.score || a.rank - b.rank || a.index - b.index);
-      const matching = ranked.some(item => item.score > 0) ? ranked.filter(item => item.score > 0) : ranked;
+      })).filter(item => !item.assessment.blocked)
+        .sort((a, b) => b.assessment.score - a.assessment.score || a.rank - b.rank || a.index - b.index);
+      const matching = ranked.some(item => item.assessment.score > 0) ? ranked.filter(item => item.assessment.score > 0) : ranked;
       const visible = matching.slice(0, 12);
+      const blockedCount = allOptions.length - ranked.length;
+      const nextSteps = (page.nextSteps || []).slice(0, 6);
       const pageLabel = [page.sectionCode, page.sectionPart ? page.sectionPart + (page.sectionTotal ? '/' + page.sectionTotal : '') : ''].filter(Boolean).join(' ');
       const contexts = [...new Set(visible.map(item => typeof item.option === 'string' ? '' : item.option.context).filter(Boolean))];
       return `<div class="bg-blue-50 rounded-lg p-3">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
-          <div class="min-w-0">
-            <p class="text-sm font-semibold text-blue-900">${esc(pageLabel || page.title)}</p>
-            <p class="text-xs text-blue-700 mt-1">${reasons.length ? '符合目前條件：' + esc(nccnReasonText(reasons)) : '系統治療相關頁面'}</p>
-          </div>
+          <div class="min-w-0"><p class="text-sm font-semibold text-blue-900">${esc(pageLabel || page.title)}</p><p class="text-xs text-blue-700 mt-1">符合目前條件：${esc(nccnReasonText(reasons))}</p></div>
           ${doc.storageKey ? `<button class="btn btn-ghost btn-sm" style="width:auto;white-space:nowrap" onclick="openPdf('${doc.storageKey}', ${page.page})">p.${page.page}</button>` : ''}
         </div>
         ${contexts.length ? `<div class="mt-3"><p class="text-xs font-medium text-gray-500">適用情境</p>${contexts.map(context => `<p class="text-sm text-gray-800 mt-1">${esc(context)}</p>`).join('')}</div>` : ''}
         ${visible.length ? `<ul class="mt-3" style="padding:0;margin-bottom:0">${visible.map(item => renderNccnTreatmentOption(item.option, doc, page)).join('')}</ul>${matching.length > visible.length ? `<p class="text-xs text-gray-500 mt-2">另有 ${matching.length - visible.length} 項，請開啟原頁查看完整表格。</p>` : ''}` : doc.storageKey ? `<button class="btn btn-ghost btn-sm mt-2" style="width:100%;text-align:left" onclick="openPdf('${doc.storageKey}', ${page.page})">開啟 PDF p.${page.page} 核對</button>` : '<p class="text-xs text-gray-500 mt-2">此頁無法可靠拆成單一療程。</p>'}
+        ${blockedCount ? `<p class="text-xs mt-2" style="color:#92400e">已隱藏 ${blockedCount} 項與陰性條件衝突的候選。</p>` : ''}
+        ${nextSteps.length && doc.storageKey ? `<div class="mt-3"><p class="text-xs font-medium text-gray-500">後續／相關步驟</p><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${nextSteps.map(step => `<button class="btn btn-ghost btn-sm" style="width:auto" onclick="openPdf('${doc.storageKey}', ${step.page})">${esc(step.code)} · p.${step.page}</button>`).join('')}</div></div>` : ''}
       </div>`;
     };
 
