@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const SCHEMA_VERSION = 2;
+  const SCHEMA_VERSION = 3;
   let pdfJsPromise;
   const PAGE_TYPES = [
     ['systemic', /PRINCIPLES OF (?:SYSTEMIC|ANTI-TUMOR)|SYSTEMIC (?:ANTI-TUMOR )?THERAPY/i],
@@ -13,9 +13,9 @@
     ['imaging', /PRINCIPLES OF IMAGING|IMAGING (?:WORKUP|EVALUATION)/i],
     ['followup', /SURVEILLANCE|FOLLOW-UP/i],
   ];
-  const OPTION_SIGNAL = /\b(?:therapy|chemotherapy|immunotherapy|radiotherapy|resection|surgery|observation|clinical trial|transplant|ablation|embolization)\b|\b(?:RT|CRT|PRRT)\b|(?:mab|nib|platin|taxel|mycin|rubicin|citabine|trexate|zolomide|toposide|otecan|folfox|folfiri|folfirinox|capox|capeox|chop|abvd|gemox)/i;
+  const OPTION_SIGNAL = /\b(?:therapy|chemotherapy|immunotherapy|radiotherapy|resection|surgery|observation|observe|clinical trial|transplant|ablation|embolization)\b|\b(?:RT|CRT|PRRT)\b|(?:mab|nib|limus|reotide|platin|taxel|mycin|rubicin|citabine|trexate|zolomide|toposide|otecan|folfox|folfiri|folfirinox|capox|capeox|chop|abvd|gemox)/i;
   const BOILERPLATE = /^(?:Version |NCCN Guidelines|Note:|Table of Contents|Discussion|References?|Preferred$|Other Recommended$|Useful in Certain Circumstances$|All recommendations|PRINCIPLES OF |PLEASE NOTE|Printed by|Copyright)/i;
-  const BULLET = /^[\u2022\u25e6\u25aa\u25cf\u25a0\u25c6\uf0b7]/u;
+  const BULLET = /^[\u0017\u2022\u25ca\u25e6\u25aa\u25cf\u25a0\u25c6\uf0b7]/u;
   const CATEGORY_DEFS = [
     { id: 'preferred', label: 'Preferred', pattern: /^Preferred(?: Regimens?)?$/i },
     { id: 'other', label: 'Other Recommended', pattern: /^Other Recommended(?: Regimens?)?$/i },
@@ -30,7 +30,7 @@
       .replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
   }
   function cleanLine(value) {
-    return normalizeText(value).replace(/^[\u2022\u25e6\u25aa\u25cf\u25a0\u25c6\uf0b7\s]+/u, '')
+    return normalizeText(value).replace(/^[\u0017\u2022\u25ca\u25e6\u25aa\u25cf\u25a0\u25c6\uf0b7\s]+/u, '')
       .replace(/\s+/g, ' ').trim();
   }
   function detectVersion(text) {
@@ -44,7 +44,7 @@
     const lines = text.split('\n').map(cleanLine).filter(Boolean);
     const paged = lines.slice(0, 80).join(' ').match(/\b([A-Z][A-Z0-9]{1,10}(?:-[A-Z0-9]{1,8})+)\s+(\d+)\s+OF\s+(\d+)\b/i);
     if (paged) return { code: paged[1].toUpperCase(), part: Number(paged[2]), total: Number(paged[3]) };
-    for (let i = 0; i < Math.min(lines.length, 60); i++) {
+    for (let i = 0; i < lines.length; i++) {
       const match = lines[i].match(/^([A-Z][A-Z0-9]{1,10}(?:-[A-Z0-9]{1,8})+)(?:\s+(\d+)\s+OF\s+(\d+))?$/i);
       if (match) return { code: match[1].toUpperCase(), part: Number(match[2]) || null, total: Number(match[3]) || null };
     }
@@ -52,6 +52,17 @@
   }
   function detectPageTypes(text) {
     return PAGE_TYPES.filter(([, pattern]) => pattern.test(text)).map(([type]) => type);
+  }
+  function detectRedirectGuidelines(text) {
+    if (!/has been separated into the:/i.test(text)) return [];
+    return text.split('\n').map(cleanLine)
+      .filter(line => /^NCCN Guidelines for /i.test(line))
+      .map(line => line.replace(/^NCCN Guidelines for /i, '').trim())
+      .filter(Boolean);
+  }
+  function isNavigationIndexPage(text) {
+    return /NCCN Guidelines Index[\s\S]{0,200}Table of Contents/i.test(text) &&
+      (text.match(/\([A-Z][A-Z0-9-]+\s+\d+\s+of\s+\d+\)/gi) || []).length >= 3;
   }
   function pageTitle(text, section) {
     const lines = text.split('\n').map(cleanLine).filter(Boolean);
@@ -88,7 +99,7 @@
   }
   function isReferenceMarker(value) {
     const text = String(value || '').trim();
-    return /^(?:\d+(?:[-,]\d+)*|[a-z](?:(?:,[a-z])|(?:,?\d+(?:-\d+)?))*)$/i.test(text);
+    return /^\d+(?:[-,]\d+)*$/.test(text) || /^[a-z]{1,3}(?:,[a-z]{1,3})*(?:,\d+(?:-\d+)?)*$/.test(text);
   }
   function joinFragments(items) {
     let output = '';
@@ -140,14 +151,18 @@
     const sourceText = normalizeText(raw).replace(/([A-Za-z])-\s+([a-z])/g, '$1-$2').replace(/\s+([,.;:)\]])/g, '$1');
     if (!sourceText) return null;
     const conditions = [];
-    let label = sourceText.replace(/\((?:(?:if|when|only for|for patients?|in patients?)[\s\S]*?)\)/gi, match => {
+    const references = [];
+    let label = sourceText.replace(/\(([A-Z]{2,8}(?:-[A-Z0-9]+)+)\)/g, (match, reference) => {
+      references.push(reference);
+      return '';
+    }).replace(/\((?:(?:if|when|only for|for patients?|in patients?)[\s\S]*?)\)/gi, match => {
       conditions.push(match.slice(1, -1).trim());
       return '';
     }).replace(/\s+/g, ' ').trim();
     label = label.replace(/[;,.]+$/, '').trim();
     const needsReview = (label.match(/\(/g) || []).length !== (label.match(/\)/g) || []).length ||
       label.length > 100 ||
-      (!OPTION_SIGNAL.test(label) && !/[+\/]/.test(label) && !/^None$/i.test(label));
+      (!OPTION_SIGNAL.test(label) && !/^None$/i.test(label));
     if (label.length < 2 || label.length > 100) return null;
     return {
       label,
@@ -156,6 +171,7 @@
       group: metadata.group || '',
       context: metadata.context || '',
       conditions,
+      references,
       needsReview,
       sourceText,
     };
@@ -206,27 +222,44 @@
   }
   function fallbackBulletOptions(rows) {
     const options = [];
-    for (const row of rows) {
+    const bulletXs = [...new Set(rows.flatMap(row => row.items.filter(item => BULLET.test(item.text)).map(item => Math.round(item.x))))].sort((a, b) => a - b);
+    let group = '';
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+      const row = rows[rowIndex];
       const items = row.items.filter(item => !isReferenceMarker(item.text));
-      let current = [];
-      for (const item of items) {
-        if (BULLET.test(item.text)) {
-          if (current.length) {
-            const option = normalizeTreatmentOption(joinFragments(current), {
-              id: 'review', label: 'Needs source review', context: '',
-            });
-            if (option && !option.needsReview) options.push(option);
-          }
-          current = [{ ...item, text: item.text.replace(BULLET, '').trim() }];
-        } else if (current.length) {
-          current.push(item);
+      for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
+        const item = items[itemIndex];
+        if (!BULLET.test(item.text)) continue;
+        const nextBullet = items.slice(itemIndex + 1).find(candidate => BULLET.test(candidate.text));
+        const nextColumnX = bulletXs.find(x => x > item.x + 120);
+        const columnEnd = Math.min(nextBullet?.x ?? Number.POSITIVE_INFINITY, nextColumnX ?? Number.POSITIVE_INFINITY);
+        const firstLineEnd = items.findIndex((fragment, index) => index > itemIndex && fragment.x >= columnEnd);
+        const firstLine = items.slice(itemIndex, firstLineEnd >= 0 ? firstLineEnd : items.length)
+          .map((fragment, index) => index ? fragment : { ...fragment, text: fragment.text.replace(BULLET, '').trim() });
+        let raw = joinFragments(firstLine);
+        let lastY = row.y;
+        for (let nextIndex = rowIndex + 1; nextIndex < rows.length; nextIndex++) {
+          const nextRow = rows[nextIndex];
+          if (lastY - nextRow.y > 18) break;
+          const continuationItems = nextRow.items.filter(fragment =>
+            fragment.x >= item.x - 2 && fragment.x < columnEnd - 2 && !isReferenceMarker(fragment.text)
+          );
+          if (continuationItems.some(fragment => BULLET.test(fragment.text))) break;
+          const continuation = joinFragments(continuationItems);
+          if (!continuation || BOILERPLATE.test(continuation)) continue;
+          raw = normalizeText(raw + ' ' + continuation);
+          lastY = nextRow.y;
         }
-      }
-      if (current.length) {
-        const option = normalizeTreatmentOption(joinFragments(current), {
-          id: 'review', label: 'Needs source review', context: '',
+        const cleaned = cleanLine(raw);
+        if (isGroupHeading(cleaned)) {
+          group = cleaned.replace(/:$/, '');
+          continue;
+        }
+        const option = normalizeTreatmentOption(cleaned, {
+          id: 'review', label: 'Needs source review', context: '', group,
         });
         if (option && !option.needsReview) options.push(option);
+        if (options.length >= 40) break;
       }
       if (options.length >= 40) break;
     }
@@ -277,7 +310,7 @@
     const task = pdfjs.getDocument({ data: new Uint8Array(await blob.arrayBuffer()), isEvalSupported: false });
     const pdf = await task.promise;
     const sections = [], treatmentPages = [];
-    let version = '', versionDate = '', lowTextPages = 0;
+    let version = '', versionDate = '', lowTextPages = 0, redirectGuidelines = [];
     try {
       for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
         options.onProgress?.({ pageNumber, pageCount: pdf.numPages });
@@ -287,15 +320,18 @@
         if (pageNumber <= 3) {
           version ||= detectVersion(text);
           versionDate ||= detectVersionDate(text);
+          if (!redirectGuidelines.length) redirectGuidelines = detectRedirectGuidelines(text);
         }
         if (text.replace(/\s/g, '').length < 30) lowTextPages++;
         const section = detectSectionCode(text);
         const types = detectPageTypes(text);
-        if (section.code) sections.push({ ...section, page: pageNumber, title: pageTitle(text, section), types });
-        if (types.some(type => ['systemic', 'treatment', 'radiation', 'surgery'].includes(type))) {
-          treatmentPages.push({
+        const navigationPage = isNavigationIndexPage(text);
+        if (section.code && !navigationPage) sections.push({ ...section, page: pageNumber, title: pageTitle(text, section), types });
+        if (section.code && !navigationPage && types.some(type => ['systemic', 'treatment', 'radiation', 'surgery'].includes(type))) {
+          const treatmentOptions = extractTreatmentOptions(layout);
+          if (treatmentOptions.length) treatmentPages.push({
             page: pageNumber, sectionCode: section.code, sectionPart: section.part, sectionTotal: section.total,
-            title: pageTitle(text, section), types, keywords: pageKeywords(text), options: extractTreatmentOptions(layout),
+            title: pageTitle(text, section), types, keywords: pageKeywords(text), options: treatmentOptions,
           });
         }
         page.cleanup();
@@ -303,8 +339,9 @@
       }
       return {
         schemaVersion: SCHEMA_VERSION, parsedAt: new Date().toISOString(), version, versionDate, pageCount: pdf.numPages,
-        lowTextPages, sections, treatmentPages,
-        status: lowTextPages > Math.max(3, Math.ceil(pdf.numPages * 0.1)) ? 'review_needed' : 'parsed',
+        lowTextPages, sections, treatmentPages, redirectGuidelines,
+        status: redirectGuidelines.length ? 'redirect_notice' :
+          lowTextPages > Math.max(3, Math.ceil(pdf.numPages * 0.1)) ? 'review_needed' : 'parsed',
       };
     } finally {
       await pdf.destroy();
@@ -316,6 +353,8 @@
     normalizeText,
     detectVersion,
     detectSectionCode,
+    detectRedirectGuidelines,
+    isNavigationIndexPage,
     extractOptionLines,
     extractTreatmentOptions,
     extractAndParse,

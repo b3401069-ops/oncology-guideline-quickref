@@ -764,17 +764,24 @@
       };
       return reasons.reduce((score, reason) => score + (patterns[reason]?.test(text) ? 1 : 0), 0);
     };
-    const renderNccnTreatmentOption = (option) => {
-      if (typeof option === 'string') return `<li style="padding:8px 0;border-top:1px solid #dbeafe">${esc(option)}</li>`;
+    const renderNccnTreatmentOption = (option, doc, page) => {
+      const openAttrs = doc.storageKey ? `role="button" tabindex="0" onclick="openPdf('${doc.storageKey}', ${page.page})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openPdf('${doc.storageKey}', ${page.page})}"` : '';
+      const openStyle = doc.storageKey ? 'cursor:pointer;' : '';
+      if (typeof option === 'string') return `<li ${openAttrs} style="padding:9px 0;border-top:1px solid #dbeafe;list-style:none;${openStyle}"><div style="display:flex;justify-content:space-between;gap:8px"><span>${esc(option)}</span>${doc.storageKey ? `<span class="text-xs text-blue-700" style="white-space:nowrap">PDF p.${page.page} ›</span>` : ''}</div></li>`;
       const meta = nccnRecommendationMeta[option.recommendation] || nccnRecommendationMeta.review;
       const conditions = (option.conditions || []).filter(Boolean);
-      return `<li style="padding:9px 0;border-top:1px solid #dbeafe;list-style:none">
-        <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">
-          <span class="text-xs font-medium" style="color:${meta.color};background:${meta.background};padding:2px 7px;border-radius:999px">${meta.label}</span>
-          <span class="text-sm font-semibold text-gray-900" style="overflow-wrap:anywhere">${esc(option.label)}</span>
+      const references = (option.references || []).filter(Boolean);
+      return `<li ${openAttrs} style="padding:9px 0;border-top:1px solid #dbeafe;list-style:none;${openStyle}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+          <div class="min-w-0" style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">
+            <span class="text-xs font-medium" style="color:${meta.color};background:${meta.background};padding:2px 7px;border-radius:999px">${meta.label}</span>
+            <span class="text-sm font-semibold text-gray-900" style="overflow-wrap:anywhere">${esc(option.label)}</span>
+          </div>
+          ${doc.storageKey ? `<span class="text-xs text-blue-700" style="white-space:nowrap;padding-top:3px">PDF p.${page.page} ›</span>` : ''}
         </div>
         ${option.group ? `<p class="text-xs text-gray-500 mt-1">${esc(option.group)}</p>` : ''}
-        ${conditions.length ? `<ul class="text-xs mt-1" style="color:#92400e;padding-left:16px;list-style:disc">${conditions.map(condition => `<li>適用條件：${esc(condition)}</li>`).join('')}</ul>` : ''}
+        ${conditions.map(condition => `<p class="text-xs mt-1" style="color:#92400e">• 適用條件：${esc(condition)}</p>`).join('')}
+        ${references.length ? `<p class="text-xs text-gray-500 mt-1">指引參考：${esc(references.join('、'))}</p>` : ''}
         ${option.needsReview ? '<p class="text-xs text-gray-500 mt-1">此項切分不確定，請開啟原頁核對。</p>' : ''}
       </li>`;
     };
@@ -799,7 +806,7 @@
           ${doc.storageKey ? `<button class="btn btn-ghost btn-sm" style="width:auto;white-space:nowrap" onclick="openPdf('${doc.storageKey}', ${page.page})">p.${page.page}</button>` : ''}
         </div>
         ${contexts.length ? `<div class="mt-3"><p class="text-xs font-medium text-gray-500">適用情境</p>${contexts.map(context => `<p class="text-sm text-gray-800 mt-1">${esc(context)}</p>`).join('')}</div>` : ''}
-        ${visible.length ? `<ul class="mt-3" style="padding:0;margin-bottom:0">${visible.map(item => renderNccnTreatmentOption(item.option)).join('')}</ul>${matching.length > visible.length ? `<p class="text-xs text-gray-500 mt-2">另有 ${matching.length - visible.length} 項，請開啟原頁查看完整表格。</p>` : ''}` : '<p class="text-xs text-gray-500 mt-2">此頁表格無法可靠拆成單一療程，請開啟原頁核對。</p>'}
+        ${visible.length ? `<ul class="mt-3" style="padding:0;margin-bottom:0">${visible.map(item => renderNccnTreatmentOption(item.option, doc, page)).join('')}</ul>${matching.length > visible.length ? `<p class="text-xs text-gray-500 mt-2">另有 ${matching.length - visible.length} 項，請開啟原頁查看完整表格。</p>` : ''}` : doc.storageKey ? `<button class="btn btn-ghost btn-sm mt-2" style="width:100%;text-align:left" onclick="openPdf('${doc.storageKey}', ${page.page})">開啟 PDF p.${page.page} 核對</button>` : '<p class="text-xs text-gray-500 mt-2">此頁無法可靠拆成單一療程。</p>'}
       </div>`;
     };
 
@@ -2681,7 +2688,7 @@
       const nccnDocs = docs.filter(doc => NCCN_PARSER.isNccnDocument(doc) && doc.current && !doc.archived && doc.storageKey);
       const nccnParsedCount = nccnDocs.filter(isCurrentNccnStructure).length;
       const nccnReviewCount = nccnDocs.filter(doc => !isCurrentNccnStructure(doc) && doc.nccnParseError).length;
-      const nccnPendingCount = nccnDocs.length - nccnParsedCount - nccnReviewCount;
+      const nccnPendingCount = nccnDocs.filter(doc => !isCurrentNccnStructure(doc)).length;
 
       app.innerHTML = `
         <div class="container">
@@ -2701,13 +2708,13 @@
             </div>
           </div>
 
-          <div class="alert ${nccnPendingCount || nccnReviewCount ? 'alert-warning' : 'alert-info'} mb-4">
+          <div class="alert ${nccnPendingCount || nccnReviewCount ? 'alert-warning' : 'alert-info'} mb-4" style="position:sticky;top:8px;z-index:30;box-shadow:0 4px 14px rgba(15,23,42,.12)">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-              <div>
-                <p class="font-semibold">NCCN 章節索引：${nccnParsedCount} / ${nccnDocs.length} 份完成${nccnReviewCount ? ' · ' + nccnReviewCount + ' 份待核對' : ''}</p>
-                <p class="text-xs mt-1">${nccnPendingCount ? '尚有 ' + nccnPendingCount + ' 份可在本機解析；既有 PDF 不必重新匯入。' : nccnReviewCount ? '其餘文件已完成；待核對文件可在卡片上查看原因並單獨重試。' : '目前 NCCN PDF 均已建立可查頁碼與治療頁索引。'}</p>
+              <div class="min-w-0 flex-1">
+                <p class="font-semibold">精細療程索引：${nccnParsedCount} / ${nccnDocs.length} 份完成${nccnReviewCount ? ' · ' + nccnReviewCount + ' 份將重試' : ''}</p>
+                <p class="text-xs mt-1">${nccnPendingCount ? '按一次會依序升級全部 ' + nccnPendingCount + ' 份；不必逐份點文件卡。' : '目前 NCCN PDF 均已完成精細療程索引。'}</p>
               </div>
-              <button type="button" class="btn btn-primary btn-sm" id="parse-all-nccn-btn" style="width:auto" ${nccnPendingCount ? '' : 'disabled'}>${nccnPendingCount ? '升級／解析全部 NCCN' : '沒有待解析文件'}</button>
+              <button type="button" class="btn btn-primary btn-sm" id="parse-all-nccn-btn" style="width:auto;min-width:160px" ${nccnPendingCount ? '' : 'disabled'}>${nccnPendingCount ? '一鍵升級 ' + nccnPendingCount + ' 份' : '全部已完成'}</button>
             </div>
           </div>
 
@@ -2742,6 +2749,7 @@
 
         listEl.innerHTML = filtered.map(doc => {
           const tags = doc.cancerIds.map(cid => `<span class="tag tag-category">${esc(nameMap[cid] || cid)}</span>`).join(' ');
+          const redirectGuidelines = doc.nccnStructure?.redirectGuidelines || [];
           return `
             <div class="card">
               <div class="flex-between gap-2 mb-2">
@@ -2754,7 +2762,7 @@
                   <p class="text-xs text-gray-500 mt-1">${esc(doc.source)} · ${esc(doc.version)}${doc.verifiedAt ? ` · 已確認 ${esc(doc.verifiedAt)}` : ''}</p>
                   ${isStaleDoc(doc) ? `<p class="text-xs mt-1" style="color:var(--amber-700)">⏰ 超過 6 個月未確認版本 <button class="text-xs" style="color:var(--primary-600);font-weight:500;border:none;background:none;cursor:pointer" onclick="window._verifyDoc('${doc.id}')">確認為最新</button></p>` : ''}
                   ${doc.nhiExtraction ? `<p class="text-xs mt-1" style="color:var(--blue-700)">健保解析：${doc.nhiExtraction.noteCount || 0} 筆資料 · ${doc.nhiExtraction.cancerCount || 0} 個癌別 · ${esc(doc.nhiExtraction.extractedAt || '')}</p>` : ''}
-                  ${doc.nccnStructure ? '<p class="text-xs mt-1" style="color:var(--blue-700)">NCCN 索引：' + (doc.nccnStructure.sections?.length || 0) + ' 個章節頁 · ' + (doc.nccnStructure.treatmentPages?.length || 0) + ' 個治療相關頁 · ' + esc(doc.nccnStructure.version || doc.version || '') + '</p>' : ''}
+                  ${redirectGuidelines.length ? `<p class="text-xs mt-1" style="color:var(--amber-700)">NCCN 分拆公告：真正指引為 ${esc(redirectGuidelines.join('、'))}；此公告無需解析。</p>` : doc.nccnStructure ? '<p class="text-xs mt-1" style="color:var(--blue-700)">NCCN 索引：' + (doc.nccnStructure.sections?.length || 0) + ' 個章節頁 · ' + (doc.nccnStructure.treatmentPages?.length || 0) + ' 個治療相關頁 · ' + esc(doc.nccnStructure.version || doc.version || '') + '</p>' : ''}
                   ${doc.nccnParseError ? '<p class="text-xs mt-1" style="color:var(--amber-700)">NCCN 待核對：' + esc(doc.nccnParseError.message || '無法建立章節索引') + '</p>' : ''}
                 </div>
               </div>
@@ -2768,7 +2776,7 @@
                 <button class="btn btn-ghost btn-sm text-red-500" onclick="window._deleteDoc('${doc.id}')">刪除</button>
               </div>
               ${doc.storageKey && NHI_PARSER.isNhiDocument(doc) && !doc.archived ? `<button class="btn btn-secondary btn-sm mt-3" onclick="window._parseNhiDoc('${doc.id}')">${doc.nhiExtraction ? '重新解析健保規定' : '解析健保規定'}</button>` : ''}
-              ${doc.storageKey && NCCN_PARSER.isNccnDocument(doc) && !doc.archived ? '<button class="btn btn-secondary btn-sm mt-3" onclick="window._parseNccnDoc(\'' + doc.id + '\')">' + (isCurrentNccnStructure(doc) ? '重新解析精細療程' : doc.nccnStructure ? '升級精細療程解析' : '解析 NCCN 精細療程') + '</button>' : ''}
+              ${doc.storageKey && NCCN_PARSER.isNccnDocument(doc) && !doc.archived && doc.nccnParseError ? '<button class="btn btn-secondary btn-sm mt-3" onclick="window._parseNccnDoc(\'' + doc.id + '\')">重試此份 NCCN</button>' : ''}
             </div>
           `;
         }).join('');
@@ -2787,12 +2795,13 @@
 
       const showNhiParseModal = (title, body, busy = true) => {
         document.getElementById('nhi-parse-modal')?.remove();
+        const returnScrollY = window.scrollY;
         const wrapper = document.createElement('div');
         wrapper.id = 'nhi-parse-modal';
         wrapper.className = 'modal-overlay';
         wrapper.innerHTML = `<div class="modal-content"><h2 class="text-xl font-bold mb-3">${esc(title)}</h2><div id="nhi-parse-body">${body}</div>${busy ? '' : '<button class="btn btn-primary mt-4" id="nhi-parse-close">完成</button>'}</div>`;
         document.body.appendChild(wrapper);
-        document.getElementById('nhi-parse-close')?.addEventListener('click', () => { wrapper.remove(); navigate('/pdf-library'); });
+        document.getElementById('nhi-parse-close')?.addEventListener('click', async () => { wrapper.remove(); await renderPdfLibrary(app); requestAnimationFrame(() => window.scrollTo(0, returnScrollY)); });
         return wrapper;
       };
 
@@ -2805,7 +2814,7 @@
           workerUrl: new URL('./vendor/pdf.worker.min.mjs', location.href).href,
           onProgress,
         });
-        if (!result.sections.length) throw new Error('沒有辨識到 NCCN 章節代碼；PDF 可能是掃描檔或版面不支援');
+        if (!result.sections.length && !result.redirectGuidelines?.length) throw new Error('沒有辨識到 NCCN 章節代碼；PDF 可能是掃描檔或版面不支援');
         await dbPut('documents', { ...doc, version: result.version || doc.version, pageCount: result.pageCount, nccnStructure: result, nccnParseError: null });
         return result;
       };
@@ -2820,7 +2829,8 @@
             const body = modal.querySelector('#nhi-parse-body');
             if (body) body.innerHTML = '<p class="text-sm text-gray-700">正在擷取第 ' + pageNumber + ' / ' + pageCount + ' 頁</p><div style="height:8px;background:var(--gray-100);border-radius:4px;overflow:hidden;margin-top:10px"><div style="height:100%;width:' + Math.round(pageNumber / pageCount * 100) + '%;background:var(--primary-500)"></div></div>';
           });
-          showNhiParseModal('NCCN 指引解析完成', '<div class="alert alert-info"><p class="font-semibold">已建立 ' + result.sections.length + ' 個章節頁索引</p><p class="text-xs mt-1">其中 ' + result.treatmentPages.length + ' 頁與治療、系統治療、手術或放療相關。</p></div>', false);
+          const resultHtml = result.status === 'redirect_notice' ? '<div class="alert alert-info"><p class="font-semibold">這是 NCCN 分拆公告，無需建立療程索引</p><p class="text-xs mt-1">真正指引：' + esc(result.redirectGuidelines.join('、')) + '</p></div>' : '<div class="alert alert-info"><p class="font-semibold">已建立 ' + result.sections.length + ' 個章節頁索引</p><p class="text-xs mt-1">其中 ' + result.treatmentPages.length + ' 頁具有可用療程摘要。</p></div>';
+          showNhiParseModal('NCCN 指引解析完成', resultHtml, false);
         } catch (error) {
           const message = error?.message || '解析失敗';
           await dbPut('documents', { ...doc, nccnParseError: { message, checkedAt: new Date().toISOString() } });
@@ -2829,7 +2839,7 @@
       };
 
       window._parseAllNccnDocs = async () => {
-        const targets = nccnDocs.filter(doc => !isCurrentNccnStructure(doc) && !doc.nccnParseError);
+        const targets = nccnDocs.filter(doc => !isCurrentNccnStructure(doc));
         if (!targets.length) { showToast('目前 NCCN PDF 均已完成解析'); return; }
         if (!confirm('開始依序解析 ' + targets.length + ' 份 NCCN PDF？全程只在本機進行，請保持 App 開啟。')) return;
         const modal = showNhiParseModal('建立 NCCN 章節索引', '<p class="text-sm text-gray-600">準備讀取 PDF…</p>');
