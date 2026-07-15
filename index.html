@@ -77,6 +77,19 @@
     .alert-warning { background: var(--amber-50); border: 1px solid var(--amber-200); color: var(--amber-800); }
     .alert-info { background: var(--blue-50); border: 1px solid var(--blue-100); color: var(--blue-800); }
     .alert-success { background: var(--green-50); border: 1px solid var(--green-100); color: var(--green-800); }
+    .nccn-quality { margin: 0 -16px 16px; padding: 16px; background: #fff; border-top: 1px solid var(--gray-200); border-bottom: 1px solid var(--gray-200); }
+    .quality-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--gray-200); border: 1px solid var(--gray-200); border-radius: 8px; overflow: hidden; }
+    .quality-stat { min-width: 0; padding: 10px; background: #fff; }
+    .quality-stat strong { display: block; font-size: 18px; color: var(--gray-900); }
+    .quality-stat span { display: block; margin-top: 2px; font-size: 12px; color: var(--gray-500); }
+    .quality-modalities { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 12px; }
+    .quality-modality { min-width: 0; padding: 8px 4px; border-radius: 6px; background: var(--gray-50); text-align: center; }
+    .quality-modality strong, .quality-modality span { display: block; }
+    .quality-modality strong { font-size: 14px; color: var(--gray-800); }
+    .quality-modality span { margin-top: 2px; font-size: 11px; color: var(--gray-500); overflow-wrap: anywhere; }
+    .app-update-banner { position: fixed; top: calc(env(safe-area-inset-top) + 8px); left: 50%; transform: translateX(-50%); z-index: 80; width: calc(100% - 24px); max-width: 456px; padding: 12px; border: 1px solid var(--primary-200); border-radius: 8px; background: #fff; box-shadow: 0 8px 24px rgba(17,24,39,0.16); display: flex; align-items: center; gap: 10px; }
+    .app-update-banner p { flex: 1; min-width: 0; font-size: 14px; color: var(--gray-800); }
+    .app-update-banner .btn { width: auto; flex-shrink: 0; }
     .tag { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 6px; background: var(--gray-100); color: var(--gray-600); }
     .tag-required { background: #fee2e2; color: #991b1b; }
     .tag-category { background: var(--blue-50); color: var(--blue-700); }
@@ -198,9 +211,16 @@
 <body>
   <div id="app"></div>
 
+  <div id="app-update-banner" class="app-update-banner hidden" role="status" aria-live="polite">
+    <p>有新版 App 可用，更新後會保留本機資料。</p>
+    <button type="button" class="btn btn-primary btn-sm" id="app-update-btn">更新</button>
+  </div>
+
   <!-- Toast -->
   <div id="toast" class="toast hidden"></div>
 
+  <script src="./app-version.js"></script>
+  <script src="./guideline-quality.js"></script>
   <script src="./clinical-templates.js"></script>
   <script src="./clinical-matcher.js"></script>
   <script src="./nhi-parser.js"></script>
@@ -210,6 +230,7 @@
     // ========== Database ==========
     const DB_NAME = 'OncologyGuidelineDB';
     const DB_VERSION = 1;
+    const APP_VERSION = window.ONCOLOGY_APP_VERSION || 'unknown';
     let db;
 
     function openDB() {
@@ -689,6 +710,9 @@
       Array.isArray(doc?.nccnStructure?.treatmentPages);
     const nccnTreatmentMatches = (documents, fields) => {
       return window.CLINICAL_MATCHER.matchTreatmentPages(documents, fields);
+    };
+    const nccnTreatmentDiagnosis = (documents, fields) => {
+      return window.CLINICAL_MATCHER.diagnoseTreatmentMatch(documents, fields);
     };
     const nccnClinicalConflicts = (cancerId, fields) => {
       const warnings = [];
@@ -1414,7 +1438,8 @@
       const docs = await dbGetAll('documents');
       const currentDocs = docs.filter(doc => doc.current && !doc.archived);
       const coveredCardIds = new Set(currentDocs.flatMap(doc => doc.cancerIds || []));
-      const currentNccnGuidelines = currentDocs.map(nccnGuidelineForDocument).filter(Boolean);
+      const currentNccnDocs = currentDocs.filter(doc => nccnGuidelineForDocument(doc));
+      const currentNccnGuidelines = currentNccnDocs.map(nccnGuidelineForDocument).filter(Boolean);
       const currentNccnGuidelineIds = new Set(currentNccnGuidelines.map(guideline => guideline.id));
       const missingNccnGuidelines = NCCN_GUIDELINES.filter(guideline => !currentNccnGuidelineIds.has(guideline.id));
       const coveredNccnCardIds = new Set(currentNccnGuidelines.flatMap(guideline => guideline.cardIds));
@@ -1424,6 +1449,9 @@
       const missingNccnSummary = missingNccnGuidelineCount > 0 && missingNccnGuidelineCount <= 5
         ? `；待匯入：${missingNccnGuidelines.map(guideline => esc(guideline.title)).join('、')}`
         : missingNccnGuidelineCount ? `；尚有 ${missingNccnGuidelineCount} 份未辨識或未匯入` : '';
+      const qualitySummary = window.GUIDELINE_QUALITY.summarize(currentNccnDocs);
+      const qualityAttentionCount = qualitySummary.review + qualitySummary.pending + qualitySummary.failed;
+      const qualityAttentionNames = qualitySummary.attention.slice(0, 3).map(item => item.doc.title || item.doc.fileName).filter(Boolean);
       const staleCount = docs.filter(isStaleDoc).length;
       // 備份提醒：有匯入文件才提醒（代表已有實際資料）
       const lastBackupAt = localStorage.getItem('lastBackupAt');
@@ -1444,7 +1472,26 @@
               placeholder="搜尋癌別、英文名或同義詞..." />
             <button id="search-clear" class="search-clear hidden">✕</button>
           </div>
-          <div class="alert ${missingNccnGuidelineCount ? 'alert-warning' : 'alert-info'}">${missingNccnGuidelineCount ? '⚠️' : '✅'} NCCN 目前版本：已辨識 <strong>${currentNccnGuidelineIds.size} / ${NCCN_GUIDELINES.length}</strong> 份指引，覆蓋 <strong>${coveredNccnCount} / ${expectedNccnCardIds.size}</strong> 個對應癌別${missingNccnSummary}</div>
+          <section class="nccn-quality" aria-labelledby="nccn-quality-title">
+            <div class="flex-between mb-3" style="gap:8px">
+              <div><h2 id="nccn-quality-title" class="font-semibold text-gray-800">NCCN 指引品質總覽</h2><p class="text-xs text-gray-500 mt-1">PDF、指引系列與癌別是不同計數</p></div>
+              <button type="button" class="btn btn-ghost btn-sm" style="width:auto;white-space:nowrap" onclick="navigate('/pdf-library')">查看文件</button>
+            </div>
+            <div class="quality-grid">
+              <div class="quality-stat"><strong>${currentNccnDocs.length}</strong><span>本機 NCCN PDF</span></div>
+              <div class="quality-stat"><strong>${currentNccnGuidelineIds.size} / ${NCCN_GUIDELINES.length}</strong><span>NCCN 指引系列</span></div>
+              <div class="quality-stat"><strong>${coveredNccnCount} / ${expectedNccnCardIds.size}</strong><span>對應癌別覆蓋</span></div>
+              <div class="quality-stat"><strong>${qualitySummary.ready} / ${qualitySummary.total - qualitySummary.redirect}</strong><span>解析可用 PDF</span></div>
+            </div>
+            <div class="quality-modalities" aria-label="已擷取療程選項">
+              <div class="quality-modality"><strong>${qualitySummary.modalities.surgery}</strong><span>手術</span></div>
+              <div class="quality-modality"><strong>${qualitySummary.modalities.radiation}</strong><span>放療</span></div>
+              <div class="quality-modality"><strong>${qualitySummary.modalities.systemic}</strong><span>藥物</span></div>
+              <div class="quality-modality"><strong>${qualitySummary.modalities.followup}</strong><span>追蹤</span></div>
+            </div>
+            ${qualityAttentionCount ? `<div class="alert alert-warning mt-3" style="margin-bottom:0"><strong>${qualityAttentionCount} 份需要處理</strong>${qualitySummary.failed ? ` · ${qualitySummary.failed} 份解析失敗` : ""}${qualitySummary.pending ? ` · ${qualitySummary.pending} 份待解析` : ""}${qualitySummary.review ? ` · ${qualitySummary.review} 份需核對` : ""}${qualityAttentionNames.length ? `<p class="text-xs mt-1">${esc(qualityAttentionNames.join("、"))}${qualityAttentionCount > qualityAttentionNames.length ? " 等" : ""}</p>` : ""}</div>` : `<div class="alert alert-success mt-3" style="margin-bottom:0">目前已解析文件皆可建立療程索引</div>`}
+            ${missingNccnGuidelineCount ? `<p class="text-xs mt-3" style="color:var(--amber-700)">尚缺 ${missingNccnGuidelineCount} 個指引系列${missingNccnSummary}</p>` : ""}
+          </section>
           ${staleCount > 0 ? `<div class="alert alert-warning" style="cursor:pointer" onclick="navigate('/pdf-library')">⏰ 有 <strong>${staleCount}</strong> 份指引超過 6 個月未確認版本，點此前往文件庫</div>` : ''}
           ${needBackup ? `<div class="alert alert-info" style="cursor:pointer" onclick="navigate('/settings')">💾 ${backupDays === null ? '尚未匯出過備份' : '已 ' + backupDays + ' 天未備份'}，點此前往設定頁備份</div>` : ''}
           <div id="search-results" class="hidden"></div>
@@ -1742,6 +1789,10 @@
       const unfilledPf = queryPrecisionFields.filter(field => !hasPfValue(field));
       const parsedNccnDocs = currentDocs.filter(isUsableNccnStructure);
       const nccnMatches = nccnTreatmentMatches(parsedNccnDocs, queryPrecisionFields);
+      const nccnDiagnosis = nccnTreatmentDiagnosis(parsedNccnDocs, queryPrecisionFields);
+      const nccnDiagnosticFields = nccnDiagnosis.suggestedFields || [];
+      const nccnDiagnosisFeatureLabels = nccnDiagnosis.positiveFeatures.map(item => window.CLINICAL_MATCHER.featureLabel(item.key));
+      const nccnDiagnosisUnmatchedLabels = nccnDiagnosis.unmatchedFeatures.map(item => window.CLINICAL_MATCHER.featureLabel(item.key));
       const nccnConflicts = nccnClinicalConflicts(card.id, queryPrecisionFields);
       // 章節與 checklist 依情境過濾；健保條件全部保留並標示符合、未知或不符合。
       const pfMap = buildPfMap(queryPrecisionFields);
@@ -1859,7 +1910,13 @@
             ${nccnMatches.length ? `
               <div class="alert alert-info mb-3"><p class="font-semibold">依目前條件找到 ${nccnMatches.length} 個優先查閱頁面</p><p class="text-xs mt-1">以下是 PDF 自動擷取的指引候選選項；請以原頁流程、腳註及完整病況確認，不代表系統已替您決定治療。</p></div>
               <div class="space-y-3">${nccnMatches.map(renderNccnTreatmentMatch).join('')}</div>
-            ` : parsedNccnDocs.length ? '<div class="bg-gray-50 rounded p-3"><p class="text-sm text-gray-500">已解析指引，但目前輸入條件尚未找到明確對應治療頁；請補充病期、線別、病理分類或生物標記。</p></div>' :
+            ` : parsedNccnDocs.length ? `<div class="bg-gray-50 rounded p-3">
+                <p class="font-semibold text-gray-800">${nccnDiagnosis.code === "insufficient_conditions" ? "尚缺可用的病程條件" : "目前條件沒有對應到療程索引"}</p>
+                ${nccnDiagnosisFeatureLabels.length ? `<p class="text-sm text-gray-600 mt-2">已辨識：${esc(nccnDiagnosisFeatureLabels.join("、"))}</p>` : `<p class="text-sm text-gray-600 mt-2">目前輸入尚未形成病程、線別或生物標記條件。</p>`}
+                ${nccnDiagnosisUnmatchedLabels.length ? `<p class="text-sm mt-2" style="color:var(--amber-700)">索引未找到：${esc(nccnDiagnosisUnmatchedLabels.join("、"))}</p>` : ""}
+                ${nccnDiagnosticFields.length ? `<div id="nccn-diagnostic-panel" class="nhi-query-panel mt-3"><p class="text-sm font-semibold text-gray-700 mb-3">可優先補填</p>${nccnDiagnosticFields.map(renderNhiQueryField).join("")}<button type="button" class="btn btn-primary" id="nccn-diagnostic-submit-btn">重新查詢療程</button></div>` : ""}
+                ${jumpDoc?.storageKey ? `<button type="button" class="btn btn-ghost btn-sm mt-2" onclick="openPdf('${jumpDoc.storageKey}')">直接開啟原始指引核對</button>` : ""}
+              </div>` :
               hasDocs ? `<div class="bg-gray-50 rounded p-3"><p class="text-sm text-gray-600">PDF 已匯入，但尚未建立內部章節索引。</p><button class="btn btn-secondary btn-sm mt-3" onclick="navigate('/pdf-library')">前往解析 NCCN 指引</button></div>` :
               '<p class="text-sm text-gray-400">請先匯入 NCCN PDF。</p>'}
           </div>
@@ -1949,6 +2006,23 @@
           else sessionStorage.setItem(key, treatmentKey);
           handleRoute({ preserveScroll: true });
         });
+      });
+
+      document.getElementById('nccn-diagnostic-submit-btn')?.addEventListener('click', () => {
+        const panel = document.getElementById('nccn-diagnostic-panel');
+        if (!panel) return;
+        const controls = [...panel.querySelectorAll('[data-nhi-query-field]')];
+        const currentState = readNhiQueryState(card.id);
+        const values = { ...currentState.values };
+        nccnDiagnosticFields.forEach((field) => {
+          const fieldControls = controls.filter(control => control.dataset.nhiQueryField === field.id);
+          values[field.id] = field.type === 'multi_select'
+            ? fieldControls.filter(control => control.checked).map(control => control.value)
+            : (fieldControls[0]?.value || '').trim();
+        });
+        writeNhiQueryState(card.id, { fresh: currentState.fresh, values });
+        showToast('已更新條件並重新查詢療程');
+        handleRoute({ preserveScroll: true });
       });
 
       document.getElementById('nhi-query-open-btn')?.addEventListener('click', () => {
@@ -3383,7 +3457,7 @@
           <div class="card mb-4">
             <h2 class="font-semibold text-gray-800 mb-3">ℹ️ 關於</h2>
             <div class="space-y-2 text-sm text-gray-600">
-              <p>App 版本：1.0.0</p>
+              <p>App 版本：${esc(APP_VERSION)}</p>
               <p>名稱：腫瘤指引快速查</p>
               <p>用途：個人本機腫瘤指引查閱與防漏工具</p>
             </div>
@@ -3402,7 +3476,7 @@
           </div>
 
           <div class="text-center text-xs text-gray-400 mt-8 mb-4">
-            <p>腫瘤指引快速查 v1.0.0</p>
+            <p>腫瘤指引快速查 v${esc(APP_VERSION)}</p>
             <p class="mt-1">Vanilla JS + IndexedDB + PWA</p>
           </div>
           ${renderNav('settings')}
@@ -3560,13 +3634,35 @@
 
     init();
 
-    // Register Service Worker
+    // Register Service Worker and make updates explicit on installed PWAs.
     if ('serviceWorker' in navigator) {
+      let applyingAppUpdate = false;
+      const showAppUpdate = (registration) => {
+        const banner = document.getElementById('app-update-banner');
+        const button = document.getElementById('app-update-btn');
+        if (!banner || !button) return;
+        banner.classList.remove('hidden');
+        button.onclick = () => {
+          applyingAppUpdate = true;
+          if (registration.waiting) registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+          else window.location.reload();
+        };
+      };
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (applyingAppUpdate) window.location.reload();
+      });
       window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js').then(
-          (reg) => console.log('SW registered:', reg?.scope || 'disabled'),
-          (err) => console.log('SW registration failed:', err)
-        );
+        navigator.serviceWorker.register('./sw.js').then((registration) => {
+          console.log('SW registered:', registration.scope || 'disabled');
+          if (registration.waiting) showAppUpdate(registration);
+          registration.addEventListener('updatefound', () => {
+            const worker = registration.installing;
+            worker?.addEventListener('statechange', () => {
+              if (worker.state === 'installed' && navigator.serviceWorker.controller) showAppUpdate(registration);
+            });
+          });
+          registration.update().catch(() => {});
+        }).catch((err) => console.log('SW registration failed:', err));
       });
     }
   </script>

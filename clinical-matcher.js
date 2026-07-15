@@ -43,6 +43,14 @@
     'extensive-stage-sclc': /extensive[- ]stage/i,
   };
 
+  const DIAGNOSTIC_FIELD_PATTERNS = [
+    /病程情境|疾病情境|病期|分期|stage|BCLC|可切除|轉移|復發|disease setting/i,
+    /治療階段|治療線別|第[一二三]線|line of therapy|treatment line|治療情境/i,
+    /病理|組織|分化|分級|grade|histolog|subtype|亞型/i,
+    /ECOG|performance status|體能/i,
+    /分子|生物標記|基因|突變|表現|marker|mutation|PD-L1|HER2|MMR|MSI/i,
+  ];
+
   function featureMatchesText(key, value) {
     const text = normalize(value);
     if (CONTEXT_PATTERNS[key]) return CONTEXT_PATTERNS[key].test(text);
@@ -211,21 +219,57 @@
     if (feature.key === 'sm-ahn') return /ASSOCIATED HEMATOLOGIC|\bAHN\b/i.test(page.title || '');
     return false;
   }
+  function featureMatchesPage(doc, page, feature) {
+    const pageKeywords = new Set((page.keywords || []).map(value => String(value).toLowerCase()));
+    const hccDocument = isHccDocument(doc);
+    if (hccDocument && page.sectionCode === 'HCC-C' && feature.key !== 'mixed-hcc-cca') return false;
+    return pageKeywords.has(feature.key) ||
+      (hccDocument && hccFeatureMatchesPage(feature, page, pageKeywords)) ||
+      diseaseSpecificFeatureMatchesPage(feature, page);
+  }
+
+  function diagnosticFieldRank(field) {
+    const label = normalize(field?.label);
+    const rank = DIAGNOSTIC_FIELD_PATTERNS.findIndex(pattern => pattern.test(label));
+    return rank < 0 ? DIAGNOSTIC_FIELD_PATTERNS.length : rank;
+  }
+
+  function diagnoseTreatmentMatch(documents, fields) {
+    const pages = (documents || []).flatMap(doc =>
+      (doc.nccnStructure?.treatmentPages || []).map(page => ({ doc, page }))
+    );
+    const features = extractClinicalFeatures(fields);
+    const positiveFeatures = features.filter(item => item.polarity === 'positive');
+    const suggestedFields = (fields || []).filter(field => !hasValue(field.value))
+      .filter(field => diagnosticFieldRank(field) < DIAGNOSTIC_FIELD_PATTERNS.length)
+      .sort((a, b) => diagnosticFieldRank(a) - diagnosticFieldRank(b))
+      .slice(0, 4);
+
+    if (!pages.length) {
+      return { code: 'no_index', positiveFeatures, unmatchedFeatures: [], suggestedFields };
+    }
+    if (!positiveFeatures.length) {
+      return { code: 'insufficient_conditions', positiveFeatures, unmatchedFeatures: [], suggestedFields };
+    }
+    const unmatchedFeatures = positiveFeatures.filter(feature =>
+      !pages.some(({ doc, page }) => featureMatchesPage(doc, page, feature))
+    );
+    return {
+      code: unmatchedFeatures.length === positiveFeatures.length ? 'no_matching_page' : 'partial_match',
+      positiveFeatures,
+      unmatchedFeatures,
+      suggestedFields,
+    };
+  }
+
   function matchTreatmentPages(documents, fields, limit = 12) {
     const features = extractClinicalFeatures(fields);
     const positive = features.filter(item => item.polarity === 'positive');
     if (!positive.length) return [];
     const matches = [];
     for (const doc of documents || []) {
-      const hccDocument = isHccDocument(doc);
       for (const page of doc.nccnStructure?.treatmentPages || []) {
-        const pageKeywords = new Set((page.keywords || []).map(value => String(value).toLowerCase()));
-        if (hccDocument && page.sectionCode === 'HCC-C' && !positive.some(feature => feature.key === 'mixed-hcc-cca')) continue;
-        const reasons = positive.filter(feature =>
-          pageKeywords.has(feature.key) ||
-          (hccDocument && hccFeatureMatchesPage(feature, page, pageKeywords)) ||
-          diseaseSpecificFeatureMatchesPage(feature, page)
-        ).map(feature => feature.key);
+        const reasons = positive.filter(feature => featureMatchesPage(doc, page, feature)).map(feature => feature.key);
         if (!reasons.length) continue;
         const modality = pageModality(page);
         const score = reasons.length * 4 + pageRoleScore(page.role);
@@ -250,6 +294,7 @@
   window.CLINICAL_MATCHER = Object.freeze({
     extractClinicalFeatures,
     matchTreatmentPages,
+    diagnoseTreatmentMatch,
     optionAssessment,
     featureLabel: (key) => FEATURE_LABELS[key] || String(key || '').toUpperCase(),
   });

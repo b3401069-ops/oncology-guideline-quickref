@@ -1,0 +1,1 @@
+globalThis.ONCOLOGY_APP_VERSION = '2026.07.15.2';

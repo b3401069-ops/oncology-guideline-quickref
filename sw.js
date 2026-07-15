@@ -1,7 +1,11 @@
-const CACHE_NAME = 'oncology-guideline-v22';
+importScripts('./app-version.js');
+
+const CACHE_NAME = 'oncology-guideline-' + globalThis.ONCOLOGY_APP_VERSION;
 const ASSETS = [
   './',
   './index.html',
+  './app-version.js',
+  './guideline-quality.js',
   './clinical-templates.js',
   './clinical-matcher.js',
   './nhi-selector.js',
@@ -20,7 +24,10 @@ self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
   );
-  self.skipWaiting();
+});
+
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
