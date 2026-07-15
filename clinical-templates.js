@@ -545,6 +545,51 @@
         pf('sts-grade', 'FNCLCC grade／適用風險分層', 'text'),
       ],
     },
+    {
+      ids: ['myeloid_lymphoid_eosinophilia_tk_fusions'],
+      checklists: [
+        cl('mlne-fusion', '確認 PDGFRA、PDGFRB、FGFR1、JAK2、FLT3 或 ABL1 類融合／重排'),
+      ],
+      precisionFields: [
+        pf('mlne-fusion', '酪胺酸激酶融合／重排', 'multi_select', ['PDGFRA','PDGFRB','FGFR1','JAK2','FLT3','ABL1-class fusion','其他／待確認']),
+        pf('mlne-presentation', '疾病表現', 'single_select', ['chronic myeloid/lymphoid neoplasm','AML','ALL','mixed phenotype','待確認']),
+      ],
+    },
+    {
+      ids: ['systemic_al_amyloidosis'],
+      checklists: [
+        cl('al-organ', '確認受累器官、心臟分期與治療緊急性', '評估'),
+        cl('al-clone', '確認漿細胞 clone、單株蛋白與相關骨髓檢查'),
+      ],
+      precisionFields: [
+        pf('al-treatment-status', 'AL amyloidosis 治療時點', 'single_select', ['newly diagnosed／first-line','relapsed／previously treated','待確認']),
+        pf('al-hct', '自體 HCT 適用性', 'single_select', ['eligible','not eligible','待確認']),
+        pf('al-cardiac-stage', '心臟分期／風險', 'text'),
+      ],
+    },
+    {
+      ids: ['systemic_mastocytosis'],
+      checklists: [
+        cl('sm-subtype', '確認全身性肥大細胞增生症亞型與器官損害'),
+        cl('sm-kit', '確認 KIT D816V 或其他 KIT 變異'),
+      ],
+      precisionFields: [
+        pf('sm-subtype', 'Systemic mastocytosis 亞型', 'single_select', ['indolent','smoldering','aggressive systemic mastocytosis','mast cell leukemia','SM-AHN／associated hematologic neoplasm','待確認']),
+        pf('sm-kit', 'KIT D816V', 'single_select', ['positive','negative','待檢']),
+      ],
+    },
+    {
+      ids: ['waldenstrom_macroglobulinemia'],
+      checklists: [
+        cl('wm-indication', '確認是否已有症狀或器官損害而需啟動治療', '評估'),
+        cl('wm-molecular', '確認 MYD88 L265P 與適用情境下的 CXCR4'),
+      ],
+      precisionFields: [
+        pf('wm-treatment-status', 'WM 治療時點', 'single_select', ['asymptomatic／observation','symptomatic／first-line','relapsed／previously treated','待確認']),
+        pf('wm-myd88', 'MYD88', 'single_select', ['L265P positive','wild type','待檢']),
+        pf('wm-cxcr4', 'CXCR4', 'single_select', ['mutation positive','wild type','待檢']),
+      ],
+    },
   ];
 
   const normalizeLabel = (value) => String(value || '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
@@ -565,7 +610,7 @@
   ]);
 
   window.CLINICAL_TEMPLATES = Object.freeze({
-    version: 1,
+    version: 2,
     commonChecklists,
     commonPrecisionFields,
     checklistForCancer: (cancerId) => templatesForCancer(cancerId, 'checklists', commonChecklists),

@@ -42,3 +42,26 @@ test('distinguishes recommendation, pathway, principles and workup pages', () =>
   assert.equal(parser.detectPageRole('PRINCIPLES OF SYSTEMIC THERAPY', []), 'principles');
   assert.equal(parser.detectPageRole('WORKUP\nImaging', []), 'workup');
 });
+
+test('maps primary and previously treated wording to treatment lines', () => {
+  assert.ok(parser.pageKeywords('PRIMARY THERAPY FOR NEWLY DIAGNOSED DISEASE').includes('first-line'));
+  assert.ok(parser.pageKeywords('THERAPY FOR PREVIOUSLY TREATED DISEASE').includes('second-line'));
+});
+
+test('recognizes common hematology regimen names as systemic therapy', () => {
+  const option = parser.normalizeTreatmentOption('Bortezomib/Cyclophosphamide/Dexamethasone', {
+    id: 'preferred', label: 'Preferred', pageTypes: ['systemic'],
+  });
+  assert.equal(option.modality, 'systemic');
+  assert.equal(option.needsReview, false);
+});
+
+test('extracts review-labeled drug candidates from long narrative options', () => {
+  const narrative = '\u2022 tebentafusp-tebn (a bispecific protein) or investigator choice of pembrolizumab, ipilimumab, or dacarbazine for metastatic disease when clinically appropriate';
+  const options = parser.extractTreatmentOptions({ rows: [row(500, narrative)] }, ['systemic']);
+  const derived = options.filter(option => option.derivedFromNarrative);
+  for (const label of ['tebentafusp-tebn', 'pembrolizumab', 'ipilimumab', 'dacarbazine']) {
+    assert.ok(derived.some(option => option.label.toLowerCase() === label), label);
+  }
+  assert.ok(derived.every(option => option.sourceNeedsReview && !option.needsReview));
+});

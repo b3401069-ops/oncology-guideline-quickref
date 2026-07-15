@@ -39,6 +39,18 @@
     vaginal_cancer: ['陰道癌'],
   };
 
+  const PARENT_CANCER_IDS = {
+    colon_cancer: ['colorectal_cancer'],
+    rectal_cancer: ['colorectal_cancer'],
+  };
+
+  function expandMatchedCards(matchedCards, cards) {
+    const ids = new Set(matchedCards.map(card => card.id));
+    matchedCards.forEach(card => (PARENT_CANCER_IDS[card.id] || []).forEach(id => ids.add(id)));
+    const cardsById = new Map(cards.map(card => [card.id, card]));
+    return [...ids].map(id => cardsById.get(id)).filter(Boolean);
+  }
+
   const CONDITION_HINTS = [
     ['PD-L1', /PD\s*-?\s*L1/i], ['HER2', /HER\s*-?\s*2/i], ['EGFR', /\bEGFR\b/i],
     ['ALK', /\bALK\b/i], ['ROS1', /\bROS\s*-?\s*1\b/i], ['BRAF', /\bBRAF\b/i],
@@ -160,7 +172,8 @@
     const candidates = [];
     const unmatched = [];
     for (const entry of entries) {
-      const matchedCards = matchCancerCards(`${entry.heading}\n${entry.content}`, cards);
+      const directMatches = matchCancerCards(`${entry.heading}\n${entry.content}`, cards);
+      const matchedCards = expandMatchedCards(directMatches, cards);
       const hints = conditionHints(entry.content);
       const clear = matchedCards.length > 0 && /限|給付|治療|使用|適應症|病患|患者/u.test(entry.content);
       if (!matchedCards.length) {

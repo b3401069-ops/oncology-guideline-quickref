@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const SCHEMA_VERSION = 5;
+  const SCHEMA_VERSION = 7;
   let pdfJsPromise;
   const PAGE_TYPES = [
     ['systemic', /PRINCIPLES OF (?:SYSTEMIC|ANTI-TUMOR)|SYSTEMIC (?:ANTI-TUMOR )?THERAPY/i],
@@ -13,7 +13,7 @@
     ['imaging', /PRINCIPLES OF IMAGING|IMAGING (?:WORKUP|EVALUATION)/i],
     ['followup', /SURVEILLANCE|FOLLOW-UP|FOLLOW UP|MONITORING|POST-TREATMENT/i],
   ];
-  const OPTION_SIGNAL = /\b(?:therapy|chemotherapy|immunotherapy|radiotherapy|resection|surgery|observation|observe|monitoring|surveillance|follow-up|clinical trial|transplant|ablation|embolization|excision|dissection|lobectomy|mastectomy|colectomy|prostatectomy|metastasectomy)\b|\b(?:RT|CRT|PRRT|SBRT|SRS|EBRT|IMRT|ADT|ARPI|SSA)\b|(?:mab|nib|limus|reotide|platin|taxel|mycin|rubicin|citabine|trexate|zolomide|toposide|otecan|lutamide|folfox|folfiri|folfirinox|capox|capeox|chop|abvd|gemox)/i;
+  const OPTION_SIGNAL = /\b(?:therapy|chemotherapy|immunotherapy|radiotherapy|resection|surgery|observation|observe|monitoring|surveillance|follow-up|clinical trial|transplant|ablation|embolization|excision|dissection|lobectomy|mastectomy|colectomy|prostatectomy|metastasectomy)\b|\b(?:RT|CRT|PRRT|SBRT|SRS|EBRT|IMRT|ADT|ARPI|SSA)\b|(?:mab|nib|zomib|fusp|parib|ciclib|toclax|limus|reotide|platin|taxel|mycin|rubicin|citabine|trexate|zolomide|toposide|otecan|lutamide|cycline|asone|amide|azine|mustine|phalan|cristine|blastine|folfox|folfiri|folfirinox|capox|capeox|chop|abvd|gemox)/i;
   const BOILERPLATE = /^(?:Version |NCCN Guidelines|Note:|Table of Contents|Discussion|References?|Preferred$|Other Recommended$|Useful in Certain Circumstances$|All recommendations|PRINCIPLES OF |PLEASE NOTE|Printed by|Copyright)/i;
   const CITATION_LINE = /\bet al\b|J Clin Oncol|N Engl J Med|Lancet|Cancer Res|Ann Oncol|Radiat Oncol|\bdoi\b|\b20\d{2};\d+/i;
   const BULLET = /^[\u0017\u2022\u25ca\u25e6\u25aa\u25cf\u25a0\u25c6\uf0b7]/u;
@@ -98,7 +98,7 @@
   }
   function pageKeywords(text) {
     const terms = [
-      ['first-line', /first[- ]line|initial systemic/i], ['second-line', /second[- ]line|subsequent therapy|progression/i],
+      ['first-line', /first[- ]line|initial systemic|primary (?:systemic )?(?:therapy|treatment)|newly diagnosed/i], ['second-line', /second[- ]line|subsequent therapy|progression|previously treated|relapsed/i],
       ['metastatic', /metastatic|distant metast/i], ['unresectable', /unresectable/i], ['resectable', /\bresectable\b/i],
       ['neoadjuvant', /neoadjuvant|preoperative/i], ['adjuvant', /adjuvant|postoperative/i],
       ['MSI-H/dMMR', /MSI-H|dMMR/i], ['TMB-H', /TMB-H|tumor mutational burden-high/i],
@@ -106,6 +106,8 @@
       ['BRAF', /\bBRAF\b/i], ['BRCA', /\bBRCA1?\/?2?\b/i], ['NTRK', /\bNTRK\b/i], ['RET', /\bRET\b/i],
       ['KRAS', /\bKRAS\b/i], ['ROS1', /\bROS1\b/i], ['MET', /\bMET\b/i], ['FGFR', /\bFGFR[1-4]?\b/i],
       ['IDH', /\bIDH[12]?\b/i], ['NRG1', /\bNRG1\b/i], ['CLDN18.2', /CLDN\s*18\.2/i], ['HRD', /\bHRD\b/i],
+      ['pdgfra', /\bPDGFRA\b/i], ['pdgfrb', /\bPDGFRB\b/i], ['jak2', /\bJAK2\b/i], ['kit', /\bKIT(?:\s+D816V)?\b/i],
+      ['myd88', /\bMYD88\b/i], ['cxcr4', /\bCXCR4\b/i],
       ['FOLR1', /FOLR1|FR\s*alpha|FRα/i], ['PSMA', /\bPSMA\b/i], ['PIK3CA', /\bPIK3CA\b/i],
       ['ESR1', /\bESR1\b/i], ['AKT1', /\bAKT1\b/i], ['PTEN', /\bPTEN\b/i], ['POLE', /\bPOLE\b/i],
       ['FLT3', /\bFLT3\b/i], ['NPM1', /\bNPM1\b/i], ['SSTR', /\bSSTR\b/i], ['Ki-67', /Ki\s*-?\s*67/i],
@@ -173,7 +175,7 @@
     if (/surg|resect|excision|dissection|ectomy|transplant|operative/i.test(text)) return 'surgery';
     if (/radiation|radiotherapy|\bRT\b|SBRT|SRS|EBRT|IMRT|brachy/i.test(text)) return 'radiation';
     if (/surveillance|follow-up|monitoring|observation|restaging/i.test(text)) return 'followup';
-    if (/systemic|chemotherapy|immunotherapy|targeted|endocrine|\bADT\b|\bARPI\b|\bSSA\b|mab|nib|platin|taxel|rubicin|citabine|lutamide/i.test(text)) return 'systemic';
+    if (/systemic|chemotherapy|immunotherapy|targeted|endocrine|\bADT\b|\bARPI\b|\bSSA\b|mab|nib|zomib|fusp|parib|ciclib|toclax|platin|taxel|rubicin|citabine|lutamide|cycline|asone|amide|azine|mustine|phalan|cristine|blastine/i.test(text)) return 'systemic';
     for (const type of ['surgery', 'radiation', 'followup', 'systemic']) if (pageTypes.includes(type)) return type;
     return 'other';
   }
@@ -206,6 +208,25 @@
       modality: classifyModality([metadata.group, metadata.context, label].filter(Boolean).join(' '), metadata.pageTypes || []),
       sourceText,
     };
+  }
+  const DRUG_ENDING = /(?:mab|nib|zomib|fusp|parib|ciclib|toclax|platin|taxel|rubicin|citabine|trexate|zolomide|toposide|otecan|lutamide|reotide|limus|cycline|asone|amide|azine|mustine|phalan|cristine|blastine)$/i;
+  function narrativeDrugCandidates(option) {
+    if (!option?.needsReview || option.modality !== 'systemic' || option.label.length < 100) return [];
+    const tokens = option.label.match(/\b[A-Za-z][A-Za-z0-9]*(?:-[a-z0-9]+)?\b/g) || [];
+    const labels = [];
+    for (const token of tokens) {
+      const stem = token.split('-')[0];
+      if (!DRUG_ENDING.test(stem) || labels.some(label => label.toLowerCase() === token.toLowerCase())) continue;
+      labels.push(token);
+    }
+    return labels.slice(0, 8).map(label => ({
+      ...option,
+      label,
+      needsReview: false,
+      sourceNeedsReview: true,
+      derivedFromNarrative: true,
+      modality: 'systemic',
+    }));
   }
   function parseRecommendationTable(rows, headerIndex, headers) {
     const tableRows = rows.slice(headerIndex + 1).filter(row => row.y > 55);
@@ -327,7 +348,12 @@
     }
     options.push(...fallbackBulletOptions(layout.rows, pageTypes));
     if (!options.length) options.push(...fallbackSignalOptions(layout.rows, pageTypes));
-    return deduplicateOptions(options);
+    const normalized = deduplicateOptions(options);
+    const expanded = [];
+    for (const option of normalized) {
+      expanded.push(option, ...narrativeDrugCandidates(option));
+    }
+    return deduplicateOptions(expanded);
   }
   function detectPageRole(text, options = []) {
     if (options.some(option => typeof option !== 'string' && ['preferred', 'other', 'useful'].includes(option.recommendation))) {

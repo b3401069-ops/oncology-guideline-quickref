@@ -75,3 +75,27 @@ test('ranks direct recommendation pages ahead of principles and workup pages', (
   const matches = matcher.matchTreatmentPages([{ nccnStructure: { treatmentPages: pages } }], [field('病程情境', '轉移／全身性')]);
   assert.equal(matches[0].page.page, 3);
 });
+
+test('trusts parser clinical keywords even when regimen labels do not repeat the setting', () => {
+  const page = {
+    page: 20,
+    role: 'recommendation',
+    title: 'SYSTEMIC THERAPY',
+    types: ['systemic'],
+    keywords: ['metastatic', 'first-line'],
+    options: [{ label: 'Carboplatin + Paclitaxel', modality: 'systemic', recommendation: 'preferred' }],
+  };
+  const fields = [field('Disease setting', 'metastatic'), field('Treatment line', 'first-line')];
+  const matches = matcher.matchTreatmentPages([{ nccnStructure: { treatmentPages: [page] } }], fields);
+  assert.equal(matches[0].page.page, 20);
+});
+
+test('routes MPN subtype values to their NCCN section family', () => {
+  const pages = [
+    { page: 10, sectionCode: 'PV-3', role: 'pathway', title: 'Treatment', options: [{ label: 'Interferon', modality: 'systemic' }] },
+    { page: 12, sectionCode: 'MF-3', role: 'pathway', title: 'Treatment', options: [{ label: 'Momelotinib', modality: 'systemic' }] },
+  ];
+  const matches = matcher.matchTreatmentPages([{ nccnStructure: { treatmentPages: pages } }], [field('MPN subtype', 'PMF')]);
+  assert.equal(matches.length, 1);
+  assert.equal(matches[0].page.sectionCode, 'MF-3');
+});

@@ -34,7 +34,7 @@ async function main() {
     const fullPath = path.join(pdfRoot, file);
     assert.ok(fs.existsSync(fullPath), `Missing ${file}`);
     const result = await parser.extractAndParse(new Blob([fs.readFileSync(fullPath)]), { moduleUrl, workerUrl });
-    assert.equal(result.schemaVersion, 5, `${name}: schema`);
+    assert.equal(result.schemaVersion, 7, `${name}: schema`);
     assert.ok(result.sections.length > 0, `${name}: sections`);
     assert.ok(result.treatmentPages.length > 0, `${name}: treatment pages`);
     assert.ok(result.treatmentPages.some(page => page.options.length > 0), `${name}: options`);
@@ -63,6 +63,18 @@ async function main() {
   assert.ok([...results.values()].some(result => result.treatmentPages.some(page => page.nextSteps.length)), 'No next-step links extracted');
 
   const asDocument = result => ({ nccnStructure: result });
+  const hccDocument = { title: 'Hepatocellular Carcinoma', nccnStructure: results.get('HCC') };
+  for (const [name, fields] of [
+    ['Stage IV', [{ label: '臨床／病理分期或風險分層', value: 'Stage IV' }]],
+    ['BCLC C', [{ label: 'BCLC 分期', value: 'C' }, { label: 'Child-Pugh', value: 'A5' }]],
+  ]) {
+    const hccMatches = matcher.matchTreatmentPages([hccDocument], fields);
+    assert.ok(hccMatches.length > 0, `HCC ${name}: no clinical matches`);
+    assert.equal(hccMatches[0].page.sectionCode, 'HCC-I', `HCC ${name}: systemic recommendations not first`);
+    assert.ok(hccMatches[0].page.options.some(option => /Atezolizumab|Durvalumab|Nivolumab/i.test(option.label)), `HCC ${name}: no drug options`);
+    assert.ok(!hccMatches.some(match => match.page.sectionCode === 'HCC-C'), `HCC ${name}: mixed HCC-CCA leaked into regular HCC`);
+  }
+
   const nsclcMatches = matcher.matchTreatmentPages([asDocument(results.get('NSCLC'))], [
     { label: '病程情境', value: '轉移／全身性' },
     { label: '治療階段／線別', value: '第一線' },

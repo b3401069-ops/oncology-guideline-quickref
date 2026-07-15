@@ -13,6 +13,7 @@
     ['cldn18.2', /CLDN\s*18\.2/i], ['hrd', /\bHRD\b/i], ['folr1', /FOLR1|FR\s*alpha|FRα/i],
     ['psma', /\bPSMA\b/i], ['pik3ca', /\bPIK3CA\b/i], ['esr1', /\bESR1\b/i], ['akt1', /\bAKT1\b/i],
     ['pten', /\bPTEN\b/i], ['pole', /\bPOLE\b/i], ['flt3', /\bFLT3\b/i], ['npm1', /\bNPM1\b/i],
+    ['pdgfra', /\bPDGFRA\b/i], ['pdgfrb', /\bPDGFRB\b/i], ['jak2', /\bJAK2\b/i], ['kit', /\bKIT(?:\s+D816V)?\b/i], ['myd88', /\bMYD88\b/i], ['cxcr4', /\bCXCR4\b/i],
   ];
 
   const FEATURE_LABELS = {
@@ -21,6 +22,8 @@
     neoadjuvant: '術前／誘導', adjuvant: '術後／鞏固', 'poorly differentiated nec': '低分化 NEC',
     'well-differentiated net': '高分化 NET', 'limited-stage-sclc': '侷限期 SCLC',
     'extensive-stage-sclc': '廣泛期 SCLC',
+    'mixed-hcc-cca': '混合型 HCC-CCA',
+    'mpn-pv': 'PV', 'mpn-et': 'ET', 'mpn-mf': 'PMF/pre-PMF',
   };
 
   const CONTEXT_PATTERNS = {
@@ -35,6 +38,7 @@
     adjuvant: /adjuvant|postoperative|consolidation/i,
     'poorly differentiated nec': /poorly differentiated|neuroendocrine carcinoma|\bNEC\b/i,
     'well-differentiated net': /well[- ]differentiated|neuroendocrine tumor|\bNET\b/i,
+    'mixed-hcc-cca': /mixed\s+HCC[- ]CCA|combined hepatocellular[- ]cholangiocarcinoma/i,
     'limited-stage-sclc': /limited[- ]stage/i,
     'extensive-stage-sclc': /extensive[- ]stage/i,
   };
@@ -96,22 +100,36 @@
         const lower = combined.toLowerCase();
 
         if (/轉移|全身性|metastatic/.test(lower)) addFeature(output, 'metastatic', 'positive', field, value);
+        if (/(?:stage|分期)\s*(?:iv|4)(?:[abc])?\b|m1(?!\d)|第四期/i.test(lower)) addFeature(output, 'metastatic', 'positive', field, value);
         if (/局部晚期|不可切除|unresectable/.test(lower)) addFeature(output, 'unresectable', 'positive', field, value);
         if (/初診局限|可切除|resectable/.test(lower) && !/不可切除|unresectable/.test(lower)) addFeature(output, 'resectable', 'positive', field, value);
         if (/復發|recurr/.test(lower)) addFeature(output, 'recurrent', 'positive', field, value);
         if (/治療後追蹤|追蹤|surveillance|follow-up/.test(lower)) addFeature(output, 'followup', 'positive', field, value);
         if (/第一線|first[- ]line/.test(lower)) addFeature(output, 'first-line', 'positive', field, value);
         if (/第二線|第三線|後線|second[- ]line|subsequent/.test(lower)) addFeature(output, 'second-line', 'positive', field, value);
+        if (/primary (?:systemic )?(?:therapy|treatment)|newly diagnosed|previously untreated/.test(lower)) addFeature(output, 'first-line', 'positive', field, value);
+        if (/previously treated|relapsed/.test(lower)) addFeature(output, 'second-line', 'positive', field, value);
         if (/術前|誘導|neoadjuvant|induction/.test(lower)) addFeature(output, 'neoadjuvant', 'positive', field, value);
         if (/術後|鞏固|adjuvant|consolidation/.test(lower)) addFeature(output, 'adjuvant', 'positive', field, value);
         if (/poorly differentiated nec/.test(lower)) addFeature(output, 'poorly differentiated nec', 'positive', field, value);
         if (/well[- ]differentiated net/.test(lower)) addFeature(output, 'well-differentiated net', 'positive', field, value);
+        if (/mixed\s+hcc[- ]cca|combined hepatocellular[- ]cholangiocarcinoma/.test(lower)) addFeature(output, 'mixed-hcc-cca', 'positive', field, value);
         if (/sclc.*侷限期|侷限期.*sclc|limited[- ]stage/.test(lower)) addFeature(output, 'limited-stage-sclc', 'positive', field, value);
         if (/sclc.*廣泛期|廣泛期.*sclc|extensive[- ]stage/.test(lower)) addFeature(output, 'extensive-stage-sclc', 'positive', field, value);
 
         const bclc = /BCLC/i.test(label) ? raw.match(/^(0|A|B|C|D)$/i) : null;
         if (bclc) addFeature(output, 'bclc-' + bclc[1].toLowerCase(), 'positive', field, value);
+        if (/MPN/i.test(label) && /(?:subtype|\u4e9e\u578b)/i.test(label)) {
+          if (/\bPV\b/i.test(raw)) addFeature(output, 'mpn-pv', 'positive', field, value);
+          if (/\bET\b/i.test(raw)) addFeature(output, 'mpn-et', 'positive', field, value);
+          if (/\b(?:PMF|pre-PMF)\b/i.test(raw)) addFeature(output, 'mpn-mf', 'positive', field, value);
+        }
         const ecog = /ECOG/i.test(label) ? raw.match(/^[0-4]$/) : null;
+        if (/mastocytosis/i.test(label)) {
+          if (/aggressive/i.test(raw)) addFeature(output, 'sm-aggressive', 'positive', field, value);
+          if (/mast cell leukemia/i.test(raw)) addFeature(output, 'sm-mcl', 'positive', field, value);
+          if (/associated hematologic|SM-AHN/i.test(raw)) addFeature(output, 'sm-ahn', 'positive', field, value);
+        }
         if (ecog) addFeature(output, 'ecog-' + ecog[0], 'positive', field, value);
 
         for (const [key, pattern] of MARKERS) {
@@ -163,16 +181,51 @@
     return ({ recommendation: 4, pathway: 3, principles: 1, workup: 0, supporting: -1 })[role] ?? 0;
   }
 
+  function isHccDocument(doc) {
+    return /hepatocellular|\bHCC\b/i.test([doc?.title, doc?.fileName, doc?.source, doc?.guidelineName].filter(Boolean).join(' '));
+  }
+  function hccFeatureMatchesPage(feature, page, pageKeywords) {
+    const options = page.options || [];
+    const hasModality = modality => options.some(option => typeof option !== 'string' && option.modality === modality);
+    if (['bclc-0', 'bclc-a'].includes(feature.key)) {
+      return pageKeywords.has('resectable') && hasModality('surgery');
+    }
+    if (feature.key === 'bclc-b') {
+      return pageKeywords.has('unresectable') && options.some(option => /ablation|arterially directed|locoregional|embolization/i.test(optionText(option)));
+    }
+    const isSystemicRecommendation = page.role === 'recommendation' && (page.types?.includes('systemic') || hasModality('systemic'));
+    if (feature.key === 'bclc-c') {
+      return isSystemicRecommendation ||
+        ['HCC-6', 'HCC-H'].includes(page.sectionCode);
+    }
+    return ['metastatic', 'unresectable'].includes(feature.key) && isSystemicRecommendation;
+  }
+
+  function diseaseSpecificFeatureMatchesPage(feature, page) {
+    const code = String(page.sectionCode || '').toUpperCase();
+    if (feature.key === 'mpn-pv') return /^PV-/.test(code);
+    if (feature.key === 'mpn-et') return /^ET-/.test(code);
+    if (feature.key === 'mpn-mf') return /^MF-/.test(code);
+    if (feature.key === 'sm-aggressive') return /AGGRESSIVE SYSTEMIC MASTOCYTOSIS/i.test(page.title || '');
+    if (feature.key === 'sm-mcl') return /MAST CELL LEUKEMIA/i.test(page.title || '');
+    if (feature.key === 'sm-ahn') return /ASSOCIATED HEMATOLOGIC|\bAHN\b/i.test(page.title || '');
+    return false;
+  }
   function matchTreatmentPages(documents, fields, limit = 12) {
     const features = extractClinicalFeatures(fields);
     const positive = features.filter(item => item.polarity === 'positive');
     if (!positive.length) return [];
     const matches = [];
     for (const doc of documents || []) {
+      const hccDocument = isHccDocument(doc);
       for (const page of doc.nccnStructure?.treatmentPages || []) {
         const pageKeywords = new Set((page.keywords || []).map(value => String(value).toLowerCase()));
-        const evidenceText = [page.title, ...(page.options || []).map(optionText)].filter(Boolean).join(' ');
-        const reasons = positive.filter(feature => pageKeywords.has(feature.key) && featureMatchesText(feature.key, evidenceText)).map(feature => feature.key);
+        if (hccDocument && page.sectionCode === 'HCC-C' && !positive.some(feature => feature.key === 'mixed-hcc-cca')) continue;
+        const reasons = positive.filter(feature =>
+          pageKeywords.has(feature.key) ||
+          (hccDocument && hccFeatureMatchesPage(feature, page, pageKeywords)) ||
+          diseaseSpecificFeatureMatchesPage(feature, page)
+        ).map(feature => feature.key);
         if (!reasons.length) continue;
         const modality = pageModality(page);
         const score = reasons.length * 4 + pageRoleScore(page.role);
@@ -190,6 +243,7 @@
       if (selected.length >= limit) break;
       if (!selected.includes(item)) selected.push(item);
     }
+    selected.sort((a, b) => b.score - a.score || a.page.page - b.page.page);
     return selected.slice(0, limit);
   }
 

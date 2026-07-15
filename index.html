@@ -204,6 +204,7 @@
   <script src="./clinical-templates.js"></script>
   <script src="./clinical-matcher.js"></script>
   <script src="./nhi-parser.js"></script>
+  <script src="./nhi-selector.js"></script>
   <script src="./nccn-parser.js"></script>
   <script type="module">
     // ========== Database ==========
@@ -490,6 +491,11 @@
     const NHI_CHAPTER_DOWNLOAD_URL = 'https://www.nhi.gov.tw/ch/np-3397-1.html';
     const NHI_SECTION9_PDF_URL = 'https://www.nhi.gov.tw/ch/dl-55685-99c675b771ab4b2789c891bc8db447ce-1.pdf';
     const NCCN_GUIDELINES_URL = 'https://www.nccn.org/guidelines/category_1';
+    const NCCN_GUIDELINE_TITLE_ALIASES = {
+      '1430': ['DFSP'],
+      '1505': ['Myeloid or Lymphoid Neoplasms with Eosinophilia and Tyrosine Kinase Gene Fusions'],
+      '1437': ['Head and Neck'],
+    };
 
     const NCCN_GUIDELINE_DETAIL_URL = (id) => 'https://www.nccn.org/guidelines/guidelines-detail?category=1&id=' + id;
     // NCCN 有些合併指引會同時涵蓋 App 內多個便於搜尋的細分類。
@@ -588,6 +594,7 @@
       ['1500', 'Wilms Tumor (Nephroblastoma)', 'wilms_tumor'],
     ].map(([id, title, cardId]) => ({
       id,
+      titleAliases: NCCN_GUIDELINE_TITLE_ALIASES[id] || [],
       title,
       cardId,
       cardIds: [...new Set([cardId, ...(NCCN_GUIDELINE_CARD_COVERAGE[id] || [])])],
@@ -677,6 +684,9 @@
     const fieldValueByTemplateKey = (fields, key) => fields.find(field => field.sourceTemplateKey === key)?.value;
     const isCurrentNccnStructure = (doc) =>
       doc?.nccnStructure?.schemaVersion === NCCN_PARSER.schemaVersion;
+    const isUsableNccnStructure = (doc) =>
+      Number(doc?.nccnStructure?.schemaVersion || 0) >= 5 &&
+      Array.isArray(doc?.nccnStructure?.treatmentPages);
     const nccnTreatmentMatches = (documents, fields) => {
       return window.CLINICAL_MATCHER.matchTreatmentPages(documents, fields);
     };
@@ -807,18 +817,11 @@
         ${note.condition ? `<p class="text-xs text-gray-500 mt-2">對應欄位：${esc(condLabel(note.condition))}</p>` : ''}
         ${linked?.storageKey ? `<button class="text-sm text-blue-700 mt-2" style="font-weight:500" onclick="openPdf('${linked.storageKey}', ${Number(note.sourcePageStart) || 1})">📄 開啟給付規定 PDF${note.sourcePageStart ? ' · p.' + esc(note.sourcePageStart) : ''}</button>` : ''}
       </div>`;
-    const normalizeNhiTreatmentName = (value) => String(value || '')
-      .normalize('NFKC').trim().toLowerCase().replace(/\s+/g, ' ');
-    const groupNhiTreatments = (entries) => {
-      const groups = new Map();
-      entries.forEach((entry) => {
-        const label = String(entry.n.label || '').trim() || '未命名藥物／療程';
-        const key = normalizeNhiTreatmentName(label);
-        if (!groups.has(key)) groups.set(key, { key, label, entries: [] });
-        groups.get(key).entries.push(entry);
-      });
-      return [...groups.values()];
-    };
+    const normalizeNhiTreatmentName = window.NHI_SELECTOR.normalizeTreatmentName;
+    const groupNhiTreatments = window.NHI_SELECTOR.groupTreatments;
+    const mergeNccnTreatmentGroups = (nhiGroups, matches) =>
+      window.NHI_SELECTOR.mergeNccnGroups(nhiGroups, matches, nccnOptionAssessment);
+    const nhiNotesForCancer = window.NHI_SELECTOR.notesForCancer;
     const nhiTreatmentSessionKey = (cancerId) => `nhi-treatment:${cancerId}`;
     const nhiQuerySessionKey = (cancerId) => `nhi-query:${cancerId}`;
     const readNhiQueryState = (cancerId) => {
@@ -1234,7 +1237,8 @@
       const normalized = normalizeNccnTitle(value);
       if (!normalized) return null;
       return NCCN_GUIDELINES
-        .map(guideline => ({ guideline, title: normalizeNccnTitle(guideline.title) }))
+        .flatMap(guideline => [guideline.title, ...guideline.titleAliases]
+          .map(title => ({ guideline, title: normalizeNccnTitle(title) })))
         .filter(item => item.title && (` ${normalized} `).includes(` ${item.title} `))
         .sort((a, b) => b.title.length - a.title.length)[0]?.guideline || null;
     }
@@ -1345,10 +1349,25 @@
       }
     }
 
-    function handleRoute() {
+    async function handleRoute(options = {}) {
+      const preserveScroll = options?.preserveScroll === true;
+      const previousScrollY = document.scrollingElement?.scrollTop ?? window.scrollY;
+      const anchorId = options?.anchorId || '';
+      const measuredAnchorTop = document.getElementById(anchorId)?.getBoundingClientRect().top;
+      const anchorTop = Number.isFinite(options?.anchorTop) ? options.anchorTop : measuredAnchorTop;
       parseRoute(getHashPath());
-      render();
-      window.scrollTo(0, 0);
+      await render();
+      const restoreScroll = () => {
+        if (!preserveScroll) { window.scrollTo(0, 0); return; }
+        const anchor = anchorId ? document.getElementById(anchorId) : null;
+        if (anchor && Number.isFinite(anchorTop)) {
+          window.scrollBy(0, anchor.getBoundingClientRect().top - anchorTop);
+        } else {
+          window.scrollTo(0, previousScrollY);
+        }
+      };
+      restoreScroll();
+      setTimeout(restoreScroll, 80);
     }
 
     function navigate(path) {
@@ -1397,10 +1416,14 @@
       const coveredCardIds = new Set(currentDocs.flatMap(doc => doc.cancerIds || []));
       const currentNccnGuidelines = currentDocs.map(nccnGuidelineForDocument).filter(Boolean);
       const currentNccnGuidelineIds = new Set(currentNccnGuidelines.map(guideline => guideline.id));
+      const missingNccnGuidelines = NCCN_GUIDELINES.filter(guideline => !currentNccnGuidelineIds.has(guideline.id));
       const coveredNccnCardIds = new Set(currentNccnGuidelines.flatMap(guideline => guideline.cardIds));
       const expectedNccnCardIds = new Set(NCCN_GUIDELINES.flatMap(guideline => guideline.cardIds));
       const coveredNccnCount = [...expectedNccnCardIds].filter(id => coveredNccnCardIds.has(id)).length;
-      const missingNccnGuidelineCount = NCCN_GUIDELINES.length - currentNccnGuidelineIds.size;
+      const missingNccnGuidelineCount = missingNccnGuidelines.length;
+      const missingNccnSummary = missingNccnGuidelineCount > 0 && missingNccnGuidelineCount <= 5
+        ? `；待匯入：${missingNccnGuidelines.map(guideline => esc(guideline.title)).join('、')}`
+        : missingNccnGuidelineCount ? `；尚有 ${missingNccnGuidelineCount} 份未辨識或未匯入` : '';
       const staleCount = docs.filter(isStaleDoc).length;
       // 備份提醒：有匯入文件才提醒（代表已有實際資料）
       const lastBackupAt = localStorage.getItem('lastBackupAt');
@@ -1421,7 +1444,7 @@
               placeholder="搜尋癌別、英文名或同義詞..." />
             <button id="search-clear" class="search-clear hidden">✕</button>
           </div>
-          <div class="alert ${missingNccnGuidelineCount ? 'alert-warning' : 'alert-info'}">${missingNccnGuidelineCount ? '⚠️' : '✅'} NCCN 目前版本：已辨識 <strong>${currentNccnGuidelineIds.size} / ${NCCN_GUIDELINES.length}</strong> 份指引，覆蓋 <strong>${coveredNccnCount} / ${expectedNccnCardIds.size}</strong> 個對應癌別${missingNccnGuidelineCount ? `；尚有 ${missingNccnGuidelineCount} 份未辨識或未匯入` : ''}</div>
+          <div class="alert ${missingNccnGuidelineCount ? 'alert-warning' : 'alert-info'}">${missingNccnGuidelineCount ? '⚠️' : '✅'} NCCN 目前版本：已辨識 <strong>${currentNccnGuidelineIds.size} / ${NCCN_GUIDELINES.length}</strong> 份指引，覆蓋 <strong>${coveredNccnCount} / ${expectedNccnCardIds.size}</strong> 個對應癌別${missingNccnSummary}</div>
           ${staleCount > 0 ? `<div class="alert alert-warning" style="cursor:pointer" onclick="navigate('/pdf-library')">⏰ 有 <strong>${staleCount}</strong> 份指引超過 6 個月未確認版本，點此前往文件庫</div>` : ''}
           ${needBackup ? `<div class="alert alert-info" style="cursor:pointer" onclick="navigate('/settings')">💾 ${backupDays === null ? '尚未匯出過備份' : '已 ' + backupDays + ' 天未備份'}，點此前往設定頁備份</div>` : ''}
           <div id="search-results" class="hidden"></div>
@@ -1497,7 +1520,7 @@
       const hasDocs = coveredCardIds.has(card.id);
       const expectsNccn = expectedNccnCardIds.has(card.id);
       const statusClass = hasDocs ? 'status-maintained' : 'status-pending';
-      const statusText = hasDocs ? '已有指引' : expectsNccn ? '缺 PDF' : '自訂分類';
+      const statusText = hasDocs ? '已有指引' : expectsNccn ? '待匯入 PDF' : '自訂分類';
       return `
         <div class="cancer-item" onclick="navigate('/cancer/${card.id}')">
           <div class="min-w-0 flex-1">
@@ -1546,7 +1569,7 @@
       const archivedDocs = myDocs.filter(d => d.archived);
 
       const checklists = (await dbGetAll('checklists')).filter(c => c.cancerId === card.id);
-      const nhiNotes = (await dbGetAll('nhiNotes')).filter(n => n.cancerId === card.id);
+      const nhiNotes = nhiNotesForCancer(await dbGetAll('nhiNotes'), card.id);
       const precisionFields = (await dbGetAll('precisionFields')).filter(p => p.cancerId === card.id);
       const jumpDoc = currentDocs.find(d => d.storageKey);
       const pfMap = buildPfMap(precisionFields);
@@ -1644,19 +1667,22 @@
 
           <!-- Precision Fields（填值） -->
           <div class="card section">
-            <h2 class="section-title">🎯 我要更精準</h2>
+            <div class="flex-between">
+              <h2 class="section-title">🎯 我要更精準</h2>
+              ${filledPf.length ? `<button type="button" class="btn btn-ghost btn-sm" style="width:auto" onclick="window._newCase('${card.id}')">清空／新個案</button>` : ''}
+            </div>
             ${precisionFields.length ? `<div class="space-y-3">${precisionFields.map(f => {
               if (f.type === 'multi_select') {
-                return `<div class="form-group"><label class="label">${esc(f.label)}${f.required ? ' *' : ''}</label>
+                return `<div class="form-group" id="precision-field-${esc(f.id)}"><label class="label">${esc(f.label)}${f.required ? ' *' : ''}</label>
                   <div style="display:flex;flex-wrap:wrap;gap:6px">${f.options.map((o, i) => {
                     const on = Array.isArray(f.value) && f.value.includes(o);
                     return `<button type="button" class="tag ${on ? 'tag-category' : ''}" style="cursor:pointer;border:none;padding:6px 12px" onclick="window._togglePfMulti('${f.id}', ${i})">${esc(o)}</button>`;
                   }).join('')}</div></div>`;
               }
               if (f.type === 'text' || f.type === 'number') {
-                return `<div class="form-group"><label class="label">${esc(f.label)}${f.required ? ' *' : ''}</label><input class="input" type="${f.type === 'number' ? 'number' : 'text'}" value="${esc(f.value || '')}" placeholder="（未輸入）" onchange="window._setPfValue('${f.id}', this.value.trim())"></div>`;
+                return `<div class="form-group" id="precision-field-${esc(f.id)}"><label class="label">${esc(f.label)}${f.required ? ' *' : ''}</label><input class="input" type="${f.type === 'number' ? 'number' : 'text'}" value="${esc(f.value || '')}" placeholder="（未輸入）" onchange="window._setPfValue('${f.id}', this.value.trim(), this)"></div>`;
               }
-              return `<div class="form-group"><label class="label">${esc(f.label)}${f.required ? ' *' : ''}</label><select class="input" onchange="window._setPfValue('${f.id}', this.value)">
+              return `<div class="form-group" id="precision-field-${esc(f.id)}"><label class="label">${esc(f.label)}${f.required ? ' *' : ''}</label><select class="input" onchange="window._setPfValue('${f.id}', this.value, this)">
                 <option value="">（未輸入）</option>
                 ${f.options.map(o => `<option value="${esc(o)}" ${f.value === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}
               </select></div>`;
@@ -1704,7 +1730,7 @@
       const currentDocs = docs.filter(d => d.cancerIds?.includes(card.id) && d.current && !d.archived);
       const checklists = (await dbGetAll('checklists')).filter(c => c.cancerId === card.id);
       const precisionFields = (await dbGetAll('precisionFields')).filter(p => p.cancerId === card.id);
-      const nhiNotes = (await dbGetAll('nhiNotes')).filter(n => n.cancerId === card.id);
+      const nhiNotes = nhiNotesForCancer(await dbGetAll('nhiNotes'), card.id);
 
       const hasDocs = currentDocs.length > 0;
       const jumpDoc = currentDocs.find(d => d.storageKey);
@@ -1714,7 +1740,7 @@
       const queryPrecisionFields = applyNhiQueryState(precisionFields, queryState);
       const filledPf = queryPrecisionFields.filter(hasPfValue);
       const unfilledPf = queryPrecisionFields.filter(field => !hasPfValue(field));
-      const parsedNccnDocs = currentDocs.filter(isCurrentNccnStructure);
+      const parsedNccnDocs = currentDocs.filter(isUsableNccnStructure);
       const nccnMatches = nccnTreatmentMatches(parsedNccnDocs, queryPrecisionFields);
       const nccnConflicts = nccnClinicalConflicts(card.id, queryPrecisionFields);
       // 章節與 checklist 依情境過濾；健保條件全部保留並標示符合、未知或不符合。
@@ -1727,7 +1753,8 @@
       const clHidden = clAll.length - clVisible.length;
       const nhiAll = [...nhiNotes].map(n => ({ n, st: nhiConditionState(n.condition, pfMap) }));
       const nhiVisible = nhiAll.sort((a, b) => nhiConditionRank(a.st) - nhiConditionRank(b.st));
-      const treatmentGroups = groupNhiTreatments(nhiVisible);
+      const generalNhiEntries = nhiVisible.filter(window.NHI_SELECTOR.isGeneralNote);
+      const treatmentGroups = mergeNccnTreatmentGroups(groupNhiTreatments(nhiVisible), nccnMatches);
       const selectedTreatmentKey = sessionStorage.getItem(nhiTreatmentSessionKey(card.id));
       const selectedTreatment = treatmentGroups.find(group => group.key === selectedTreatmentKey);
       if (selectedTreatmentKey && !selectedTreatment) sessionStorage.removeItem(nhiTreatmentSessionKey(card.id));
@@ -1786,7 +1813,7 @@
           <div class="nhi-query-overview mb-4">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
               <span class="text-xs text-gray-500 font-medium">本次查詢條件</span>
-              <button type="button" class="btn btn-ghost btn-sm" id="nhi-new-case-btn" style="width:auto;min-height:40px;padding:6px 10px">新個案／清除條件</button>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="window._newCase('${card.id}')" style="width:auto;min-height:40px;padding:6px 10px">清空／新個案</button>
             </div>
             <div class="mt-2" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
               ${filledPf.length ? filledPf.flatMap(field => (Array.isArray(field.value) ? field.value : [field.value]).map(value => `<span class="tag tag-category">${esc(field.label)}：${esc(value)}</span>`)).join('') : '<span class="text-xs text-gray-400">尚未輸入條件</span>'}
@@ -1838,13 +1865,17 @@
           </div>
 
           <div class="card section">
-            <h2 class="section-title">💊 選擇藥物／療程查健保</h2>
+            <div class="flex-between">
+              <h2 class="section-title">💊 選擇藥物／療程查健保</h2>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="window._newCase('${card.id}')" style="width:auto;white-space:nowrap">清空</button>
+            </div>
             ${treatmentGroups.length ? `
               <div class="nhi-treatment-options" role="group" aria-label="藥物或療程">
-                ${treatmentGroups.map(group => `<button type="button" class="nhi-treatment-option" data-nhi-treatment-key="${esc(group.key)}" aria-pressed="${group.key === selectedTreatment?.key}">${esc(group.label)}</button>`).join('')}
+                ${treatmentGroups.map(group => `<button type="button" class="nhi-treatment-option" data-nhi-treatment-key="${esc(group.key)}" aria-pressed="${group.key === selectedTreatment?.key}">${group.fromNccn ? (group.requiresSourceReview ? 'NCCN 核對 · ' : 'NCCN · ') : ''}${esc(group.label)}</button>`).join('')}
               </div>
               ${selectedTreatment ? `
-                ${renderNhiSummary(selectedTreatment.entries.map(({ n }) => n))}
+                ${selectedTreatment.entries.length ? renderNhiSummary(selectedTreatment.entries.map(({ n }) => n)) : '<div class="alert alert-info"><p class="font-semibold">NCCN 指引候選療程</p><p class="text-xs mt-1">尚未在已匯入的健保資料找到同名條目；這不代表沒有給付，請核對最新版給付規定。</p></div>'}
+                ${selectedTreatment.requiresSourceReview ? '<div class="alert alert-warning"><p class="font-semibold">此候選需開啟 NCCN 原頁核對</p><p class="text-xs mt-1">候選來自流程頁或敘述文字，請先確認完整適用條件，再進行健保比對。</p></div>' : ''}
                 ${selectedNhiResultState === 'missing' ? `<div class="nhi-query-status is-warning" aria-live="polite">
                   <p class="font-semibold">資料不足：尚缺 ${selectedUnknownLabels.length} 項必要條件</p>
                   <p class="text-xs mt-1">${esc(selectedUnknownLabels.join('、'))}</p>
@@ -1856,7 +1887,7 @@
                   ${affectedNhiFields.length ? '<button type="button" class="btn btn-secondary btn-sm mt-3" id="nhi-query-open-btn">修改條件</button>' : ''}
                 </div>` : ''}
                 ${selectedNhiResultState === 'matched' ? `<div class="nhi-query-status is-matched" aria-live="polite"><p class="font-semibold">目前輸入資料符合已擷取條件</p><p class="text-xs mt-1">仍需核對完整條文、文件證明與事前審查要求。</p></div>` : ''}
-                ${selectedNhiResultState === 'review' ? `<div class="nhi-query-status" aria-live="polite"><p class="font-semibold">需逐項人工核對限制條件</p></div>` : ''}
+                ${selectedNhiResultState === 'review' && selectedTreatment.entries.length ? `<div class="nhi-query-status" aria-live="polite"><p class="font-semibold">需逐項人工核對限制條件</p></div>` : ''}
                 ${affectedNhiFields.length ? `<div id="nhi-query-panel" class="nhi-query-panel hidden">
                   <h3 class="font-semibold text-gray-800 mb-3">${selectedNhiResultState === 'missing' ? '補填必要條件' : '修改查詢條件'}</h3>
                   ${affectedNhiFields.map(renderNhiQueryField).join('')}
@@ -1868,11 +1899,18 @@
                 ${missingNhiFieldLabels.length ? `<div class="nhi-query-status is-warning"><p class="font-semibold">尚未建立對應欄位</p><p class="text-xs mt-1">${esc(missingNhiFieldLabels.join('、'))}</p><button type="button" class="btn btn-secondary btn-sm mt-3" id="nhi-query-edit-fields-btn">編輯精準欄位</button></div>` : ''}
                 <div class="space-y-2">${selectedTreatment.entries.map(({ n, st }, index) => {
                   const linked = docs.find(d => d.id === n.sourceDocumentId);
-                  const heading = selectedTreatment.entries.length > 1 ? `給付條件 ${index + 1}` : selectedTreatment.label;
+                  const heading = selectedTreatment.entries.length > 1 ? `給付條件 ${index + 1} · ${n.label}` : selectedTreatment.label;
                   return renderNhiNoteCard(n, st, linked, heading);
                 }).join('')}</div>
               ` : '<div class="bg-gray-50 rounded p-3"><p class="text-sm text-gray-500">尚未選擇藥物／療程</p></div>'}
             ` : `<div class="bg-gray-50 rounded p-3"><p class="text-sm text-gray-500">尚未建立藥物／療程健保資料；這不代表沒有給付。</p><button class="btn btn-secondary btn-sm mt-3" onclick="navigate('/cancer/${card.id}/nhi')">新增藥物／療程</button></div>`}
+            ${generalNhiEntries.length ? `<details class="mt-3">
+              <summary class="text-sm text-gray-600" style="cursor:pointer;font-weight:500">一般健保查核提醒（${generalNhiEntries.length}）</summary>
+              <div class="space-y-2 mt-2">${generalNhiEntries.map(({ n, st }) => {
+                const linked = docs.find(d => d.id === n.sourceDocumentId);
+                return renderNhiNoteCard(n, st, linked);
+              }).join('')}</div>
+            </details>` : ''}
           </div>
 
           ${missingItems.length ? `
@@ -1909,16 +1947,10 @@
           const treatmentKey = button.dataset.nhiTreatmentKey;
           if (sessionStorage.getItem(key) === treatmentKey) sessionStorage.removeItem(key);
           else sessionStorage.setItem(key, treatmentKey);
-          handleRoute();
+          handleRoute({ preserveScroll: true });
         });
       });
 
-      document.getElementById('nhi-new-case-btn')?.addEventListener('click', () => {
-        writeNhiQueryState(card.id, { fresh: true, values: {} });
-        sessionStorage.removeItem(nhiTreatmentSessionKey(card.id));
-        showToast('已清除本次查詢條件');
-        handleRoute();
-      });
       document.getElementById('nhi-query-open-btn')?.addEventListener('click', () => {
         const panel = document.getElementById('nhi-query-panel');
         panel?.classList.remove('hidden');
@@ -1945,7 +1977,7 @@
         });
         writeNhiQueryState(card.id, { fresh: currentState.fresh, values });
         showToast('已更新本次查詢條件');
-        handleRoute();
+        handleRoute({ preserveScroll: true });
       });
 
       // 複製為文字（依計畫書第九節輸出格式）
@@ -3479,19 +3511,34 @@
       const items = (await dbGetAll('checklists')).filter(c => c.cancerId === cancerId && c.checked);
       for (const it of items) await dbPut('checklists', { ...it, checked: false });
       showToast('已重設勾選');
-      handleRoute();
+      handleRoute({ preserveScroll: true });
+    };
+    window._newCase = async (cancerId) => {
+      if (!confirm('清除這個癌別目前輸入的病患條件、勾選項目與已選藥物？')) return;
+      const fields = (await dbGetAll('precisionFields')).filter(field => field.cancerId === cancerId && hasPfValue(field));
+      for (const field of fields) await dbPut('precisionFields', { ...field, value: blankPfValue(field) });
+      const checks = (await dbGetAll('checklists')).filter(item => item.cancerId === cancerId && item.checked);
+      for (const item of checks) await dbPut('checklists', { ...item, checked: false });
+      clearNhiQueryState(cancerId);
+      sessionStorage.removeItem(nhiTreatmentSessionKey(cancerId));
+      showToast('已清空，可開始新個案');
+      handleRoute({ preserveScroll: true });
     };
     // 精準欄位填值（單選／文字／數字）；改值後重繪，讓條件連動即時反映
-    window._setPfValue = async (id, value) => {
+    window._setPfValue = async (id, value, el) => {
+      const anchorId = 'precision-field-' + id;
+      const anchorTop = el?.closest('.form-group')?.getBoundingClientRect().top;
       const f = await dbGet('precisionFields', id);
       if (f) {
         await dbPut('precisionFields', { ...f, value });
         clearNhiQueryState(f.cancerId);
-        handleRoute();
+        await handleRoute({ preserveScroll: true, anchorId, anchorTop });
       }
     };
     // 精準欄位多選：以選項 index 切換，避免特殊字元進到 onclick
     window._togglePfMulti = async (id, optIdx) => {
+      const anchorId = 'precision-field-' + id;
+      const anchorTop = document.getElementById(anchorId)?.getBoundingClientRect().top;
       const f = await dbGet('precisionFields', id);
       if (!f) return;
       const opt = f.options[optIdx];
@@ -3500,7 +3547,7 @@
       if (i >= 0) cur.splice(i, 1); else cur.push(opt);
       await dbPut('precisionFields', { ...f, value: cur });
       clearNhiQueryState(f.cancerId);
-      handleRoute();
+      await handleRoute({ preserveScroll: true, anchorId, anchorTop });
     };
     // 指引版本確認為最新
     window._verifyDoc = async (id) => {
@@ -3508,7 +3555,7 @@
       if (!d) return;
       await dbPut('documents', { ...d, verifiedAt: new Date().toISOString().split('T')[0] });
       showToast('已確認為最新版本');
-      handleRoute();
+      handleRoute({ preserveScroll: true });
     };
 
     init();
