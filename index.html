@@ -221,9 +221,12 @@
 
   <script src="./app-version.js"></script>
   <script src="./guideline-quality.js"></script>
+  <script src="./backup-format.js"></script>
   <script src="./clinical-templates.js"></script>
   <script src="./clinical-matcher.js"></script>
+  <script src="./clinical-scenarios.js"></script>
   <script src="./nhi-parser.js"></script>
+  <script src="./nhi-versioning.js"></script>
   <script src="./nhi-selector.js"></script>
   <script src="./nccn-parser.js"></script>
   <script type="module">
@@ -827,6 +830,14 @@
         : '目前資料不足，不能推論為沒有給付；請連結最新版健保規定並完成限制條件。';
       return `<div class="alert ${hasRelated ? 'alert-info' : 'alert-warning'} mb-3"><p class="font-semibold">${title}</p><p class="text-xs mt-1">${detail}</p></div>`;
     };
+    const renderNhiSourceMeta = (note) => {
+      const parts = [];
+      const date = window.NHI_VERSIONING.ruleDate(note);
+      if (date) parts.push('規定日期：' + date);
+      if (note.sourceVersion) parts.push('版本：' + note.sourceVersion);
+      if (note.sourcePageStart) parts.push('p.' + note.sourcePageStart + (note.sourcePageEnd && note.sourcePageEnd !== note.sourcePageStart ? '–' + note.sourcePageEnd : ''));
+      return parts.length ? `<p class="text-xs text-gray-500 mt-2">${esc(parts.join(' · '))}</p>` : '';
+    };
     const renderNhiNoteCard = (note, state, linked, heading = note.label) => `
       <div class="bg-blue-50 rounded-lg p-3" style="${state === 'matched' ? 'outline:2px solid var(--primary-400)' : ''}">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">
@@ -836,6 +847,7 @@
           </div>
           ${renderNhiStateTag(state, note.condition)}
         </div>
+        ${renderNhiSourceMeta(note)}
         ${note.extractedConditionHints?.length ? `<p class="text-xs text-gray-500 mt-2">條文涉及：${esc(note.extractedConditionHints.join('、'))}</p>` : ''}
         ${renderNhiRestrictions(note.content)}
         ${note.condition ? `<p class="text-xs text-gray-500 mt-2">對應欄位：${esc(condLabel(note.condition))}</p>` : ''}
@@ -1151,33 +1163,28 @@
     // ========== Backup ==========
     const BACKUP_STORES = ['cancerCards','documents','checklists','precisionFields','nhiNotes'];
 
-    async function exportBackup(includePdfs) {
+    async function exportBackup() {
       const [cancerCards, documents, checklists, precisionFields, nhiNotes] = await Promise.all([
         dbGetAll('cancerCards'), dbGetAll('documents'), dbGetAll('checklists'),
         dbGetAll('precisionFields'), dbGetAll('nhiNotes')
       ]);
-      if (!includePdfs) {
-        return {
-          version: 1, exportedAt: new Date().toISOString(),
-          cancerCards,
-          documents: documents.map(d => ({ ...d, storageKey: null })),
-          checklists, precisionFields, nhiNotes
-        };
-      }
-      const pdfs = [];
-      for (const d of documents) {
-        if (!d.storageKey) continue;
-        const blob = await getPdfBlob(d.storageKey);
-        if (blob) pdfs.push({ key: d.storageKey, data: await bufferToDataUrl(await blob.arrayBuffer()) });
-      }
-      return {
-        version: 2, exportedAt: new Date().toISOString(),
-        cancerCards, documents, checklists, precisionFields, nhiNotes, pdfs
-      };
+      return BACKUP_FORMAT.metadataPayload(
+        { cancerCards, documents, checklists, precisionFields, nhiNotes },
+        new Date().toISOString()
+      );
     }
 
-    function downloadJSON(data, filename) {
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    async function exportPdfBackupBatch(documents, batchIndex, batchCount) {
+      const pdfs = [];
+      for (const document of documents) {
+        const blob = await getPdfBlob(document.storageKey);
+        if (blob) pdfs.push({ key: document.storageKey, documentId: document.id, title: document.title, data: await bufferToDataUrl(await blob.arrayBuffer()) });
+      }
+      return BACKUP_FORMAT.pdfBatchPayload(pdfs, batchIndex, batchCount, new Date().toISOString());
+    }
+
+    function downloadJSON(data, filename, compact = false) {
+      const blob = new Blob([JSON.stringify(data, null, compact ? 0 : 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url; a.download = filename;
@@ -1185,28 +1192,49 @@
       URL.revokeObjectURL(url);
     }
 
-    async function importBackup(file) {
-      const text = await file.text();
-      const data = JSON.parse(text);
-      if (data.version !== 1 && data.version !== 2) throw new Error('備份格式不相容');
-      // 先驗證整包資料再清空，避免匯入到一半失敗造成資料全毀
+    function validateBackupStores(data) {
       for (const store of BACKUP_STORES) {
         const items = data[store] || [];
         if (!Array.isArray(items)) throw new Error('備份格式錯誤：' + store);
         for (const item of items) {
-          if (!item || typeof item.id !== 'string' || !item.id) throw new Error('備份格式錯誤：' + store + ' 有項目缺少 id');
+          if (!item || typeof item.id !== 'string' || !item.id) throw new Error('備份格式錯誤：' + store + ' 缺少 id');
         }
       }
-      const pdfs = Array.isArray(data.pdfs) ? data.pdfs.filter(p => p?.key && typeof p.data === 'string') : [];
-      const pdfBuffers = [];
-      for (const p of pdfs) {
-        pdfBuffers.push({ key: p.key, buf: await (await fetch(p.data)).arrayBuffer() });
+    }
+
+    async function decodePdfItems(pdfs) {
+      const output = [];
+      for (const pdf of pdfs || []) {
+        if (!pdf?.key || typeof pdf.data !== 'string') continue;
+        output.push({ key: pdf.key, buf: await (await fetch(pdf.data)).arrayBuffer() });
       }
+      return output;
+    }
+
+    async function importBackup(file) {
+      const data = JSON.parse(await file.text());
+      const kind = BACKUP_FORMAT.kind(data);
+      if (!['metadata', 'legacy-metadata', 'legacy-full'].includes(kind)) {
+        if (kind === 'pdf-batch') throw new Error('這是 PDF 批次，請使用「匯入 PDF 批次」');
+        throw new Error('備份格式不相容');
+      }
+      validateBackupStores(data);
+      const pdfBuffers = kind === 'legacy-full' ? await decodePdfItems(data.pdfs) : [];
       for (const store of BACKUP_STORES) {
         await dbClear(store);
         for (const item of data[store] || []) await dbPut(store, item);
       }
-      for (const p of pdfBuffers) await putPdfBuffer(p.key, p.buf);
+      for (const pdf of pdfBuffers) await putPdfBuffer(pdf.key, pdf.buf);
+      return kind;
+    }
+
+    async function importPdfBackupBatch(file) {
+      const data = JSON.parse(await file.text());
+      if (BACKUP_FORMAT.kind(data) !== 'pdf-batch') throw new Error('不是 v3 PDF 批次備份');
+      const pdfBuffers = await decodePdfItems(data.pdfs);
+      if (!pdfBuffers.length) throw new Error('批次內沒有可還原的 PDF');
+      for (const pdf of pdfBuffers) await putPdfBuffer(pdf.key, pdf.buf);
+      return pdfBuffers.length;
     }
 
     // ========== Search ==========
@@ -1436,6 +1464,7 @@
     async function renderHomePage(app) {
       const cards = await dbGetAll('cancerCards');
       const docs = await dbGetAll('documents');
+      const allNhiNotes = await dbGetAll('nhiNotes');
       const currentDocs = docs.filter(doc => doc.current && !doc.archived);
       const coveredCardIds = new Set(currentDocs.flatMap(doc => doc.cancerIds || []));
       const currentNccnDocs = currentDocs.filter(doc => nccnGuidelineForDocument(doc));
@@ -1452,6 +1481,11 @@
       const qualitySummary = window.GUIDELINE_QUALITY.summarize(currentNccnDocs);
       const qualityAttentionCount = qualitySummary.review + qualitySummary.pending + qualitySummary.failed;
       const qualityAttentionNames = qualitySummary.attention.slice(0, 3).map(item => item.doc.title || item.doc.fileName).filter(Boolean);
+      const scenarioSummary = window.CLINICAL_SCENARIOS.summarize(currentDocs, window.CLINICAL_MATCHER);
+      const scenarioAttentionNames = scenarioSummary.attention.slice(0, 3).map(item => item.scenario.label);
+      const currentNhiNotes = allNhiNotes.filter(note => window.NHI_VERSIONING.isActive(note));
+      const staleNhiRuleCount = currentNhiNotes.filter(note => window.NHI_VERSIONING.isStale(note)).length;
+      const undatedNhiRuleCount = currentNhiNotes.filter(note => note.autoExtracted && !window.NHI_VERSIONING.ruleDate(note)).length;
       const staleCount = docs.filter(isStaleDoc).length;
       // 備份提醒：有匯入文件才提醒（代表已有實際資料）
       const lastBackupAt = localStorage.getItem('lastBackupAt');
@@ -1490,8 +1524,13 @@
               <div class="quality-modality"><strong>${qualitySummary.modalities.followup}</strong><span>追蹤</span></div>
             </div>
             ${qualityAttentionCount ? `<div class="alert alert-warning mt-3" style="margin-bottom:0"><strong>${qualityAttentionCount} 份需要處理</strong>${qualitySummary.failed ? ` · ${qualitySummary.failed} 份解析失敗` : ""}${qualitySummary.pending ? ` · ${qualitySummary.pending} 份待解析` : ""}${qualitySummary.review ? ` · ${qualitySummary.review} 份需核對` : ""}${qualityAttentionNames.length ? `<p class="text-xs mt-1">${esc(qualityAttentionNames.join("、"))}${qualityAttentionCount > qualityAttentionNames.length ? " 等" : ""}</p>` : ""}</div>` : `<div class="alert alert-success mt-3" style="margin-bottom:0">目前已解析文件皆可建立療程索引</div>`}
+            <div class="alert ${scenarioSummary.pass === scenarioSummary.total ? 'alert-success' : 'alert-warning'} mt-3" style="margin-bottom:0">
+              <strong>常用癌別情境驗收 ${scenarioSummary.pass} / ${scenarioSummary.total}</strong>
+              ${scenarioAttentionNames.length ? `<p class="text-xs mt-1">待核對：${esc(scenarioAttentionNames.join('、'))}${scenarioSummary.attention.length > scenarioAttentionNames.length ? ' 等' : ''}</p>` : '<p class="text-xs mt-1">HCC、肺癌、大腸直腸癌、乳癌與 NET 路徑皆通過。</p>'}
+            </div>
             ${missingNccnGuidelineCount ? `<p class="text-xs mt-3" style="color:var(--amber-700)">尚缺 ${missingNccnGuidelineCount} 個指引系列${missingNccnSummary}</p>` : ""}
           </section>
+          ${staleNhiRuleCount || undatedNhiRuleCount ? `<div class="alert alert-warning" style="cursor:pointer" onclick="navigate('/pdf-library')"><strong>健保規定時效待確認</strong>${staleNhiRuleCount ? ` · ${staleNhiRuleCount} 筆超過一年` : ''}${undatedNhiRuleCount ? ` · ${undatedNhiRuleCount} 筆未記錄日期` : ''}<p class="text-xs mt-1">重新解析目前健保 PDF 可補上公告日期並封存舊版。</p></div>` : ''}
           ${staleCount > 0 ? `<div class="alert alert-warning" style="cursor:pointer" onclick="navigate('/pdf-library')">⏰ 有 <strong>${staleCount}</strong> 份指引超過 6 個月未確認版本，點此前往文件庫</div>` : ''}
           ${needBackup ? `<div class="alert alert-info" style="cursor:pointer" onclick="navigate('/settings')">💾 ${backupDays === null ? '尚未匯出過備份' : '已 ' + backupDays + ' 天未備份'}，點此前往設定頁備份</div>` : ''}
           <div id="search-results" class="hidden"></div>
@@ -2493,7 +2532,9 @@
     async function renderNhi(app) {
       const card = await dbGet('cancerCards', routeParams.cancerId);
       if (!card) { navigate('/'); return; }
-      const items = (await dbGetAll('nhiNotes')).filter(n => n.cancerId === card.id);
+      const allItems = (await dbGetAll('nhiNotes')).filter(n => n.cancerId === card.id);
+      const items = allItems.filter(note => window.NHI_VERSIONING.isActive(note));
+      const archivedItems = allItems.filter(note => !window.NHI_VERSIONING.isActive(note));
       const allDocs = await dbGetAll('documents');
       // 健保相關文件優先，其餘文件也可選（供比對給付規定用）
       const linkableDocs = [...allDocs.filter(d => NHI_PARSER.isNhiDocument(d) && !d.archived), ...allDocs.filter(d => !NHI_PARSER.isNhiDocument(d) && !d.archived)];
@@ -2511,6 +2552,7 @@
           <button class="btn btn-primary mb-4" id="add-nhi-btn">+ 新增藥物／療程</button>
           <div id="nhi-form" class="hidden card mb-4"></div>
           <div id="nhi-list"></div>
+          <div id="nhi-archive-list"></div>
           ${renderNav('')}
         </div>
       `;
@@ -2544,6 +2586,10 @@
                 ${linkableDocs.map(d => `<option value="${d.id}" ${item?.sourceDocumentId === d.id ? 'selected' : ''}>${esc(d.title)}${d.version ? '（' + esc(d.version) + '）' : ''}</option>`).join('')}
               </select>` : `<p class="text-xs text-gray-400">尚未匯入健保文件。可至 PDF 文件庫匯入，來源選「健保給付規定」。</p>`}
             </div>
+            <div class="form-row">
+              <div class="form-group"><label class="label">公告日期</label><input class="input" type="date" id="nhi-published-date" value="${esc(item?.publishedDate || '')}"></div>
+              <div class="form-group"><label class="label">生效日期</label><input class="input" type="date" id="nhi-effective-date" value="${esc(item?.effectiveDate || '')}"></div>
+            </div>
             ${condPickerHTML(selFields, item?.condition, 'nhi')}
             <div class="flex gap-2">
               <button class="btn btn-primary flex-1" id="nhi-save">儲存</button>
@@ -2563,12 +2609,21 @@
           const label = document.getElementById('nhi-label').value.trim();
           const content = document.getElementById('nhi-content').value.trim();
           if (!label || !content) { showToast('請填寫完整資訊'); return; }
+          const sourceDocumentId = document.getElementById('nhi-doc')?.value || '';
+          const sourceDoc = docMap[sourceDocumentId];
           await dbPut('nhiNotes', {
+            ...(item || {}),
             id: item?.id || crypto.randomUUID(),
             cancerId: card.id, label, content,
+            ruleKey: window.NHI_VERSIONING.ruleKey(card.id, label),
             coverageStatus: document.getElementById('nhi-status').value,
-            sourceDocumentId: document.getElementById('nhi-doc')?.value || '',
+            sourceDocumentId,
+            sourceTitle: sourceDoc?.title || item?.sourceTitle || '',
+            sourceVersion: sourceDoc?.version || item?.sourceVersion || '',
+            publishedDate: document.getElementById('nhi-published-date').value,
+            effectiveDate: document.getElementById('nhi-effective-date').value,
             condition: readCond(),
+            current: true, archived: false,
             updatedAt: new Date().toISOString().split('T')[0],
           });
           showToast(item ? '已更新' : '已新增');
@@ -2597,6 +2652,7 @@
                 <p class="text-xs mt-1" style="color:var(--blue-700)">${coverageLabel}</p>
                 ${item.autoExtracted ? `<span class="tag tag-category mt-1">PDF 自動擷取${item.sourceSection ? ' · ' + esc(item.sourceSection) : ''}</span>` : ''}
                 <div class="mt-2">${renderNhiStateTag(state, item.condition)}</div>
+                ${renderNhiSourceMeta(item)}
                 ${item.extractedConditionHints?.length ? `<p class="text-xs text-gray-500 mt-2">條文涉及：${esc(item.extractedConditionHints.join('、'))}</p>` : ''}
                 ${renderNhiRestrictions(item.content)}
                 ${item.condition ? `<p class="text-xs text-gray-500 mt-2">對應欄位：${esc(condLabel(item.condition))}</p>` : ''}
@@ -2608,6 +2664,14 @@
               </div>
             </div>`;
         }).join('');
+      }
+
+      const archiveEl = document.getElementById('nhi-archive-list');
+      if (archivedItems.length) {
+        archiveEl.innerHTML = `<details class="card mt-4"><summary class="font-semibold text-gray-700" style="cursor:pointer">封存舊版（${archivedItems.length}）</summary><div class="space-y-2 mt-3">${archivedItems.map(item => {
+          const linked = docMap[item.sourceDocumentId];
+          return `<div class="bg-gray-50 rounded p-3"><p class="text-sm font-medium text-gray-700">${esc(item.label)}</p>${renderNhiSourceMeta(item)}<p class="text-xs text-gray-500 mt-1">封存於：${esc(item.supersededAt || item.updatedAt || '未記錄')}</p>${linked?.storageKey ? `<button class="btn btn-ghost btn-sm mt-2" onclick="openPdf('${linked.storageKey}', ${Number(item.sourcePageStart) || 1})">開啟原規定</button>` : ''}</div>`;
+        }).join('')}</div></details>`;
       }
 
       window._editNhi = async (id) => {
@@ -2943,7 +3007,7 @@
           const uniqueCandidates = [...new Map(result.candidates.map(candidate => [`${candidate.sourceSection}:${candidate.cancerId}`, candidate])).values()];
           if (!uniqueCandidates.length) throw new Error('已讀取 PDF，但沒有找到可對應的癌別；請確認是否為抗癌瘤藥物給付規定');
           const allNotes = await dbGetAll('nhiNotes');
-          const oldAutoNotes = allNotes.filter(note => note.autoExtracted && (
+          const oldAutoNotes = allNotes.filter(note => note.autoExtracted && window.NHI_VERSIONING.isActive(note) && (
             note.sourceDocumentId === doc.id || (doc.current && note.autoExtractionScope === result.scope)
           ));
           const today = new Date().toISOString().split('T')[0];
@@ -2962,13 +3026,23 @@
             extractionStatus: candidate.extractionStatus,
             autoExtracted: true,
             autoExtractionScope: result.scope,
+            ruleKey: window.NHI_VERSIONING.ruleKey(candidate.cancerId, candidate.label),
+            sourceTitle: doc.title,
+            sourceVersion: doc.version || result.documentDate || "",
+            publishedDate: result.publishedDate || "",
+            effectiveDate: result.effectiveDate || result.publishedDate || "",
+            current: true,
+            archived: false,
             updatedAt: today,
           }));
+          const superseded = window.NHI_VERSIONING.archiveSuperseded(allNotes, notes, today);
           await dbPutMany('nhiNotes', notes);
+          if (superseded.length) await dbPutMany('nhiNotes', superseded);
           const newNoteIds = new Set(notes.map(note => note.id));
-          for (const note of oldAutoNotes) {
-            if (!newNoteIds.has(note.id)) await dbDelete('nhiNotes', note.id);
-          }
+          const supersededIds = new Set(superseded.map(note => note.id));
+          const removedFromCurrentSource = oldAutoNotes.filter(note => !newNoteIds.has(note.id) && !supersededIds.has(note.id))
+            .map(note => ({ ...note, current: false, archived: true, supersededAt: today }));
+          if (removedFromCurrentSource.length) await dbPutMany('nhiNotes', removedFromCurrentSource);
           const cancerCount = new Set(notes.map(note => note.cancerId)).size;
           const reviewCount = notes.filter(note => note.extractionStatus === 'review_needed').length;
           await dbPut('documents', {
@@ -2982,6 +3056,8 @@
               unmatchedCount: result.unmatched.length,
               reviewCount,
               lowTextPages: result.lowTextPages,
+              publishedDate: result.publishedDate || "",
+              effectiveDate: result.effectiveDate || result.publishedDate || "",
               scope: result.scope,
             },
           });
@@ -3424,10 +3500,12 @@
           <div class="card mb-4">
             <h2 class="font-semibold text-gray-800 mb-3">💾 備份與還原</h2>
             <div class="space-y-3">
-              <button class="btn btn-primary" id="export-full-btn">匯出完整備份（含 PDF）</button>
-              <button class="btn btn-secondary" id="export-btn">匯出備份 JSON（不含 PDF）</button>
-              <button class="btn btn-secondary" id="import-btn">匯入備份 JSON</button>
-              <p class="text-xs text-gray-400">完整備份包含所有資料與 PDF 檔案本體，檔案較大；一般備份僅含資料與 PDF 元資料。</p>
+              <button class="btn btn-primary" id="export-btn">匯出資料備份（不含 PDF）</button>
+              <button class="btn btn-secondary" id="export-pdf-batches-btn">分批備份 PDF</button>
+              <div id="pdf-backup-panel" class="nhi-query-panel hidden"></div>
+              <button class="btn btn-secondary" id="import-btn">匯入資料備份</button>
+              <button class="btn btn-secondary" id="import-pdf-batches-btn">匯入 PDF 批次</button>
+              <p class="text-xs text-gray-400">先備份資料索引；PDF 每 5 份一批下載，避免 Android 一次載入全部檔案。還原時先匯入資料備份，再選取一或多個 PDF 批次。</p>
               <p class="text-xs" style="color:var(--amber-700)">⚠️ 建議將本 App「加入主畫面」安裝使用，並定期匯出完整備份。瀏覽器在儲存空間不足時仍可能清除本機資料（含 PDF）。</p>
             </div>
           </div>
@@ -3486,24 +3564,39 @@
       const markBackedUp = () => { localStorage.setItem('lastBackupAt', new Date().toISOString()); };
 
       document.getElementById('export-btn').addEventListener('click', async () => {
-        const data = await exportBackup(false);
+        const data = await exportBackup();
         downloadJSON(data, `oncology-guideline-backup-${new Date().toISOString().split('T')[0]}.json`);
         markBackedUp();
         showToast('備份已匯出');
         navigate('/settings');
       });
 
-      document.getElementById('export-full-btn').addEventListener('click', async () => {
-        showToast('匯出中，PDF 較多時需要一點時間…');
-        try {
-          const data = await exportBackup(true);
-          downloadJSON(data, `oncology-guideline-full-backup-${new Date().toISOString().split('T')[0]}.json`);
-          markBackedUp();
-          showToast('完整備份已匯出');
-          navigate('/settings');
-        } catch (e) {
-          showToast('匯出失敗：' + e.message);
+      document.getElementById('export-pdf-batches-btn').addEventListener('click', async () => {
+        const documents = await dbGetAll('documents');
+        const batches = BACKUP_FORMAT.planPdfBatches(documents);
+        const panel = document.getElementById('pdf-backup-panel');
+        panel.classList.remove('hidden');
+        if (!batches.length) {
+          panel.innerHTML = '<p class="text-sm text-gray-500">目前沒有可備份的 PDF。</p>';
+          return;
         }
+        panel.innerHTML = `<p class="text-sm font-semibold text-gray-800">共 ${batches.length} 批，每批最多 ${BACKUP_FORMAT.pdfBatchSize} 份</p><p class="text-xs text-gray-500 mt-1">請逐批點擊下載，避免 Android 一次載入全部 PDF。</p><div class="space-y-2 mt-3">${batches.map((batch, index) => `<button type="button" class="btn btn-secondary btn-sm" data-pdf-backup-batch="${index}">第 ${index + 1} / ${batches.length} 批 · ${batch.length} 份</button>`).join('')}</div>`;
+        panel.querySelectorAll('[data-pdf-backup-batch]').forEach(button => {
+          button.addEventListener('click', async () => {
+            const index = Number(button.dataset.pdfBackupBatch);
+            button.disabled = true;
+            button.textContent = '準備中…';
+            try {
+              const data = await exportPdfBackupBatch(batches[index], index + 1, batches.length);
+              downloadJSON(data, `oncology-guideline-pdf-batch-${String(index + 1).padStart(2, '0')}-of-${String(batches.length).padStart(2, '0')}.json`, true);
+              button.textContent = `第 ${index + 1} 批已下載`;
+            } catch (error) {
+              button.disabled = false;
+              button.textContent = `第 ${index + 1} 批重試`;
+              showToast('PDF 批次匯出失敗：' + error.message);
+            }
+          });
+        });
       });
 
       document.getElementById('import-btn').addEventListener('click', () => {
@@ -3518,6 +3611,24 @@
             navigate('/');
           } catch (err) {
             showToast('匯入失敗：' + err.message);
+          }
+        };
+        input.click();
+      });
+
+      document.getElementById('import-pdf-batches-btn').addEventListener('click', () => {
+        const input = document.createElement('input');
+        input.type = 'file'; input.accept = '.json'; input.multiple = true;
+        input.onchange = async (event) => {
+          const files = [...event.target.files];
+          if (!files.length) return;
+          let restored = 0;
+          try {
+            for (const file of files) restored += await importPdfBackupBatch(file);
+            showToast(`已補回 ${restored} 份 PDF`);
+            navigate('/pdf-library');
+          } catch (error) {
+            showToast('PDF 批次匯入失敗：' + error.message);
           }
         };
         input.click();

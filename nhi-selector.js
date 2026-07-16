@@ -13,7 +13,7 @@
 
   function notesForCancer(notes, cancerId) {
     const accepted = new Set([cancerId, ...(RELATED_CARD_IDS[cancerId] || [])]);
-    return (notes || []).filter(note => accepted.has(note.cancerId));
+    return (notes || []).filter(note => accepted.has(note.cancerId) && (window.NHI_VERSIONING?.isActive(note) ?? (note.archived !== true && note.current !== false)));
   }
 
   function isGeneralNote(entry) {

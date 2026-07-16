@@ -80,6 +80,35 @@
     return text;
   }
 
+  function isoDate(year, month, day) {
+    let fullYear = Number(year);
+    if (fullYear < 1911) fullYear += 1911;
+    const monthNumber = Number(month);
+    const dayNumber = Number(day);
+    const date = new Date(Date.UTC(fullYear, monthNumber - 1, dayNumber));
+    if (date.getUTCFullYear() !== fullYear || date.getUTCMonth() + 1 !== monthNumber || date.getUTCDate() !== dayNumber) return '';
+    return String(fullYear).padStart(4, '0') + '-' + String(monthNumber).padStart(2, '0') + '-' + String(dayNumber).padStart(2, '0');
+  }
+
+  function firstDocumentDate(value) {
+    const text = normalizeText(value);
+    const compactRoc = text.match(/(?:^|\D)(1\d{2})(0[1-9]|1[0-2])([0-3]\d)(?=\D|$)/);
+    if (compactRoc) return isoDate(compactRoc[1], compactRoc[2], compactRoc[3]);
+    const separated = text.match(/(?:^|\D)(20\d{2}|1\d{2})\s*[年.\/-]\s*(\d{1,2})\s*[月.\/-]\s*(\d{1,2})/);
+    return separated ? isoDate(separated[1], separated[2], separated[3]) : '';
+  }
+
+  function detectDocumentDates(value) {
+    const text = normalizeText(value);
+    const tagged = (pattern) => {
+      const match = text.match(pattern);
+      return match ? firstDocumentDate(match[0]) : '';
+    };
+    const publishedDate = tagged(/(?:公告|發布|修訂)(?:日期)?[:：]?[^\n]{0,30}/) || firstDocumentDate(text.split('\n')[0] || '');
+    const effectiveDate = tagged(/(?:生效|施行)(?:日期)?[:：]?[^\n]{0,30}/) || publishedDate;
+    return { publishedDate, effectiveDate, documentDate: effectiveDate || publishedDate };
+  }
+
   function escapeRegExp(value) {
     return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
@@ -243,8 +272,10 @@
       }
       const parsed = parsePages(pages, cards);
       const joined = pages.map(page => page.text).join('\n');
+      const dates = detectDocumentDates(String(options.documentTitle || '') + '\n' + joined.slice(0, 10000));
       return {
         ...parsed,
+        ...dates,
         pageCount: pdf.numPages,
         lowTextPages,
         scope: /第\s*9\s*節|抗癌瘤藥物/i.test(joined) ? 'nhi-section-9' : 'nhi-' + String(options.documentTitle || 'document').toLowerCase().replace(/[^a-z0-9]+/g, '-'),
@@ -254,5 +285,5 @@
     }
   }
 
-  window.NHI_PARSER = { isNhiDocument, normalizeText, matchCancerCards, parsePages, extractAndParse };
+  window.NHI_PARSER = { isNhiDocument, normalizeText, detectDocumentDates, matchCancerCards, parsePages, extractAndParse };
 })();
