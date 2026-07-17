@@ -3,8 +3,8 @@
 
   const cl = (key, label, category = '檢測', importance = '必查', scope = 'cancer') =>
     ({ key, label, category, importance, scope });
-  const pf = (key, label, type = 'single_select', options = [], scope = 'cancer') =>
-    ({ key, label, type, options, required: false, scope });
+  const pf = (key, label, type = 'single_select', options = [], scope = 'cancer', metadata = {}) =>
+    ({ key, label, type, options, required: false, scope, ...metadata });
 
   // These templates identify information to verify or record. They do not choose treatment.
   const commonChecklists = [
@@ -178,7 +178,17 @@
       ],
       precisionFields: [
         pf('hcc-bclc', 'BCLC 分期', 'single_select', ['0','A','B','C','D','待確認']),
-        pf('hcc-child-pugh', 'Child-Pugh', 'single_select', ['A5','A6','B7','B8','B9','C','待確認']),
+        pf('hcc-child-pugh', 'Child-Pugh', 'single_select', ['A5','A6','B7','B8','B9','C','待確認'], 'cancer', {
+          help: 'A 級＝5–6 分；B 級＝7–9 分；C 級＝10–15 分。',
+          optionLabels: {
+            A5: 'A5（A 級，5 分）',
+            A6: 'A6（A 級，6 分）',
+            B7: 'B7（B 級，7 分）',
+            B8: 'B8（B 級，8 分）',
+            B9: 'B9（B 級，9 分）',
+            C: 'C（C 級，10–15 分）',
+          },
+        }),
         pf('hcc-albi', 'ALBI grade', 'single_select', ['1','2','3','待確認']),
         pf('hcc-macrovascular', '大血管侵犯', 'single_select', ['無','有','待確認']),
         pf('hcc-afp', 'AFP（ng/mL）', 'number'),
@@ -610,7 +620,7 @@
   ]);
 
   window.CLINICAL_TEMPLATES = Object.freeze({
-    version: 2,
+    version: 3,
     commonChecklists,
     commonPrecisionFields,
     checklistForCancer: (cancerId) => templatesForCancer(cancerId, 'checklists', commonChecklists),

@@ -163,7 +163,8 @@ npm run audit:nccn-all
 1. 進入「設定」，先選「匯出資料備份（不含 PDF）」保存癌別卡、解析索引、checklist、精準欄位與健保資料。
 2. 再選「分批備份 PDF」；App 每批最多處理 5 份 PDF，請逐批點擊下載，避免 Android 記憶體不足。
 3. 還原時先「匯入資料備份」，再用「匯入 PDF 批次」一次選取一或多個批次檔補回 PDF。
-4. 舊版 v1／v2 JSON 備份仍可匯入。
+4. v4 備份會記錄備份識別碼、PDF SHA-256 與批次完整度；資料匯入採單一交易，並自動保留匯入前版本供復原。
+5. 舊版 v1／v2／v3 JSON 備份仍可匯入。
 
 > ⚠️ 建議將本 App「加入主畫面」安裝使用，定期匯出資料備份，並完成全部 PDF 批次。
 > App 會自動要求持久儲存（persistent storage），降低瀏覽器在
@@ -176,8 +177,9 @@ npm run audit:nccn-all
 - `cancerCards`：癌別路由卡
 - `documents`：PDF 文件元資料，以及 NCCN 的 `nccnStructure` 版本／章節／治療頁索引
 - `checklists`：防漏 checklist 項目
-- `precisionFields`：精準化欄位定義
-- `nhiNotes`：藥物／療程健保資料
+- `precisionFields`：精準化欄位定義；病患輸入只保留於目前分頁的 `sessionStorage`，不進入資料備份
+- `nhiNotes`：藥物／療程健保資料，並區分完整療程相符、單一成分相關及名稱相似待核對
+- `restoreSnapshots`：匯入資料前自動保留的最近 3 份資料索引回復點（不含 PDF）
 
 PDF 檔案本體儲存於獨立的 `OncologyPdfStorage` IndexedDB。
 

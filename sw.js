@@ -6,6 +6,7 @@ const ASSETS = [
   './index.html',
   './app-version.js',
   './guideline-quality.js',
+  './case-state.js',
   './backup-format.js',
   './clinical-templates.js',
   './clinical-matcher.js',

@@ -1,9 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-global.window = {};
+global.window = global;
 require('../clinical-scenarios.js');
-const scenarios = window.CLINICAL_SCENARIOS;
+const scenarios = global.CLINICAL_SCENARIOS;
 
 test('requires all expected modalities and preserves source matches', () => {
   const scenario = { cancerId: 'sclc', label: 'test', fields: [], required: ['radiation', 'systemic'] };
@@ -18,6 +18,63 @@ test('requires all expected modalities and preserves source matches', () => {
   assert.equal(result.status, 'pass');
   assert.deepEqual(result.missing, []);
   assert.equal(result.matches[0].page.page, 12);
+});
+
+test('requires the expected section and regimen rather than any systemic page', () => {
+  const scenario = {
+    cancerId: 'nsclc',
+    fields: [],
+    required: ['systemic'],
+    expectations: [{
+      modality: 'systemic',
+      label: 'ROS1 therapy',
+      sectionPattern: /^NSCL-/,
+      optionPatterns: [/entrectinib|repotrectinib/i],
+    }],
+  };
+  const doc = { cancerIds: ['nsclc'], nccnStructure: { treatmentPages: [] } };
+  const matcher = {
+    matchTreatmentPages: () => [{
+      modality: 'systemic',
+      features: [],
+      page: {
+        page: 20,
+        sectionCode: 'NSCL-20',
+        options: [{ label: 'Osimertinib', modality: 'systemic' }],
+      },
+    }],
+    optionAssessment: () => ({ blocked: false }),
+  };
+  const result = scenarios.runScenario(scenario, [doc], matcher);
+  assert.equal(result.status, 'review');
+  assert.deepEqual(result.missing, ['ROS1 therapy']);
+});
+
+test('reports active forbidden treatments but ignores clinically blocked options', () => {
+  const scenario = {
+    cancerId: 'crc',
+    fields: [],
+    required: ['systemic'],
+    expectations: [{ modality: 'systemic', label: 'later line', optionPatterns: [/fruquintinib/i] }],
+    forbiddenOptions: [/pembrolizumab/i],
+  };
+  const doc = { cancerIds: ['crc'], nccnStructure: { treatmentPages: [] } };
+  const page = {
+    page: 64,
+    options: [
+      { label: 'Fruquintinib', modality: 'systemic' },
+      { label: 'Pembrolizumab for MSI-H/dMMR', modality: 'systemic' },
+    ],
+  };
+  const baseMatcher = { matchTreatmentPages: () => [{ modality: 'systemic', features: [], page }] };
+  assert.equal(scenarios.runScenario(scenario, [doc], {
+    ...baseMatcher,
+    optionAssessment: () => ({ blocked: false }),
+  }).violations.length, 1);
+  assert.equal(scenarios.runScenario(scenario, [doc], {
+    ...baseMatcher,
+    optionAssessment: option => ({ blocked: /Pembrolizumab/.test(option.label) }),
+  }).status, 'pass');
 });
 
 test('separates missing PDF, unparsed PDF, and incomplete clinical routes', () => {

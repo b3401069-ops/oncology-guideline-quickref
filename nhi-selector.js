@@ -9,6 +9,14 @@
     folfox: ['fluorouracil', 'leucovorin', 'oxaliplatin'],
     folfoxiri: ['fluorouracil', 'leucovorin', 'oxaliplatin', 'irinotecan'],
     capox: ['capecitabine', 'oxaliplatin'],
+    capeox: ['capecitabine', 'oxaliplatin'],
+  };
+  const MATCH_LEVEL_RANK = { none: 0, similar: 1, component: 2, exact: 3 };
+  const MATCH_LEVEL_LABELS = {
+    exact: '完整療程相符',
+    component: '單一成分有相關規定',
+    similar: '名稱相似，需核對',
+    none: '尚未找到同名健保資料',
   };
 
   function notesForCancer(notes, cancerId) {
@@ -31,6 +39,10 @@
       .replace(/\s+/g, ' ').trim();
   }
 
+  function strongestMatchLevel(levels) {
+    return [...levels].sort((a, b) => (MATCH_LEVEL_RANK[b] || 0) - (MATCH_LEVEL_RANK[a] || 0))[0] || 'none';
+  }
+
   function groupTreatments(entries) {
     const groups = new Map();
     for (const entry of entries || []) {
@@ -38,8 +50,8 @@
       const label = String(entry.n?.label || '').trim() || '未命名藥物／療程';
       const key = normalizeTreatmentName(label);
       if (!key) continue;
-      if (!groups.has(key)) groups.set(key, { key, label, entries: [] });
-      groups.get(key).entries.push(entry);
+      if (!groups.has(key)) groups.set(key, { key, label, entries: [], nhiMatchLevel: 'exact' });
+      groups.get(key).entries.push({ ...entry, nhiMatchLevel: entry.nhiMatchLevel || 'exact' });
     }
     return [...groups.values()];
   }
@@ -51,26 +63,37 @@
     return (` ${left} `).includes(` ${right} `) || (` ${right} `).includes(` ${left} `);
   }
 
-  function treatmentIncludesGroup(treatmentKey, groupKey) {
-    if (labelsOverlap(treatmentKey, groupKey)) return true;
-    const tokens = new Set(treatmentKey.split(' '));
-    return Object.entries(REGIMEN_COMPONENTS).some(([regimen, components]) =>
-      tokens.has(regimen) && components.some(component => labelsOverlap(component, groupKey))
-    );
+  function treatmentMatchLevel(treatmentKey, groupKey) {
+    if (!treatmentKey || !groupKey) return 'none';
+    if (treatmentKey === groupKey) return 'exact';
+    const treatmentTokens = treatmentKey.split(' ').filter(Boolean);
+    const groupTokens = groupKey.split(' ').filter(Boolean);
+    const treatmentSet = new Set(treatmentTokens);
+    if (groupTokens.length && groupTokens.every(token => treatmentSet.has(token))) return 'component';
+    for (const [regimen, components] of Object.entries(REGIMEN_COMPONENTS)) {
+      if (!treatmentSet.has(regimen)) continue;
+      if (components.some(component => component === groupKey || labelsOverlap(component, groupKey))) return 'component';
+    }
+    return labelsOverlap(treatmentKey, groupKey) ? 'similar' : 'none';
   }
 
-  function uniqueEntries(entries) {
-    const seen = new Set();
-    return entries.filter(entry => {
+  function mergeEntryRelations(entries) {
+    const byKey = new Map();
+    for (const entry of entries || []) {
       const key = entry.n?.id || `${entry.n?.label || ''}:${entry.n?.sourceSection || ''}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
+      const existing = byKey.get(key);
+      if (!existing || (MATCH_LEVEL_RANK[entry.nhiMatchLevel] || 0) > (MATCH_LEVEL_RANK[existing.nhiMatchLevel] || 0)) {
+        byKey.set(key, entry);
+      }
+    }
+    return [...byKey.values()];
   }
 
   function mergeNccnGroups(nhiGroups, matches, assessOption) {
-    const groups = new Map(nhiGroups.map(group => [group.key, { ...group, entries: [...group.entries] }]));
+    const groups = new Map(nhiGroups.map(group => [
+      group.key,
+      { ...group, entries: mergeEntryRelations(group.entries), nhiMatchLevel: 'exact' },
+    ]));
     const suggestedKeys = [];
     for (const match of matches || []) {
       for (const option of match.page?.options || []) {
@@ -80,15 +103,26 @@
         const label = String(option.label || '').trim();
         const key = normalizeTreatmentName(label);
         if (!key) continue;
-        const relatedEntries = nhiGroups
-          .filter(group => treatmentIncludesGroup(key, group.key))
-          .flatMap(group => group.entries);
+        const relatedEntries = nhiGroups.flatMap(group => {
+          const level = treatmentMatchLevel(key, group.key);
+          if (level === 'none') return [];
+          return group.entries.map(entry => ({ ...entry, nhiMatchLevel: level }));
+        });
         if (!groups.has(key)) {
           if (suggestedKeys.length >= 24) continue;
-          groups.set(key, { key, label, entries: uniqueEntries(relatedEntries), fromNccn: true, requiresSourceReview: false });
+          groups.set(key, {
+            key,
+            label,
+            entries: mergeEntryRelations(relatedEntries),
+            fromNccn: true,
+            requiresSourceReview: false,
+            nhiMatchLevel: strongestMatchLevel(relatedEntries.map(entry => entry.nhiMatchLevel)),
+          });
         } else {
-          groups.get(key).entries = uniqueEntries([...groups.get(key).entries, ...relatedEntries]);
-          groups.get(key).fromNccn = true;
+          const group = groups.get(key);
+          group.entries = mergeEntryRelations([...group.entries, ...relatedEntries]);
+          group.fromNccn = true;
+          group.nhiMatchLevel = strongestMatchLevel(group.entries.map(entry => entry.nhiMatchLevel));
         }
         const group = groups.get(key);
         group.requiresSourceReview = group.requiresSourceReview || !!option.needsReview || !!option.sourceNeedsReview || option.recommendation === 'review';
@@ -106,6 +140,9 @@
     normalizeTreatmentName,
     groupTreatments,
     labelsOverlap,
+    treatmentMatchLevel,
+    strongestMatchLevel,
+    matchLevelLabels: MATCH_LEVEL_LABELS,
     mergeNccnGroups,
   };
 })();

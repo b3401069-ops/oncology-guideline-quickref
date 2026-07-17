@@ -27,7 +27,16 @@ test('generic policy reminders do not become treatment buttons', () => {
   assert.deepEqual(groups.map(group => group.label), ['Irinotecan']);
 });
 
-test('NCCN review candidates remain selectable and link ingredient NHI entries', () => {
+test('classifies exact regimen, ingredient, similar name, and unrelated rules separately', () => {
+  const normalize = selector.normalizeTreatmentName;
+  assert.equal(selector.treatmentMatchLevel(normalize('FOLFOX'), normalize('FOLFOX')), 'exact');
+  assert.equal(selector.treatmentMatchLevel(normalize('FOLFOX ± Bevacizumab'), normalize('Oxaliplatin')), 'component');
+  assert.equal(selector.treatmentMatchLevel(normalize('Trifluridine/tipiracil + Bevacizumab'), normalize('Trifluridine and Tipiracil')), 'component');
+  assert.equal(selector.treatmentMatchLevel(normalize('Pembrolizumab regimen'), normalize('Pembrolizumab')), 'component');
+  assert.equal(selector.treatmentMatchLevel(normalize('FOLFOX'), normalize('Osimertinib')), 'none');
+});
+
+test('NCCN review candidates preserve ingredient-level NHI evidence without calling it exact', () => {
   const nhiGroups = selector.groupTreatments([
     entry('irinotecan', 'Irinotecan', 'colorectal_cancer', { autoExtracted: true }),
     entry('bevacizumab', 'Bevacizumab', 'rectal_cancer', { autoExtracted: true }),
@@ -45,10 +54,12 @@ test('NCCN review candidates remain selectable and link ingredient NHI entries',
   const suggested = groups[0];
   assert.equal(suggested.fromNccn, true);
   assert.equal(suggested.requiresSourceReview, true);
+  assert.equal(suggested.nhiMatchLevel, 'component');
   assert.deepEqual(suggested.entries.map(item => item.n.id).sort(), ['bevacizumab', 'irinotecan']);
+  assert.ok(suggested.entries.every(item => item.nhiMatchLevel === 'component'));
 });
 
-test('slash and and spellings match the same combination drug', () => {
+test('slash and and spellings still overlap for similarity review', () => {
   const left = selector.normalizeTreatmentName('Trifluridine/tipiracil');
   const right = selector.normalizeTreatmentName('Trifluridine and Tipiracil ± Bevacizumab');
   assert.equal(selector.labelsOverlap(left, right), true);

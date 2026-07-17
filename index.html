@@ -221,6 +221,7 @@
 
   <script src="./app-version.js"></script>
   <script src="./guideline-quality.js"></script>
+  <script src="./case-state.js"></script>
   <script src="./backup-format.js"></script>
   <script src="./clinical-templates.js"></script>
   <script src="./clinical-matcher.js"></script>
@@ -232,7 +233,7 @@
   <script type="module">
     // ========== Database ==========
     const DB_NAME = 'OncologyGuidelineDB';
-    const DB_VERSION = 1;
+    const DB_VERSION = 2;
     const APP_VERSION = window.ONCOLOGY_APP_VERSION || 'unknown';
     let db;
 
@@ -261,6 +262,9 @@
           if (!db.objectStoreNames.contains('nhiNotes')) {
             const store = db.createObjectStore('nhiNotes', { keyPath: 'id' });
             store.createIndex('cancerId', 'cancerId');
+          }
+          if (!db.objectStoreNames.contains('restoreSnapshots')) {
+            db.createObjectStore('restoreSnapshots', { keyPath: 'id' });
           }
         };
         req.onsuccess = (e) => { db = e.target.result; resolve(db); };
@@ -334,6 +338,20 @@
         const req = tx.objectStore(storeName).clear();
         req.onsuccess = () => resolve();
         req.onerror = () => reject(req.error);
+      });
+    }
+
+    function dbReplaceStores(data) {
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(BACKUP_STORES, 'readwrite');
+        for (const storeName of BACKUP_STORES) {
+          const store = tx.objectStore(storeName);
+          store.clear();
+          for (const item of data[storeName] || []) store.put(item);
+        }
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error('資料還原交易已中止'));
       });
     }
 
@@ -858,6 +876,7 @@
     const mergeNccnTreatmentGroups = (nhiGroups, matches) =>
       window.NHI_SELECTOR.mergeNccnGroups(nhiGroups, matches, nccnOptionAssessment);
     const nhiNotesForCancer = window.NHI_SELECTOR.notesForCancer;
+    const nhiMatchLevelLabels = window.NHI_SELECTOR.matchLevelLabels;
     const nhiTreatmentSessionKey = (cancerId) => `nhi-treatment:${cancerId}`;
     const nhiQuerySessionKey = (cancerId) => `nhi-query:${cancerId}`;
     const readNhiQueryState = (cancerId) => {
@@ -876,6 +895,7 @@
       try { sessionStorage.removeItem(nhiQuerySessionKey(cancerId)); } catch {}
     };
     const blankPfValue = (field) => field.type === 'multi_select' ? [] : '';
+    const precisionOptionLabel = (field, option) => field.optionLabels?.[option] || option;
     const applyNhiQueryState = (fields, state) => fields.map((field) => {
       if (Object.prototype.hasOwnProperty.call(state.values, field.id)) return { ...field, value: state.values[field.id] };
       return state.fresh ? { ...field, value: blankPfValue(field) } : field;
@@ -885,7 +905,8 @@
       if (field.type === 'multi_select') {
         const current = Array.isArray(field.value) ? field.value : [];
         return `<fieldset class="form-group" style="border:0;padding:0;margin:0 0 16px"><legend class="label">${esc(field.label)}</legend>
-          <div style="display:flex;flex-wrap:wrap;gap:6px">${options.map(option => `<label class="checkbox-wrap" style="padding:6px 8px"><input type="checkbox" data-nhi-query-field="${esc(field.id)}" value="${esc(option)}" ${current.includes(option) ? 'checked' : ''}> <span class="text-sm">${esc(option)}</span></label>`).join('')}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">${options.map(option => `<label class="checkbox-wrap" style="padding:6px 8px"><input type="checkbox" data-nhi-query-field="${esc(field.id)}" value="${esc(option)}" ${current.includes(option) ? 'checked' : ''}> <span class="text-sm">${esc(precisionOptionLabel(field, option))}</span></label>`).join('')}</div>
+          ${field.help ? `<p class="text-xs text-gray-400 mt-1">${esc(field.help)}</p>` : ''}
         </fieldset>`;
       }
       if (field.type === 'text' || field.type === 'number') {
@@ -893,8 +914,8 @@
       }
       return `<div class="form-group"><label class="label">${esc(field.label)}</label><select class="input" data-nhi-query-field="${esc(field.id)}">
         <option value="">（未輸入）</option>
-        ${options.map(option => `<option value="${esc(option)}" ${field.value === option ? 'selected' : ''}>${esc(option)}</option>`).join('')}
-      </select></div>`;
+        ${options.map(option => `<option value="${esc(option)}" ${field.value === option ? 'selected' : ''}>${esc(precisionOptionLabel(field, option))}</option>`).join('')}
+      </select>${field.help ? `<p class="text-xs text-gray-400 mt-1">${esc(field.help)}</p>` : ''}</div>`;
     };
 
     // 指引過期判斷：以最後確認日（無則匯入日）起算
@@ -904,6 +925,18 @@
     // 精準欄位是否已填值
     const hasPfValue = (f) => Array.isArray(f.value) ? f.value.length > 0 : !!(f.value && String(f.value).trim());
     const pfValueText = (f) => Array.isArray(f.value) ? f.value.join('、') : (f.value || '');
+    const getCasePrecisionFields = async (cancerId) => {
+      const definitions = (await dbGetAll('precisionFields')).filter(field => field.cancerId === cancerId);
+      return window.CASE_STATE.apply(definitions, cancerId);
+    };
+    const migrateLegacyCaseValues = async () => {
+      const fields = await dbGetAll('precisionFields');
+      const migration = window.CASE_STATE.migrateLegacy(fields);
+      if (fields.some(field => Object.prototype.hasOwnProperty.call(field, 'value'))) {
+        await dbPutMany('precisionFields', migration.definitions);
+      }
+      return migration.migratedCount;
+    };
 
     // ========== 適用條件選擇器（編輯表單共用） ==========
     // selFields：此癌別的單選/多選精準欄位
@@ -928,7 +961,7 @@
         if (!f) { valWrap.innerHTML = ''; return; }
         valWrap.innerHTML = `<div style="display:flex;flex-wrap:wrap;gap:6px">${f.options.map(o => {
           const on = existing?.field === f.label && existing.values?.includes(o);
-          return `<label class="checkbox-wrap" style="padding:4px 8px"><input type="checkbox" class="cond-val" value="${esc(o)}" ${on ? 'checked' : ''}> <span class="text-sm">${esc(o)}</span></label>`;
+          return `<label class="checkbox-wrap" style="padding:4px 8px"><input type="checkbox" class="cond-val" value="${esc(o)}" ${on ? 'checked' : ''}> <span class="text-sm">${esc(precisionOptionLabel(f, o))}</span></label>`;
         }).join('')}</div>`;
       };
       fieldEl.addEventListener('change', renderVals);
@@ -984,6 +1017,30 @@
         }
       }
       await syncNccnDocumentCoverage(cardsById);
+
+      // Keep compatibility-sensitive option values stable while refreshing explanatory UI metadata.
+      const clinicalPrecisionMetadata = [];
+      for (const item of await dbGetAll('precisionFields')) {
+        const idPrefix = 'clinical-pf:' + item.cancerId + ':';
+        const builtInId = String(item.id || '').startsWith(idPrefix);
+        if (item.sourceType !== '內建癌別範本' && !builtInId) continue;
+        const templateKey = item.sourceTemplateKey || (builtInId ? String(item.id).slice(idPrefix.length) : '');
+        const template = precisionTemplatesForCancer(item.cancerId).find(candidate => candidate.key === templateKey);
+        if (!template || (!template.help && !template.optionLabels)) continue;
+        const nextHelp = template.help || '';
+        const nextOptionLabels = { ...(template.optionLabels || {}) };
+        const metadataMatches = item.sourceType === '內建癌別範本' && item.sourceTemplateKey === templateKey &&
+          item.help === nextHelp && JSON.stringify(item.optionLabels || {}) === JSON.stringify(nextOptionLabels);
+        if (metadataMatches) continue;
+        clinicalPrecisionMetadata.push({
+          ...item,
+          sourceType: '內建癌別範本',
+          sourceTemplateKey: templateKey,
+          help: nextHelp,
+          optionLabels: nextOptionLabels,
+        });
+      }
+      await dbPutMany('precisionFields', clinicalPrecisionMetadata);
 
       const normalizeClinicalLabel = (value) => String(value || '').trim().toLocaleLowerCase().replace(/\s+/g, ' ');
       const checklistByCancer = new Map();
@@ -1043,6 +1100,8 @@
               type: template.type,
               required: false,
               options: [...template.options],
+              help: template.help || '',
+              optionLabels: { ...(template.optionLabels || {}) },
               sourceType: '內建癌別範本',
               sourceTemplateKey: template.key,
               templateScope: template.scope,
@@ -1162,25 +1221,81 @@
 
     // ========== Backup ==========
     const BACKUP_STORES = ['cancerCards','documents','checklists','precisionFields','nhiNotes'];
+    const BACKUP_PLAN_KEY = 'oncology-backup-plan';
+    const PDF_RESTORE_TRACKER_KEY = 'oncology-pdf-restore-progress';
 
-    async function exportBackup() {
+    async function collectMetadataStores() {
       const [cancerCards, documents, checklists, precisionFields, nhiNotes] = await Promise.all([
         dbGetAll('cancerCards'), dbGetAll('documents'), dbGetAll('checklists'),
         dbGetAll('precisionFields'), dbGetAll('nhiNotes')
       ]);
-      return BACKUP_FORMAT.metadataPayload(
-        { cancerCards, documents, checklists, precisionFields, nhiNotes },
-        new Date().toISOString()
-      );
+      return {
+        cancerCards,
+        documents,
+        checklists,
+        precisionFields: window.CASE_STATE.stripValues(precisionFields),
+        nhiNotes,
+      };
     }
 
-    async function exportPdfBackupBatch(documents, batchIndex, batchCount) {
+    function backupPlanForDocuments(documents) {
+      const signature = (documents || []).map(doc => doc.storageKey).filter(Boolean).sort().join('|');
+      try {
+        const existing = JSON.parse(sessionStorage.getItem(BACKUP_PLAN_KEY) || 'null');
+        if (existing?.signature === signature && Date.now() - new Date(existing.exportedAt).getTime() < 86400000) return existing;
+      } catch {}
+      const plan = {
+        backupSetId: crypto.randomUUID?.() || ('backup-' + Date.now()),
+        exportedAt: new Date().toISOString(),
+        signature,
+      };
+      try { sessionStorage.setItem(BACKUP_PLAN_KEY, JSON.stringify(plan)); } catch {}
+      return plan;
+    }
+
+    async function sha256Hex(buffer) {
+      if (!crypto.subtle?.digest) throw new Error('此瀏覽器不支援 SHA-256 完整性檢查');
+      const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', buffer));
+      return [...digest].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    }
+
+    async function metadataWithIntegrity(payload) {
+      const digest = await sha256Hex(new TextEncoder().encode(JSON.stringify(payload)));
+      return { ...payload, integrity: { algorithm: 'SHA-256', digest } };
+    }
+
+    async function verifyMetadataIntegrity(data) {
+      if (data.version !== BACKUP_FORMAT.version) return;
+      if (data.integrity?.algorithm !== 'SHA-256' || !data.integrity.digest) throw new Error('備份缺少 SHA-256 完整性資料');
+      const clone = { ...data };
+      delete clone.integrity;
+      const digest = await sha256Hex(new TextEncoder().encode(JSON.stringify(clone)));
+      if (digest !== data.integrity.digest) throw new Error('備份校驗失敗，檔案可能不完整或已被修改');
+    }
+
+    async function exportBackup() {
+      const stores = await collectMetadataStores();
+      const plan = backupPlanForDocuments(stores.documents);
+      const payload = BACKUP_FORMAT.metadataPayload(stores, plan.exportedAt, { backupSetId: plan.backupSetId });
+      return metadataWithIntegrity(payload);
+    }
+
+    async function exportPdfBackupBatch(documents, batchIndex, batchCount, plan) {
       const pdfs = [];
       for (const document of documents) {
         const blob = await getPdfBlob(document.storageKey);
-        if (blob) pdfs.push({ key: document.storageKey, documentId: document.id, title: document.title, data: await bufferToDataUrl(await blob.arrayBuffer()) });
+        if (!blob) continue;
+        const buffer = await blob.arrayBuffer();
+        pdfs.push({
+          key: document.storageKey,
+          documentId: document.id,
+          title: document.title,
+          byteLength: buffer.byteLength,
+          sha256: await sha256Hex(buffer),
+          data: await bufferToDataUrl(buffer),
+        });
       }
-      return BACKUP_FORMAT.pdfBatchPayload(pdfs, batchIndex, batchCount, new Date().toISOString());
+      return BACKUP_FORMAT.pdfBatchPayload(pdfs, batchIndex, batchCount, plan.exportedAt, { backupSetId: plan.backupSetId });
     }
 
     function downloadJSON(data, filename, compact = false) {
@@ -1202,40 +1317,104 @@
       }
     }
 
-    async function decodePdfItems(pdfs) {
+    async function decodePdfItems(pdfs, requireIntegrity = false) {
       const output = [];
       for (const pdf of pdfs || []) {
-        if (!pdf?.key || typeof pdf.data !== 'string') continue;
-        output.push({ key: pdf.key, buf: await (await fetch(pdf.data)).arrayBuffer() });
+        if (!pdf?.key || typeof pdf.data !== 'string') throw new Error('PDF 批次格式錯誤');
+        const buf = await (await fetch(pdf.data)).arrayBuffer();
+        if (requireIntegrity) {
+          if (!pdf.sha256 || !Number.isFinite(Number(pdf.byteLength))) throw new Error('PDF 缺少校驗資料：' + (pdf.title || pdf.key));
+          if (Number(pdf.byteLength) !== buf.byteLength) throw new Error('PDF 大小不符：' + (pdf.title || pdf.key));
+          if (await sha256Hex(buf) !== pdf.sha256) throw new Error('PDF SHA-256 校驗失敗：' + (pdf.title || pdf.key));
+        }
+        output.push({ key: pdf.key, buf });
       }
       return output;
+    }
+
+    async function saveRestoreSnapshot(stores, label = '匯入前自動保留') {
+      const snapshot = {
+        id: crypto.randomUUID?.() || ('snapshot-' + Date.now()),
+        createdAt: new Date().toISOString(),
+        label,
+        data: stores,
+      };
+      await dbPut('restoreSnapshots', snapshot);
+      const snapshots = (await dbGetAll('restoreSnapshots')).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      for (const old of snapshots.slice(3)) await dbDelete('restoreSnapshots', old.id);
+      return snapshot;
+    }
+
+    function readPdfRestoreTracker() {
+      try {
+        const value = JSON.parse(localStorage.getItem(PDF_RESTORE_TRACKER_KEY) || 'null');
+        return value && typeof value === 'object' ? value : null;
+      } catch {
+        return null;
+      }
+    }
+
+    function writePdfRestoreTracker(value) {
+      localStorage.setItem(PDF_RESTORE_TRACKER_KEY, JSON.stringify(value));
     }
 
     async function importBackup(file) {
       const data = JSON.parse(await file.text());
       const kind = BACKUP_FORMAT.kind(data);
-      if (!['metadata', 'legacy-metadata', 'legacy-full'].includes(kind)) {
-        if (kind === 'pdf-batch') throw new Error('這是 PDF 批次，請使用「匯入 PDF 批次」');
+      if (!['metadata', 'metadata-v3', 'legacy-metadata', 'legacy-full'].includes(kind)) {
+        if (['pdf-batch', 'pdf-batch-v3'].includes(kind)) throw new Error('這是 PDF 批次，請使用「匯入 PDF 批次」');
         throw new Error('備份格式不相容');
       }
       validateBackupStores(data);
+      await verifyMetadataIntegrity(data);
       const pdfBuffers = kind === 'legacy-full' ? await decodePdfItems(data.pdfs) : [];
-      for (const store of BACKUP_STORES) {
-        await dbClear(store);
-        for (const item of data[store] || []) await dbPut(store, item);
-      }
+      const currentStores = await collectMetadataStores();
+      const snapshot = await saveRestoreSnapshot(currentStores);
+      const importedFields = data.precisionFields || [];
+      const stores = Object.fromEntries(BACKUP_STORES.map(store => [store, data[store] || []]));
+      stores.precisionFields = window.CASE_STATE.stripValues(importedFields);
       for (const pdf of pdfBuffers) await putPdfBuffer(pdf.key, pdf.buf);
-      return kind;
+      await dbReplaceStores(stores);
+      window.CASE_STATE.clearAll();
+      const migration = window.CASE_STATE.migrateLegacy(importedFields);
+      if (data.version === BACKUP_FORMAT.version && data.manifest?.pdfBatchCount > 0) {
+        writePdfRestoreTracker({
+          backupSetId: data.backupSetId,
+          batchCount: data.manifest.pdfBatchCount,
+          expectedPdfCount: data.manifest.pdfCount || 0,
+          restored: [],
+        });
+      } else {
+        localStorage.removeItem(PDF_RESTORE_TRACKER_KEY);
+      }
+      return { kind, snapshotId: snapshot.id, migratedCaseValues: migration.migratedCount };
     }
 
     async function importPdfBackupBatch(file) {
       const data = JSON.parse(await file.text());
-      if (BACKUP_FORMAT.kind(data) !== 'pdf-batch') throw new Error('不是 v3 PDF 批次備份');
-      const pdfBuffers = await decodePdfItems(data.pdfs);
+      const kind = BACKUP_FORMAT.kind(data);
+      if (!['pdf-batch', 'pdf-batch-v3'].includes(kind)) throw new Error('不是可用的 PDF 批次備份');
+      const requireIntegrity = kind === 'pdf-batch';
+      if (requireIntegrity && !data.backupSetId) throw new Error('PDF 批次缺少備份識別碼');
+      const batchIndex = Number(data.batchIndex);
+      const batchCount = Number(data.batchCount);
+      if (!Number.isInteger(batchIndex) || !Number.isInteger(batchCount) || batchIndex < 1 || batchIndex > batchCount) {
+        throw new Error('PDF 批次編號不正確');
+      }
+      const pdfBuffers = await decodePdfItems(data.pdfs, requireIntegrity);
       if (!pdfBuffers.length) throw new Error('批次內沒有可還原的 PDF');
+      const backupSetId = data.backupSetId || ('legacy-v3:' + (data.exportedAt || 'unknown'));
+      let tracker = readPdfRestoreTracker();
+      if (!tracker || tracker.backupSetId !== backupSetId) {
+        tracker = { backupSetId, batchCount, expectedPdfCount: null, restored: [] };
+      }
+      if (Number(tracker.batchCount) !== batchCount) throw new Error('PDF 批次總數與目前還原工作不一致');
       for (const pdf of pdfBuffers) await putPdfBuffer(pdf.key, pdf.buf);
-      return pdfBuffers.length;
+      tracker.restored = [...new Set([...(tracker.restored || []), batchIndex])].sort((a, b) => a - b);
+      writePdfRestoreTracker(tracker);
+      return { restoredPdfCount: pdfBuffers.length, backupSetId, progress: BACKUP_FORMAT.batchProgress(batchCount, tracker.restored) };
     }
+
 
     // ========== Search ==========
     function searchCards(cards, query) {
@@ -1656,7 +1835,7 @@
 
       const checklists = (await dbGetAll('checklists')).filter(c => c.cancerId === card.id);
       const nhiNotes = nhiNotesForCancer(await dbGetAll('nhiNotes'), card.id);
-      const precisionFields = (await dbGetAll('precisionFields')).filter(p => p.cancerId === card.id);
+      const precisionFields = await getCasePrecisionFields(card.id);
       const jumpDoc = currentDocs.find(d => d.storageKey);
       const pfMap = buildPfMap(precisionFields);
       const filledPf = precisionFields.filter(hasPfValue);
@@ -1770,8 +1949,8 @@
               }
               return `<div class="form-group" id="precision-field-${esc(f.id)}"><label class="label">${esc(f.label)}${f.required ? ' *' : ''}</label><select class="input" onchange="window._setPfValue('${f.id}', this.value, this)">
                 <option value="">（未輸入）</option>
-                ${f.options.map(o => `<option value="${esc(o)}" ${f.value === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}
-              </select></div>`;
+                ${f.options.map(o => `<option value="${esc(o)}" ${f.value === o ? 'selected' : ''}>${esc(precisionOptionLabel(f, o))}</option>`).join('')}
+              </select>${f.help ? `<p class="text-xs text-gray-400 mt-1">${esc(f.help)}</p>` : ''}</div>`;
             }).join('')}</div>
             <p class="text-xs text-gray-400 mt-2">選填即自動儲存；留白不影響快速參考輸出</p>` :
             '<p class="text-sm text-gray-400">尚未設定精準化欄位，可由下方「編輯精準欄位」建立</p>'}
@@ -1815,7 +1994,7 @@
       const docs = await dbGetAll('documents');
       const currentDocs = docs.filter(d => d.cancerIds?.includes(card.id) && d.current && !d.archived);
       const checklists = (await dbGetAll('checklists')).filter(c => c.cancerId === card.id);
-      const precisionFields = (await dbGetAll('precisionFields')).filter(p => p.cancerId === card.id);
+      const precisionFields = await getCasePrecisionFields(card.id);
       const nhiNotes = nhiNotesForCancer(await dbGetAll('nhiNotes'), card.id);
 
       const hasDocs = currentDocs.length > 0;
@@ -1848,9 +2027,11 @@
       const selectedTreatmentKey = sessionStorage.getItem(nhiTreatmentSessionKey(card.id));
       const selectedTreatment = treatmentGroups.find(group => group.key === selectedTreatmentKey);
       if (selectedTreatmentKey && !selectedTreatment) sessionStorage.removeItem(nhiTreatmentSessionKey(card.id));
-      const selectedUnknownEntries = selectedTreatment?.entries.filter(({ st }) => st === 'unknown') || [];
-      const selectedUnmatchedEntries = selectedTreatment?.entries.filter(({ st }) => st === 'unmatched') || [];
-      const selectedMatchedEntries = selectedTreatment?.entries.filter(({ st }) => st === 'matched') || [];
+      const selectedNhiMatchLevel = selectedTreatment?.nhiMatchLevel || (selectedTreatment?.entries.length ? 'exact' : 'none');
+      const selectedEvidenceEntries = selectedTreatment?.entries.filter(entry => entry.nhiMatchLevel !== 'similar') || [];
+      const selectedUnknownEntries = selectedEvidenceEntries.filter(({ st }) => st === 'unknown');
+      const selectedUnmatchedEntries = selectedEvidenceEntries.filter(({ st }) => st === 'unmatched');
+      const selectedMatchedEntries = selectedEvidenceEntries.filter(({ st }) => st === 'matched');
       const selectedUnknownLabels = [...new Set(selectedUnknownEntries.map(({ n }) => n.condition?.field).filter(Boolean))];
       const selectedUnmatchedLabels = [...new Set(selectedUnmatchedEntries.map(({ n }) => n.condition?.field).filter(Boolean))];
       const affectedNhiConditionLabels = [...new Set([...selectedUnknownLabels, ...selectedUnmatchedLabels])];
@@ -1859,7 +2040,8 @@
         .filter(Boolean);
       const missingNhiFieldLabels = affectedNhiConditionLabels
         .filter(label => !queryPrecisionFields.some(field => field.label === label));
-      const selectedNhiResultState = selectedUnknownEntries.length ? 'missing'
+      const selectedNhiResultState = selectedNhiMatchLevel === 'similar' ? 'similar'
+        : selectedUnknownEntries.length ? 'missing'
         : selectedUnmatchedEntries.length ? 'unmatched'
         : selectedMatchedEntries.length ? 'matched'
         : selectedTreatment ? 'review' : '';
@@ -1967,10 +2149,10 @@
             </div>
             ${treatmentGroups.length ? `
               <div class="nhi-treatment-options" role="group" aria-label="藥物或療程">
-                ${treatmentGroups.map(group => `<button type="button" class="nhi-treatment-option" data-nhi-treatment-key="${esc(group.key)}" aria-pressed="${group.key === selectedTreatment?.key}">${group.fromNccn ? (group.requiresSourceReview ? 'NCCN 核對 · ' : 'NCCN · ') : ''}${esc(group.label)}</button>`).join('')}
+                ${treatmentGroups.map(group => `<button type="button" class="nhi-treatment-option" data-nhi-treatment-key="${esc(group.key)}" aria-pressed="${group.key === selectedTreatment?.key}">${group.fromNccn ? (group.requiresSourceReview ? 'NCCN 核對 · ' : 'NCCN · ') : ''}${esc(group.label)}${group.entries.length ? ' · ' + esc(nhiMatchLevelLabels[group.nhiMatchLevel] || '') : ''}</button>`).join('')}
               </div>
               ${selectedTreatment ? `
-                ${selectedTreatment.entries.length ? renderNhiSummary(selectedTreatment.entries.map(({ n }) => n)) : '<div class="alert alert-info"><p class="font-semibold">NCCN 指引候選療程</p><p class="text-xs mt-1">尚未在已匯入的健保資料找到同名條目；這不代表沒有給付，請核對最新版給付規定。</p></div>'}
+                ${selectedTreatment.entries.length ? `<div class="alert ${selectedNhiMatchLevel === 'exact' ? 'alert-success' : 'alert-warning'}"><p class="font-semibold">${esc(nhiMatchLevelLabels[selectedNhiMatchLevel] || '健保資料待核對')}</p><p class="text-xs mt-1">${selectedNhiMatchLevel === 'component' ? '目前只找到療程中部分藥物的相關規定，不代表整套療程均有給付。' : selectedNhiMatchLevel === 'similar' ? '目前只有名稱相似的條目，不可視為同一療程或給付依據。' : '已找到同名療程／藥物規定，仍需依完整條件判定。'}</p></div>${renderNhiSummary(selectedTreatment.entries.map(({ n }) => n))}` : '<div class="alert alert-info"><p class="font-semibold">NCCN 指引候選療程</p><p class="text-xs mt-1">尚未在已匯入的健保資料找到同名條目；這不代表沒有給付，請核對最新版給付規定。</p></div>'}
                 ${selectedTreatment.requiresSourceReview ? '<div class="alert alert-warning"><p class="font-semibold">此候選需開啟 NCCN 原頁核對</p><p class="text-xs mt-1">候選來自流程頁或敘述文字，請先確認完整適用條件，再進行健保比對。</p></div>' : ''}
                 ${selectedNhiResultState === 'missing' ? `<div class="nhi-query-status is-warning" aria-live="polite">
                   <p class="font-semibold">資料不足：尚缺 ${selectedUnknownLabels.length} 項必要條件</p>
@@ -1982,7 +2164,8 @@
                   <p class="text-xs mt-1">${esc(selectedUnmatchedLabels.join('、'))}</p>
                   ${affectedNhiFields.length ? '<button type="button" class="btn btn-secondary btn-sm mt-3" id="nhi-query-open-btn">修改條件</button>' : ''}
                 </div>` : ''}
-                ${selectedNhiResultState === 'matched' ? `<div class="nhi-query-status is-matched" aria-live="polite"><p class="font-semibold">目前輸入資料符合已擷取條件</p><p class="text-xs mt-1">仍需核對完整條文、文件證明與事前審查要求。</p></div>` : ''}
+                ${selectedNhiResultState === 'matched' ? `<div class="nhi-query-status is-matched" aria-live="polite"><p class="font-semibold">${selectedNhiMatchLevel === 'component' ? '部分成分目前符合已擷取條件' : '目前輸入資料符合已擷取條件'}</p><p class="text-xs mt-1">${selectedNhiMatchLevel === 'component' ? '僅代表部分成分有相關規定；整套療程仍須逐項確認。' : '仍需核對完整條文、文件證明與事前審查要求。'}</p></div>` : ''}
+                ${selectedNhiResultState === 'similar' ? `<div class="nhi-query-status is-warning" aria-live="polite"><p class="font-semibold">只有名稱相似，不能判定健保給付</p><p class="text-xs mt-1">請開啟原始健保條文，確認是否為相同成分、複方與適應症。</p></div>` : ''}
                 ${selectedNhiResultState === 'review' && selectedTreatment.entries.length ? `<div class="nhi-query-status" aria-live="polite"><p class="font-semibold">需逐項人工核對限制條件</p></div>` : ''}
                 ${affectedNhiFields.length ? `<div id="nhi-query-panel" class="nhi-query-panel hidden">
                   <h3 class="font-semibold text-gray-800 mb-3">${selectedNhiResultState === 'missing' ? '補填必要條件' : '修改查詢條件'}</h3>
@@ -1993,9 +2176,10 @@
                   </div>
                 </div>` : ''}
                 ${missingNhiFieldLabels.length ? `<div class="nhi-query-status is-warning"><p class="font-semibold">尚未建立對應欄位</p><p class="text-xs mt-1">${esc(missingNhiFieldLabels.join('、'))}</p><button type="button" class="btn btn-secondary btn-sm mt-3" id="nhi-query-edit-fields-btn">編輯精準欄位</button></div>` : ''}
-                <div class="space-y-2">${selectedTreatment.entries.map(({ n, st }, index) => {
+                <div class="space-y-2">${selectedTreatment.entries.map(({ n, st, nhiMatchLevel }, index) => {
                   const linked = docs.find(d => d.id === n.sourceDocumentId);
-                  const heading = selectedTreatment.entries.length > 1 ? `給付條件 ${index + 1} · ${n.label}` : selectedTreatment.label;
+                  const evidence = nhiMatchLevelLabels[nhiMatchLevel] || '待核對';
+                  const heading = selectedTreatment.entries.length > 1 ? `給付條件 ${index + 1} · ${n.label} · ${evidence}` : `${selectedTreatment.label} · ${evidence}`;
                   return renderNhiNoteCard(n, st, linked, heading);
                 }).join('')}</div>
               ` : '<div class="bg-gray-50 rounded p-3"><p class="text-sm text-gray-500">尚未選擇藥物／療程</p></div>'}
@@ -2120,7 +2304,12 @@
           const selectedNotes = selectedTreatment.entries.map(({ n }) => n);
           const hasRelatedCoverage = selectedNotes.some(note => nhiCoverageStatus(note) === NHI_STATUS_RELATED);
           lines.push('- 已選擇：' + selectedTreatment.label);
-          lines.push('- ' + (hasRelatedCoverage ? '健保有相關給付，但有限制條件' : '尚待確認是否有相關給付'));
+          lines.push('- 比對層級：' + (nhiMatchLevelLabels[selectedNhiMatchLevel] || '待核對'));
+          lines.push('- ' + (selectedNhiMatchLevel === 'component'
+            ? '部分成分有相關健保規定；不代表整套療程給付'
+            : selectedNhiMatchLevel === 'similar'
+              ? '僅名稱相似，尚待人工核對是否為相同療程'
+              : hasRelatedCoverage ? '健保有相關給付，但有限制條件' : '尚待確認是否有相關給付'));
           selectedTreatment.entries.forEach(({ n, st }, index) => {
             const ruleLabel = selectedTreatment.entries.length > 1 ? '給付條件 ' + (index + 1) : '給付條件';
             lines.push('- ' + ruleLabel + ' [' + nhiConditionStateText(st, n.condition) + ']');
@@ -2467,6 +2656,11 @@
             options: (type === 'text' || type === 'number') ? [] :
               document.getElementById('pf-options').value.split('\n').map(o => o.trim()).filter(Boolean),
           };
+          if (item?.sourceType) data.sourceType = item.sourceType;
+          if (item?.sourceTemplateKey) data.sourceTemplateKey = item.sourceTemplateKey;
+          if (item?.templateScope) data.templateScope = item.templateScope;
+          if (item?.help) data.help = item.help;
+          if (item?.optionLabels) data.optionLabels = { ...item.optionLabels };
           await dbPut('precisionFields', data);
           showToast(item ? '已更新' : '已新增');
           navigate('/cancer/' + card.id + '/precision');
@@ -2484,7 +2678,7 @@
         let added = 0;
         for (const p of templates) {
           if ([p.label, ...(p.aliases || [])].some(label => existing.has(String(label).trim().toLocaleLowerCase()))) continue;
-          await dbPut('precisionFields', { id: crypto.randomUUID(), cancerId: card.id, label: p.label, type: p.type, required: false, options: [...p.options], sourceType: '內建癌別範本', sourceTemplateKey: p.key, templateScope: p.scope });
+          await dbPut('precisionFields', { id: crypto.randomUUID(), cancerId: card.id, label: p.label, type: p.type, required: false, options: [...p.options], help: p.help || '', optionLabels: { ...(p.optionLabels || {}) }, sourceType: '內建癌別範本', sourceTemplateKey: p.key, templateScope: p.scope });
           added++;
         }
         showToast(added ? `已加入 ${added} 個本癌別欄位` : '本癌別欄位皆已存在');
@@ -2506,7 +2700,8 @@
                   ${item.required ? '<span class="tag tag-required">必填</span>' : ''}
                   ${item.sourceType === '內建癌別範本' ? '<span class="tag tag-category">內建範本</span>' : ''}
                 </div>
-                ${item.options.length ? `<p class="text-xs text-gray-400 mt-1">選項：${esc(item.options.join('、'))}</p>` : ''}
+                ${item.options.length ? `<p class="text-xs text-gray-400 mt-1">選項：${esc(item.options.map(option => precisionOptionLabel(item, option)).join('、'))}</p>` : ''}
+                ${item.help ? `<p class="text-xs text-gray-400 mt-1">${esc(item.help)}</p>` : ''}
               </div>
               <div class="flex gap-1">
                 <button class="btn btn-ghost btn-sm" onclick="window._editPrecision('${item.id}')">編輯</button>
@@ -2523,6 +2718,7 @@
       };
       window._deletePrecision = async (id) => {
         if (!confirm('確定刪除此欄位？')) return;
+        window.CASE_STATE.removeField(card.id, id);
         await dbDelete('precisionFields', id);
         showToast('已刪除');
         navigate('/cancer/' + card.id + '/precision');
@@ -2539,7 +2735,7 @@
       // 健保相關文件優先，其餘文件也可選（供比對給付規定用）
       const linkableDocs = [...allDocs.filter(d => NHI_PARSER.isNhiDocument(d) && !d.archived), ...allDocs.filter(d => !NHI_PARSER.isNhiDocument(d) && !d.archived)];
       const docMap = {}; allDocs.forEach(d => docMap[d.id] = d);
-      const precisionFields = (await dbGetAll('precisionFields')).filter(p => p.cancerId === card.id);
+      const precisionFields = await getCasePrecisionFields(card.id);
       const pfMap = buildPfMap(precisionFields);
       const selFields = precisionFields.filter(p => p.type === 'single_select' || p.type === 'multi_select');
 
@@ -3492,6 +3688,12 @@
       if (navigator.storage?.persisted) {
         persistStatus = (await navigator.storage.persisted()) ? '✅ 已啟用' : '未啟用（加入主畫面後通常會自動啟用）';
       }
+      const restoreSnapshots = (await dbGetAll('restoreSnapshots')).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      const latestRestoreSnapshot = restoreSnapshots[0];
+      const pdfRestoreTracker = readPdfRestoreTracker();
+      const pdfRestoreProgress = pdfRestoreTracker && Number(pdfRestoreTracker.batchCount) > 0
+        ? BACKUP_FORMAT.batchProgress(pdfRestoreTracker.batchCount, pdfRestoreTracker.restored)
+        : null;
 
       app.innerHTML = `
         <div class="container">
@@ -3505,7 +3707,9 @@
               <div id="pdf-backup-panel" class="nhi-query-panel hidden"></div>
               <button class="btn btn-secondary" id="import-btn">匯入資料備份</button>
               <button class="btn btn-secondary" id="import-pdf-batches-btn">匯入 PDF 批次</button>
-              <p class="text-xs text-gray-400">先備份資料索引；PDF 每 5 份一批下載，避免 Android 一次載入全部檔案。還原時先匯入資料備份，再選取一或多個 PDF 批次。</p>
+              ${latestRestoreSnapshot ? `<button class="btn btn-ghost" id="rollback-restore-btn">復原匯入前資料索引（不含 PDF） · ${esc(latestRestoreSnapshot.createdAt.split('T')[0])}</button>` : ''}
+              ${pdfRestoreProgress ? `<div class="alert ${pdfRestoreProgress.complete ? 'alert-success' : 'alert-warning'}"><p class="font-semibold">PDF 還原批次 ${pdfRestoreProgress.restored.length} / ${pdfRestoreProgress.batchCount}</p><p class="text-xs mt-1">${pdfRestoreProgress.complete ? '所有批次均已補回。' : '尚缺第 ' + pdfRestoreProgress.missing.join('、') + ' 批。'}</p></div>` : ''}
+              <p class="text-xs text-gray-400">先備份資料索引；PDF 每 5 份一批下載，避免 Android 一次載入全部檔案。v4 備份會檢查 SHA-256、批次完整性，且匯入資料前自動保留目前版本。</p>
               <p class="text-xs" style="color:var(--amber-700)">⚠️ 建議將本 App「加入主畫面」安裝使用，並定期匯出完整備份。瀏覽器在儲存空間不足時仍可能清除本機資料（含 PDF）。</p>
             </div>
           </div>
@@ -3565,7 +3769,7 @@
 
       document.getElementById('export-btn').addEventListener('click', async () => {
         const data = await exportBackup();
-        downloadJSON(data, `oncology-guideline-backup-${new Date().toISOString().split('T')[0]}.json`);
+        downloadJSON(data, `oncology-guideline-backup-${new Date().toISOString().split('T')[0]}-${data.backupSetId.slice(0, 8)}.json`);
         markBackedUp();
         showToast('備份已匯出');
         navigate('/settings');
@@ -3573,6 +3777,7 @@
 
       document.getElementById('export-pdf-batches-btn').addEventListener('click', async () => {
         const documents = await dbGetAll('documents');
+        const plan = backupPlanForDocuments(documents);
         const batches = BACKUP_FORMAT.planPdfBatches(documents);
         const panel = document.getElementById('pdf-backup-panel');
         panel.classList.remove('hidden');
@@ -3587,8 +3792,8 @@
             button.disabled = true;
             button.textContent = '準備中…';
             try {
-              const data = await exportPdfBackupBatch(batches[index], index + 1, batches.length);
-              downloadJSON(data, `oncology-guideline-pdf-batch-${String(index + 1).padStart(2, '0')}-of-${String(batches.length).padStart(2, '0')}.json`, true);
+              const data = await exportPdfBackupBatch(batches[index], index + 1, batches.length, plan);
+              downloadJSON(data, `oncology-guideline-pdf-${plan.backupSetId.slice(0, 8)}-batch-${String(index + 1).padStart(2, '0')}-of-${String(batches.length).padStart(2, '0')}.json`, true);
               button.textContent = `第 ${index + 1} 批已下載`;
             } catch (error) {
               button.disabled = false;
@@ -3606,8 +3811,8 @@
           const file = e.target.files[0];
           if (!file || !confirm('匯入備份將覆蓋現有資料，確定繼續？')) return;
           try {
-            await importBackup(file);
-            showToast('備份已匯入');
+            const result = await importBackup(file);
+            showToast('備份已安全匯入；已保留匯入前資料' + (result.migratedCaseValues ? '，並將舊個案值移至本次分頁' : ''));
             navigate('/');
           } catch (err) {
             showToast('匯入失敗：' + err.message);
@@ -3623,15 +3828,28 @@
           const files = [...event.target.files];
           if (!files.length) return;
           let restored = 0;
+          let latestProgress = null;
           try {
-            for (const file of files) restored += await importPdfBackupBatch(file);
-            showToast(`已補回 ${restored} 份 PDF`);
+            for (const file of files) {
+              const result = await importPdfBackupBatch(file);
+              restored += result.restoredPdfCount;
+              latestProgress = result.progress;
+            }
+            showToast(`已補回 ${restored} 份 PDF；批次 ${latestProgress.restored.length} / ${latestProgress.batchCount}${latestProgress.complete ? '，已完整' : '，尚缺 ' + latestProgress.missing.join('、')}`);
             navigate('/pdf-library');
           } catch (error) {
             showToast('PDF 批次匯入失敗：' + error.message);
           }
         };
         input.click();
+      });
+
+      document.getElementById('rollback-restore-btn')?.addEventListener('click', async () => {
+        if (!latestRestoreSnapshot || !confirm('以匯入前自動保留資料取代目前資料？')) return;
+        await dbReplaceStores(latestRestoreSnapshot.data);
+        window.CASE_STATE.clearAll();
+        showToast('已復原匯入前資料索引；PDF 未變更');
+        navigate('/');
       });
 
       document.getElementById('clear-btn').addEventListener('click', async () => {
@@ -3643,7 +3861,9 @@
           </div>
         `;
         document.getElementById('clear-confirm').addEventListener('click', async () => {
-          for (const store of ['cancerCards','documents','checklists','precisionFields','nhiNotes']) await dbClear(store);
+          for (const store of ['cancerCards','documents','checklists','precisionFields','nhiNotes','restoreSnapshots']) await dbClear(store);
+          window.CASE_STATE.clearAll();
+          localStorage.removeItem(PDF_RESTORE_TRACKER_KEY);
           indexedDB.deleteDatabase('OncologyPdfStorage');
           showToast('資料已清除');
           window.location.reload();
@@ -3656,6 +3876,7 @@
     async function init() {
       await openDB();
       await seedDatabase();
+      await migrateLegacyCaseValues();
       // 要求持久儲存，避免瀏覽器在空間不足時清除 IndexedDB（含 PDF）
       if (navigator.storage?.persist) navigator.storage.persist();
       handleRoute();
@@ -3700,8 +3921,7 @@
     };
     window._newCase = async (cancerId) => {
       if (!confirm('清除這個癌別目前輸入的病患條件、勾選項目與已選藥物？')) return;
-      const fields = (await dbGetAll('precisionFields')).filter(field => field.cancerId === cancerId && hasPfValue(field));
-      for (const field of fields) await dbPut('precisionFields', { ...field, value: blankPfValue(field) });
+      window.CASE_STATE.clear(cancerId);
       const checks = (await dbGetAll('checklists')).filter(item => item.cancerId === cancerId && item.checked);
       for (const item of checks) await dbPut('checklists', { ...item, checked: false });
       clearNhiQueryState(cancerId);
@@ -3715,7 +3935,7 @@
       const anchorTop = el?.closest('.form-group')?.getBoundingClientRect().top;
       const f = await dbGet('precisionFields', id);
       if (f) {
-        await dbPut('precisionFields', { ...f, value });
+        window.CASE_STATE.setValue(f.cancerId, id, value);
         clearNhiQueryState(f.cancerId);
         await handleRoute({ preserveScroll: true, anchorId, anchorTop });
       }
@@ -3727,10 +3947,11 @@
       const f = await dbGet('precisionFields', id);
       if (!f) return;
       const opt = f.options[optIdx];
-      const cur = Array.isArray(f.value) ? [...f.value] : [];
+      const currentValues = window.CASE_STATE.read(f.cancerId);
+      const cur = Array.isArray(currentValues[id]) ? [...currentValues[id]] : [];
       const i = cur.indexOf(opt);
       if (i >= 0) cur.splice(i, 1); else cur.push(opt);
-      await dbPut('precisionFields', { ...f, value: cur });
+      window.CASE_STATE.setValue(f.cancerId, id, cur);
       clearNhiQueryState(f.cancerId);
       await handleRoute({ preserveScroll: true, anchorId, anchorTop });
     };
