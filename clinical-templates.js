@@ -3,8 +3,33 @@
 
   const cl = (key, label, category = '檢測', importance = '必查', scope = 'cancer') =>
     ({ key, label, category, importance, scope });
-  const pf = (key, label, type = 'single_select', options = [], scope = 'cancer', metadata = {}) =>
-    ({ key, label, type, options, required: false, scope, ...metadata });
+
+  const ambiguousOptionLabels = Object.freeze({
+    '待檢／不適用': '待檢或不適用（需再確認）',
+    '待確認／不適用': '待確認或不適用（需再確認）',
+    '不適用／待確認': '不適用或待確認（需再確認）',
+    '其他／待確認': '其他或待確認（請補充）',
+    '其他／待檢': '其他結果或尚待檢測（請補充）',
+    '無／待檢': '未檢出或尚待檢測（需再確認）',
+    'wild type／待進一步檢測': 'wild type 或待進一步檢測（需再確認）',
+    '不可評估／待檢': '不可評估或尚待檢測（需再確認）',
+    '陰性／低表現': '陰性或低表現（需再確認）',
+    '未做／不適用': '未做或不適用（需再確認）',
+    '多發／不明': '多發或不明（請補充）',
+    '其他／未分類': '其他或未分類（請補充）',
+  });
+  const inferredExclusiveOptions = (type, options) => type !== 'multi_select' ? [] : options.filter(option =>
+    /^(?:無(?:$|已知|上述|／)|未檢出$|待檢|待確認|pMMR／MSS$|其他／待|wild type／待)/i.test(option)
+  );
+  const pf = (key, label, type = 'single_select', options = [], scope = 'cancer', metadata = {}) => {
+    const optionLabels = Object.fromEntries(options.filter(option => ambiguousOptionLabels[option]).map(option => [option, ambiguousOptionLabels[option]]));
+    Object.assign(optionLabels, metadata.optionLabels || {});
+    const exclusiveOptions = [...new Set([...inferredExclusiveOptions(type, options), ...(metadata.exclusiveOptions || [])])];
+    const field = { key, label, type, options, required: false, scope, ...metadata };
+    if (Object.keys(optionLabels).length) field.optionLabels = optionLabels;
+    if (exclusiveOptions.length) field.exclusiveOptions = exclusiveOptions;
+    return field;
+  };
 
   // These templates identify information to verify or record. They do not choose treatment.
   const commonChecklists = [
@@ -51,6 +76,212 @@
   for (const item of commonPrecisionFields) item.aliases = legacyAliases.precisionFields[item.key] || [];
 
   const groups = [
+    {
+      ids: ['anal_cancer'],
+      precisionFields: [
+        pf('anal-histology', '肛門癌組織型', 'single_select', ['鱗狀細胞癌','腺癌','黑色素瘤','其他','待確認']),
+        pf('anal-p16', 'p16／HPV', 'single_select', ['陽性','陰性','待檢','不適用']),
+        pf('anal-hiv', 'HIV 狀態', 'single_select', ['陰性','陽性，病毒控制良好','陽性，病毒未控制','待確認']),
+      ],
+    },
+    {
+      ids: ['ampullary_adenocarcinoma'],
+      precisionFields: [
+        pf('ampullary-subtype', '壺腹部腺癌亞型', 'single_select', ['pancreatobiliary','intestinal','mixed','其他','待確認']),
+        pf('ampullary-mmr', 'MMR／MSI', 'single_select', ['pMMR／MSS','dMMR／MSI-H','待檢']),
+        pf('ampullary-her2', 'HER2', 'single_select', ['陽性','陰性','待檢','不適用']),
+      ],
+    },
+    {
+      ids: ['appendiceal_neoplasms'],
+      precisionFields: [
+        pf('appendix-pathology', '闌尾腫瘤病理分類', 'single_select', ['LAMN','HAMN','appendiceal adenocarcinoma','goblet cell adenocarcinoma','undifferentiated carcinoma','其他','待確認']),
+        pf('appendix-grade', '闌尾腫瘤分級', 'single_select', ['low grade','high grade','不適用','待確認']),
+        pf('appendix-spread', '闌尾腫瘤範圍', 'single_select', ['局限','僅腹膜播散','腹膜外轉移','待確認']),
+      ],
+    },
+    {
+      ids: ['thymic_tumor'],
+      precisionFields: [
+        pf('thymic-histology', '胸腺腫瘤分類', 'single_select', ['thymoma','thymic carcinoma','thymic neuroendocrine tumor','其他','待確認']),
+        pf('thymic-resectability', '胸腺腫瘤可切除性', 'single_select', ['可切除','潛在可切除','不可切除','待確認']),
+        pf('thymic-myasthenia', '重症肌無力', 'single_select', ['無','有','待確認']),
+      ],
+    },
+    {
+      ids: ['mesothelioma','pleural_mesothelioma','peritoneal_mesothelioma'],
+      precisionFields: [
+        pf('meso-site', '間皮瘤原發部位', 'single_select', ['胸膜','腹膜','其他','待確認']),
+        pf('meso-histology', '間皮瘤組織型', 'single_select', ['epithelioid','biphasic','sarcomatoid','其他','待確認']),
+        pf('meso-resectability', '間皮瘤手術評估', 'single_select', ['可切除','不可切除','醫療上不適合手術','待確認']),
+      ],
+    },
+    {
+      ids: ['vulvar_cancer','vaginal_cancer'],
+      precisionFields: [
+        pf('lowergyne-histology', '外陰／陰道癌組織型', 'single_select', ['鱗狀細胞癌','腺癌','黑色素瘤','其他','待確認']),
+        pf('lowergyne-hpv-p16', 'HPV／p16', 'single_select', ['陽性','陰性','待檢','不適用']),
+        pf('lowergyne-pdl1-cps', 'PD-L1 CPS', 'number'),
+      ],
+    },
+    {
+      ids: ['gestational_trophoblastic_disease'],
+      precisionFields: [
+        pf('gtn-type', '姊娠滋養細胞疾病分類', 'single_select', ['hydatidiform mole','invasive mole','choriocarcinoma','PSTT','ETT','其他','待確認']),
+        pf('gtn-figo-risk', 'FIGO／WHO 風險分數', 'single_select', ['low risk（0–6）','high risk（≥7）','PSTT／ETT（不適用）','待確認']),
+        pf('gtn-metastases', 'GTN 轉移部位', 'multi_select', ['肺','陰道／骨盆','肝','腦','其他','無','待確認']),
+      ],
+    },
+    {
+      ids: ['penile_cancer'],
+      precisionFields: [
+        pf('penile-histology', '陰莖癌組織型', 'single_select', ['usual-type SCC','HPV-related SCC','HPV-independent SCC','其他','待確認']),
+        pf('penile-nodes', '鼠蹊淋巴結臨床分期', 'single_select', ['cN0','cN1','cN2','cN3','待確認']),
+        pf('penile-p16', 'p16／HPV', 'single_select', ['陽性','陰性','待檢']),
+      ],
+    },
+    {
+      ids: ['non_melanoma_skin_cancer'],
+      precisionFields: [
+        pf('nmsc-type', '非黑色素皮膚癌分類', 'single_select', ['basal cell carcinoma','cutaneous squamous cell carcinoma','其他','待確認']),
+      ],
+    },
+    {
+      ids: ['basal_cell_skin_cancer'],
+      precisionFields: [
+        pf('bcc-local-risk', 'BCC 局部復發風險', 'single_select', ['low risk','high risk','不適用','待確認']),
+        pf('bcc-extent', 'BCC 疾病範圍', 'single_select', ['局限','復發','locally advanced','metastatic','待確認']),
+      ],
+    },
+    {
+      ids: ['squamous_cell_skin_cancer'],
+      precisionFields: [
+        pf('cscc-local-risk', 'cSCC 局部／轉移風險', 'single_select', ['low risk','high risk','very high risk','不適用','待確認']),
+        pf('cscc-extent', 'cSCC 疾病範圍', 'single_select', ['局限','in-transit／衛星灶','區域淋巴結','遠端轉移','待確認']),
+        pf('cscc-immunosuppression', '免疫抑制狀態', 'single_select', ['無','有','待確認']),
+      ],
+    },
+    {
+      ids: ['merkel_cell_carcinoma'],
+      precisionFields: [
+        pf('mcc-presentation', 'Merkel 細胞癌疾病範圍', 'single_select', ['局部腫瘤','臨床淋巴結陽性','原發不明且淋巴結陽性','遠端轉移','待確認']),
+        pf('mcc-immunosuppression', '免疫抑制狀態', 'single_select', ['無','有','待確認']),
+        pf('mcc-mcpyv', 'MCPyV oncoprotein antibody', 'single_select', ['seropositive','seronegative','未檢測']),
+      ],
+    },
+    {
+      ids: ['cutaneous_lymphomas'],
+      precisionFields: [
+        pf('cutaneous-lymphoma-subtype', '皮膚淋巴瘤亞型', 'single_select', ['mycosis fungoides','Sézary syndrome','primary cutaneous CD30+ LPD','subcutaneous panniculitis-like T-cell lymphoma','primary cutaneous B-cell lymphoma','其他','待確認']),
+        pf('cutaneous-lymphoma-compartments', 'TNMB 受累範圍', 'multi_select', ['皮膚','淋巴結','血液','內臟','待確認']),
+      ],
+    },
+    {
+      ids: ['dfsp'],
+      precisionFields: [
+        pf('dfsp-transformation', 'DFSP 纖維肉瘤轉化', 'single_select', ['無','fibrosarcomatous transformation','待確認']),
+        pf('dfsp-pdgfb', 'COL1A1::PDGFB', 'single_select', ['陽性','陰性','待檢']),
+        pf('dfsp-resectability', 'DFSP 可切除性', 'single_select', ['可切除','borderline resectable','不可切除','待確認']),
+      ],
+    },
+    {
+      ids: ['kaposi_sarcoma'],
+      precisionFields: [
+        pf('ks-context', 'Kaposi sarcoma 臨床背景', 'single_select', ['HIV-associated','iatrogenic／transplant-associated','classic','endemic','其他','待確認']),
+        pf('ks-extent', 'Kaposi sarcoma 疾病範圍', 'single_select', ['僅皮膚／口腔','淋巴結','內臟','待確認']),
+        pf('ks-hiv-control', 'HIV 控制狀態', 'single_select', ['良好','未控制','不適用','待確認']),
+      ],
+    },
+    {
+      ids: ['bone_cancer','osteosarcoma','ewing_sarcoma'],
+      precisionFields: [
+        pf('bone-histology', '骨腫瘤組織型', 'single_select', ['osteosarcoma','Ewing sarcoma','chondrosarcoma','chordoma','giant cell tumor of bone','UPS of bone','其他','待確認']),
+        pf('bone-resectability', '原發與轉移灶可切除性', 'single_select', ['可完整切除','部分可切除','不可切除','待確認']),
+        pf('bone-metastases', '骨腫瘤轉移部位', 'multi_select', ['肺','骨','其他','無','待確認']),
+      ],
+    },
+    {
+      ids: ['brain_metastasis'],
+      precisionFields: [
+        pf('brainmets-count', '腦轉移病灶數', 'number'),
+        pf('brainmets-symptoms', '腦轉移症狀／質量效應', 'single_select', ['無症狀','有症狀','緊急質量效應','待確認']),
+        pf('brainmets-local-therapy', '既往腦部局部治療', 'multi_select', ['手術','SRS／SRT','WBRT','無','待確認']),
+      ],
+    },
+    {
+      ids: ['castleman_disease'],
+      precisionFields: [
+        pf('castleman-class', 'Castleman 病分類', 'single_select', ['unicentric','HHV8-positive multicentric','idiopathic multicentric','POEMS-associated multicentric','其他','待確認']),
+        pf('castleman-severity', 'MCD 嚴重度', 'single_select', ['non-severe','severe','不適用','待確認']),
+        pf('castleman-viral', 'HHV8／HIV', 'single_select', ['HHV8+／HIV+','HHV8+／HIV-','HHV8-／HIV-','待檢']),
+      ],
+    },
+    {
+      ids: ['hairy_cell_leukemia'],
+      precisionFields: [
+        pf('hcl-subtype', 'Hairy cell leukemia 分類', 'single_select', ['classic HCL','splenic B-cell lymphoma／leukemia with prominent nucleoli','其他','待確認']),
+        pf('hcl-braf', 'BRAF V600E', 'single_select', ['陽性','陰性','待檢']),
+        pf('hcl-ighv', 'IGHV4-34', 'single_select', ['陽性','陰性','待檢']),
+      ],
+    },
+    {
+      ids: ['histiocytic_neoplasms'],
+      precisionFields: [
+        pf('histio-subtype', '組織細胞腫瘤亞型', 'single_select', ['Langerhans cell histiocytosis','Erdheim-Chester disease','Rosai-Dorfman disease','juvenile xanthogranuloma','malignant histiocytic neoplasm','其他','待確認']),
+        pf('histio-extent', '組織細胞腫瘤範圍', 'single_select', ['unifocal','multifocal single-system','multisystem','待確認']),
+        pf('histio-mapk', 'MAPK pathway 變異', 'multi_select', ['BRAF V600E','MAP2K1','ARAF','KRAS／NRAS','CSF1R','其他','無已知變異','待檢']),
+      ],
+    },
+    {
+      ids: ['t_cell_lymphomas'],
+      precisionFields: [
+        pf('tcell-subtype', 'T／NK 細胞淋巴瘤亞型', 'single_select', ['PTCL-NOS','nodal TFH-cell lymphoma','ALCL ALK-positive','ALCL ALK-negative','extranodal NK／T-cell lymphoma','adult T-cell leukemia／lymphoma','hepatosplenic T-cell lymphoma','T-PLL','其他','待確認']),
+        pf('tcell-cd30', 'CD30', 'single_select', ['陽性','陰性','待檢']),
+        pf('tcell-htlv', 'HTLV-1／2', 'single_select', ['陽性','陰性','待檢','不適用']),
+      ],
+    },
+    {
+      ids: ['adrenal_tumor'],
+      precisionFields: [
+        pf('adrenal-entity', '副腎腫瘤分類', 'single_select', ['adrenocortical carcinoma','pheochromocytoma','paraganglioma','adrenal neuroendocrine tumor','其他','待確認']),
+        pf('adrenal-functional', '副腎腫瘤功能狀態', 'multi_select', ['cortisol','aldosterone','androgen／estrogen','catecholamine','無功能性','待確認'], false, '', { exclusiveOptions: ['無功能性','待確認'] }),
+        pf('adrenal-germline', '遺傳性副腎腫瘤評估', 'single_select', ['未評估','已送檢待報告','陽性','陰性']),
+      ],
+    },
+    {
+      ids: ['cancer_unknown_primary'],
+      precisionFields: [
+        pf('cup-lineage', '原發不明癌病理系譜', 'single_select', ['adenocarcinoma','squamous carcinoma','neuroendocrine carcinoma','poorly differentiated／undifferentiated carcinoma','其他','待確認']),
+        pf('cup-subset', 'CUP 臨床亞群', 'single_select', ['favorable subset','unfavorable subset','待確認']),
+        pf('cup-molecular', 'CUP 可作用分子結果', 'multi_select', ['MSI-H／dMMR','TMB-High','NTRK fusion','RET fusion','BRAF V600E','HER2 amplification','無已知可作用變異','待檢']),
+      ],
+    },
+    {
+      ids: ['neuroblastoma'],
+      precisionFields: [
+        pf('neuroblastoma-inrg', 'INRG stage', 'single_select', ['L1','L2','M','MS','待確認']),
+        pf('neuroblastoma-risk', '神經母細胞瘤風險分層', 'single_select', ['low risk','intermediate risk','high risk','待確認']),
+        pf('neuroblastoma-mycn', 'MYCN', 'single_select', ['amplified','not amplified','待檢']),
+        pf('neuroblastoma-histology', 'INPC histology', 'single_select', ['favorable','unfavorable','待確認']),
+        pf('neuroblastoma-alk', 'ALK alteration', 'single_select', ['陽性','陰性','待檢']),
+      ],
+    },
+    {
+      ids: ['wilms_tumor'],
+      precisionFields: [
+        pf('wilms-laterality', 'Wilms 腫瘤側別／多發性', 'single_select', ['單側','雙側','單側多發','待確認']),
+        pf('wilms-histology', 'Wilms 腫瘤組織型', 'single_select', ['favorable histology','focal anaplasia','diffuse anaplasia','其他','待確認']),
+        pf('wilms-stage', 'Wilms 腫瘤分期', 'single_select', ['I','II','III','IV','V','待確認']),
+        pf('wilms-molecular', 'Wilms 腫瘤分子風險', 'multi_select', ['LOH 1p／16q','1q gain','無上述變異','待檢']),
+      ],
+    },
+    {
+      ids: ['rare_cancers','other_unclassified'],
+      precisionFields: [
+        pf('rare-family', '罕見／未分類腫瘤大類', 'single_select', ['solid tumor','hematologic neoplasm','CNS tumor','pediatric tumor','其他','待確認']),
+        pf('rare-path-review', '專家病理複核', 'single_select', ['尚未複核','已確認原診斷','複核後修正診斷','待確認']),
+      ],
+    },
     {
       ids: ['nsclc'],
       checklists: [
@@ -619,10 +850,23 @@
     ...groups.filter((group) => group.ids.includes(cancerId)).flatMap((group) => group[field] || []),
   ]);
 
+  const toggleMultiValue = (field, current, option) => {
+    const values = Array.isArray(current) ? [...current] : [];
+    const index = values.indexOf(option);
+    if (index >= 0) {
+      values.splice(index, 1);
+      return values;
+    }
+    const exclusive = new Set(field?.exclusiveOptions || []);
+    if (exclusive.has(option)) return [option];
+    return [...values.filter(value => !exclusive.has(value)), option];
+  };
+
   window.CLINICAL_TEMPLATES = Object.freeze({
-    version: 3,
+    version: 4,
     commonChecklists,
     commonPrecisionFields,
+    toggleMultiValue,
     checklistForCancer: (cancerId) => templatesForCancer(cancerId, 'checklists', commonChecklists),
     precisionForCancer: (cancerId) => templatesForCancer(cancerId, 'precisionFields', commonPrecisionFields),
   });

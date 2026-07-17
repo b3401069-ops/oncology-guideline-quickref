@@ -692,6 +692,7 @@
     // 共同欄位加上癌別專屬欄位，避免把所有生物標記塞在同一個選單。
     const PRESET_PRECISION = window.CLINICAL_TEMPLATES.commonPrecisionFields;
     const precisionTemplatesForCancer = window.CLINICAL_TEMPLATES.precisionForCancer;
+    const togglePrecisionMultiValue = window.CLINICAL_TEMPLATES.toggleMultiValue;
 
     // ========== 小工具 ==========
     // 必查章節可帶頁碼與適用條件：「章節名稱|12|生物標記=FGFR2」
@@ -905,7 +906,7 @@
       if (field.type === 'multi_select') {
         const current = Array.isArray(field.value) ? field.value : [];
         return `<fieldset class="form-group" style="border:0;padding:0;margin:0 0 16px"><legend class="label">${esc(field.label)}</legend>
-          <div style="display:flex;flex-wrap:wrap;gap:6px">${options.map(option => `<label class="checkbox-wrap" style="padding:6px 8px"><input type="checkbox" data-nhi-query-field="${esc(field.id)}" value="${esc(option)}" ${current.includes(option) ? 'checked' : ''}> <span class="text-sm">${esc(precisionOptionLabel(field, option))}</span></label>`).join('')}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">${options.map(option => `<label class="checkbox-wrap" style="padding:6px 8px"><input type="checkbox" data-nhi-query-field="${esc(field.id)}" data-exclusive="${field.exclusiveOptions?.includes(option) ? 'true' : 'false'}" value="${esc(option)}" ${current.includes(option) ? 'checked' : ''} onchange="window._enforceNhiQueryMulti(this)"> <span class="text-sm">${esc(precisionOptionLabel(field, option))}</span></label>`).join('')}</div>
           ${field.help ? `<p class="text-xs text-gray-400 mt-1">${esc(field.help)}</p>` : ''}
         </fieldset>`;
       }
@@ -1026,11 +1027,13 @@
         if (item.sourceType !== '內建癌別範本' && !builtInId) continue;
         const templateKey = item.sourceTemplateKey || (builtInId ? String(item.id).slice(idPrefix.length) : '');
         const template = precisionTemplatesForCancer(item.cancerId).find(candidate => candidate.key === templateKey);
-        if (!template || (!template.help && !template.optionLabels)) continue;
+        if (!template || (!template.help && !template.optionLabels && !template.exclusiveOptions)) continue;
         const nextHelp = template.help || '';
         const nextOptionLabels = { ...(template.optionLabels || {}) };
+        const nextExclusiveOptions = [...(template.exclusiveOptions || [])];
         const metadataMatches = item.sourceType === '內建癌別範本' && item.sourceTemplateKey === templateKey &&
-          item.help === nextHelp && JSON.stringify(item.optionLabels || {}) === JSON.stringify(nextOptionLabels);
+          item.help === nextHelp && JSON.stringify(item.optionLabels || {}) === JSON.stringify(nextOptionLabels) &&
+          JSON.stringify(item.exclusiveOptions || []) === JSON.stringify(nextExclusiveOptions);
         if (metadataMatches) continue;
         clinicalPrecisionMetadata.push({
           ...item,
@@ -1038,6 +1041,7 @@
           sourceTemplateKey: templateKey,
           help: nextHelp,
           optionLabels: nextOptionLabels,
+          exclusiveOptions: nextExclusiveOptions,
         });
       }
       await dbPutMany('precisionFields', clinicalPrecisionMetadata);
@@ -1102,6 +1106,7 @@
               options: [...template.options],
               help: template.help || '',
               optionLabels: { ...(template.optionLabels || {}) },
+              exclusiveOptions: [...(template.exclusiveOptions || [])],
               sourceType: '內建癌別範本',
               sourceTemplateKey: template.key,
               templateScope: template.scope,
@@ -1941,7 +1946,7 @@
                 return `<div class="form-group" id="precision-field-${esc(f.id)}"><label class="label">${esc(f.label)}${f.required ? ' *' : ''}</label>
                   <div style="display:flex;flex-wrap:wrap;gap:6px">${f.options.map((o, i) => {
                     const on = Array.isArray(f.value) && f.value.includes(o);
-                    return `<button type="button" class="tag ${on ? 'tag-category' : ''}" style="cursor:pointer;border:none;padding:6px 12px" onclick="window._togglePfMulti('${f.id}', ${i})">${esc(o)}</button>`;
+                    return `<button type="button" class="tag ${on ? 'tag-category' : ''}" style="cursor:pointer;border:none;padding:6px 12px" onclick="window._togglePfMulti('${f.id}', ${i})">${esc(precisionOptionLabel(f, o))}</button>`;
                   }).join('')}</div></div>`;
               }
               if (f.type === 'text' || f.type === 'number') {
@@ -2661,6 +2666,7 @@
           if (item?.templateScope) data.templateScope = item.templateScope;
           if (item?.help) data.help = item.help;
           if (item?.optionLabels) data.optionLabels = { ...item.optionLabels };
+          if (item?.exclusiveOptions) data.exclusiveOptions = [...item.exclusiveOptions];
           await dbPut('precisionFields', data);
           showToast(item ? '已更新' : '已新增');
           navigate('/cancer/' + card.id + '/precision');
@@ -2678,7 +2684,7 @@
         let added = 0;
         for (const p of templates) {
           if ([p.label, ...(p.aliases || [])].some(label => existing.has(String(label).trim().toLocaleLowerCase()))) continue;
-          await dbPut('precisionFields', { id: crypto.randomUUID(), cancerId: card.id, label: p.label, type: p.type, required: false, options: [...p.options], help: p.help || '', optionLabels: { ...(p.optionLabels || {}) }, sourceType: '內建癌別範本', sourceTemplateKey: p.key, templateScope: p.scope });
+          await dbPut('precisionFields', { id: crypto.randomUUID(), cancerId: card.id, label: p.label, type: p.type, required: false, options: [...p.options], help: p.help || '', optionLabels: { ...(p.optionLabels || {}) }, exclusiveOptions: [...(p.exclusiveOptions || [])], sourceType: '內建癌別範本', sourceTemplateKey: p.key, templateScope: p.scope });
           added++;
         }
         showToast(added ? `已加入 ${added} 個本癌別欄位` : '本癌別欄位皆已存在');
@@ -3930,6 +3936,13 @@
       handleRoute({ preserveScroll: true });
     };
     // 精準欄位填值（單選／文字／數字）；改值後重繪，讓條件連動即時反映
+    window._enforceNhiQueryMulti = (el) => {
+      if (!el?.checked) return;
+      const fieldId = el.dataset.nhiQueryField;
+      const group = [...document.querySelectorAll('[data-nhi-query-field="' + CSS.escape(fieldId) + '"]')];
+      if (el.dataset.exclusive === 'true') group.forEach(control => { if (control !== el) control.checked = false; });
+      else group.filter(control => control.dataset.exclusive === 'true').forEach(control => { control.checked = false; });
+    };
     window._setPfValue = async (id, value, el) => {
       const anchorId = 'precision-field-' + id;
       const anchorTop = el?.closest('.form-group')?.getBoundingClientRect().top;
@@ -3948,10 +3961,9 @@
       if (!f) return;
       const opt = f.options[optIdx];
       const currentValues = window.CASE_STATE.read(f.cancerId);
-      const cur = Array.isArray(currentValues[id]) ? [...currentValues[id]] : [];
-      const i = cur.indexOf(opt);
-      if (i >= 0) cur.splice(i, 1); else cur.push(opt);
-      window.CASE_STATE.setValue(f.cancerId, id, cur);
+      const cur = Array.isArray(currentValues[id]) ? currentValues[id] : [];
+      const next = togglePrecisionMultiValue(f, cur, opt);
+      window.CASE_STATE.setValue(f.cancerId, id, next);
       clearNhiQueryState(f.cancerId);
       await handleRoute({ preserveScroll: true, anchorId, anchorTop });
     };
