@@ -50,8 +50,14 @@
       const label = String(entry.n?.label || '').trim() || '未命名藥物／療程';
       const key = normalizeTreatmentName(label);
       if (!key) continue;
-      if (!groups.has(key)) groups.set(key, { key, label, entries: [], nhiMatchLevel: 'exact' });
-      groups.get(key).entries.push({ ...entry, nhiMatchLevel: entry.nhiMatchLevel || 'exact' });
+      if (!groups.has(key)) groups.set(key, { key, label, entries: [], aliasKeys: [], nhiMatchLevel: 'exact' });
+      const group = groups.get(key);
+      group.entries.push({ ...entry, nhiMatchLevel: entry.nhiMatchLevel || 'exact' });
+      // 類別條目（免疫檢查點抑制劑…）需保留個別藥名，療程才對得上
+      for (const alias of entry.n?.aliases || []) {
+        const aliasKey = normalizeTreatmentName(alias);
+        if (aliasKey && aliasKey !== key && !group.aliasKeys.includes(aliasKey)) group.aliasKeys.push(aliasKey);
+      }
     }
     return [...groups.values()];
   }
@@ -104,7 +110,11 @@
         const key = normalizeTreatmentName(label);
         if (!key) continue;
         const relatedEntries = nhiGroups.flatMap(group => {
-          const level = treatmentMatchLevel(key, group.key);
+          // 先比類別標題，再比底下的個別藥名（取最強的一個）
+          const level = strongestMatchLevel([
+            treatmentMatchLevel(key, group.key),
+            ...(group.aliasKeys || []).map(aliasKey => treatmentMatchLevel(key, aliasKey)),
+          ]);
           if (level === 'none') return [];
           return group.entries.map(entry => ({ ...entry, nhiMatchLevel: level }));
         });

@@ -1,37 +1,46 @@
 ﻿(function () {
+  // 別名需涵蓋健保條文實際使用的臨床詞彙（多為組織型或舊譯名），
+  // 否則像「肺腺癌」「泌尿道上皮癌」這類寫法會完全對不到癌別卡片。
   const CANCER_ALIASES = {
     breast_cancer: ['乳癌', '乳房癌'],
-    nsclc: ['非小細胞肺癌', '非小細胞肺腺癌'],
+    nsclc: ['非小細胞肺癌', '非小細胞肺腺癌', '肺腺癌', '肺鱗狀細胞癌', '非鱗狀非小細胞肺癌'],
     sclc: ['小細胞肺癌'],
-    colorectal_cancer: ['大腸直腸癌', '結直腸癌'],
+    colorectal_cancer: ['大腸直腸癌', '結直腸癌', '大腸癌及直腸癌'],
     colon_cancer: ['結腸癌', '大腸癌'],
     rectal_cancer: ['直腸癌'],
-    gastric_cancer: ['胃癌'],
-    esophageal_cancer: ['食道癌', '食道胃接合處癌'],
+    gastric_cancer: ['胃癌', '胃腺癌'],
+    esophageal_cancer: ['食道癌', '食道胃接合處癌', '胃食道接合處腺癌', '食道鱗狀細胞癌', '食道腺癌'],
     pancreatic_cancer: ['胰臟癌', '胰腺癌'],
     biliary_tract_cancer: ['膽道癌', '膽管癌', '膽囊癌'],
+    ampullary_adenocarcinoma: ['壺腹癌', '壺腹部腺癌'],
     hepatocellular_carcinoma: ['肝細胞癌', '肝癌'],
     renal_cell_carcinoma: ['腎細胞癌', '腎癌'],
-    bladder_cancer: ['膀胱癌', '泌尿上皮癌'],
+    bladder_cancer: ['膀胱癌', '泌尿上皮癌', '泌尿道上皮癌', '尿路上皮癌'],
+    renal_pelvis_ureter_cancer: ['腎盂輸尿管癌', '上泌尿道上皮癌'],
     prostate_cancer: ['前列腺癌', '攝護腺癌'],
     ovarian_cancer: ['卵巢癌'],
     cervical_cancer: ['子宮頸癌'],
     endometrial_cancer: ['子宮內膜癌'],
-    melanoma: ['黑色素瘤'],
+    melanoma: ['黑色素瘤', '惡性黑色素瘤'],
     soft_tissue_sarcoma: ['軟組織肉瘤'],
-    lymphoma: ['淋巴瘤'],
+    lymphoma: ['淋巴瘤', '非何杰金氏淋巴瘤', '非霍奇金淋巴瘤'],
+    b_cell_lymphomas: ['瀰漫性大B細胞淋巴瘤', '瀰漫性大型B細胞淋巴瘤', '瀰漫性大細胞B淋巴瘤', '濾泡性淋巴瘤', '被套細胞淋巴瘤', 'DLBCL'],
+    hodgkin_lymphoma: ['何杰金氏淋巴瘤', '霍奇金淋巴瘤', '何杰金氏病'],
+    t_cell_lymphomas: ['周邊T細胞淋巴瘤', 'T細胞淋巴瘤'],
     multiple_myeloma: ['多發性骨髓瘤', '多發性骨髓癌'],
-    acute_myeloid_leukemia: ['急性骨髓性白血病', 'AML'],
-    acute_lymphoblastic_leukemia: ['急性淋巴性白血病', 'ALL'],
-    chronic_myeloid_leukemia: ['慢性骨髓性白血病', 'CML'],
-    cll: ['慢性淋巴性白血病', 'CLL'],
-    mds: ['骨髓化生不良症候群', '骨髓增生不良症候群', 'MDS'],
-    mpn: ['骨髓增生性腫瘤', 'MPN'],
-    gist: ['胃腸道基質瘤', 'GIST'],
-    thyroid_cancer: ['甲狀腺癌'],
-    brain_tumor: ['腦瘤', '腦腫瘤', '神經膠質瘤'],
-    mesothelioma: ['間皮瘤'],
-    neuroendocrine_tumor: ['神經內分泌腫瘤'],
+    acute_myeloid_leukemia: ['急性骨髓性白血病', '急性骨髓芽球性白血病', '急性前骨髓性白血病', '急性前骨髓性細胞白血病', 'AML'],
+    acute_lymphoblastic_leukemia: ['急性淋巴性白血病', '急性淋巴球性白血病', '急性淋巴芽細胞白血病', 'ALL'],
+    chronic_myeloid_leukemia: ['慢性骨髓性白血病', '慢性骨髓球性白血病', 'CML'],
+    cll: ['慢性淋巴性白血病', '慢性淋巴球性白血病', 'CLL'],
+    mds: ['骨髓化生不良症候群', '骨髓增生不良症候群', '慢性骨髓單核細胞性白血病', 'MDS'],
+    mpn: ['骨髓增生性腫瘤', '骨髓纖維化', '真性紅血球增多症', 'MPN'],
+    gist: ['胃腸道基質瘤', '腸胃道間質瘤', '胃腸道間質瘤', '腸胃道基質瘤', 'GIST'],
+    thyroid_cancer: ['甲狀腺癌', '甲狀腺髓質癌', '分化型甲狀腺癌'],
+    brain_tumor: ['腦瘤', '腦腫瘤', '神經膠質瘤', '神經膠母細胞瘤', '多形神經膠母細胞瘤', '膠質母細胞瘤', '星狀細胞瘤', '星狀瘤', '寡樹突膠質細胞瘤'],
+    head_neck_cancers: ['頭頸癌', '頭頸部癌', '頭頸部鱗狀細胞癌', '頭頸部鱗狀上皮細胞癌'],
+    nasopharyngeal_cancer: ['鼻咽癌'],
+    mesothelioma: ['間皮瘤', '惡性肋膜間皮瘤'],
+    neuroendocrine_tumor: ['神經內分泌腫瘤', '神經內分泌瘤'],
     thymic_tumor: ['胸腺瘤', '胸腺癌'],
     testicular_cancer: ['睪丸癌'],
     penile_cancer: ['陰莖癌'],
@@ -113,25 +122,28 @@
     return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
-  // \u5b57\u9762\u4e0a\u4e92\u76f8\u5305\u542b\u3001\u81e8\u5e8a\u4e0a\u537b\u4e92\u65a5\u7684\u764c\u5225\u540d\u7a31\u3002
-  // \u4f8b\uff1a\u300c\u975e\u5c0f\u7d30\u80de\u80ba\u764c\u300d\u542b\u6709\u300c\u5c0f\u7d30\u80de\u80ba\u764c\u300d\u5b57\u6a23\uff0c\u4f46\u4e0d\u53ef\u56e0\u6b64\u628a NSCLC \u689d\u6587\u639b\u5230 SCLC\u3002
+  // 字面上互相包含、臨床上卻互斥的癌別名稱。
+  // 例：「非小細胞肺癌」含有「小細胞肺癌」字樣，但不可因此把 NSCLC 條文掛到 SCLC。
   const CONFLICTING_SUPERSTRINGS = {
-    '\u5c0f\u7d30\u80de\u80ba\u764c': ['\u975e\u5c0f\u7d30\u80de\u80ba\u764c'],
+    '小細胞肺癌': ['非小細胞肺癌'],
+    '何杰金氏淋巴瘤': ['非何杰金氏淋巴瘤'],
+    '霍奇金淋巴瘤': ['非霍奇金淋巴瘤'],
+    '何杰金氏病': ['非何杰金氏病'],
   };
 
-  // \u6392\u9664\u8a9e\u610f\uff08\u300c\u672c\u9805\u4e0d\u9069\u7528\u65bcX\u300d\u4e0d\u61c9\u8996\u70ba\u9069\u7528\u65bc X\uff09
-  const NEGATION_CUE = /\u4e0d\u9069\u7528|\u4e0d\u5f97\u4f7f\u7528|\u4e0d\u5f97\u7528|\u4e0d\u5305\u62ec|\u4e0d\u542b|\u9664\u5916|\u6392\u9664|\u4e0d\u4e88\u7d66\u4ed8|\u975e\u5c6c|\u4e0d\u9069\u5408/;
+  // 排除語意（「本項不適用於X」不應視為適用於 X）
+  const NEGATION_CUE = /不適用|不得使用|不得用|不包括|不含|除外|排除|不予給付|非屬|不適合/;
   const NEGATION_WINDOW = 24;
 
   function stripConflictingSuperstrings(text, term) {
     let output = text;
     for (const blocker of CONFLICTING_SUPERSTRINGS[term] || []) {
-      output = output.split(blocker).join('\u3000');
+      output = output.split(blocker).join('　');
     }
     return output;
   }
 
-  // \u53ea\u6709\u5728\u300c\u6240\u6709\u51fa\u73fe\u4f4d\u7f6e\u90fd\u843d\u5728\u6392\u9664\u8a9e\u53e5\u5167\u300d\u6642\u624d\u8996\u70ba\u672a\u547d\u4e2d\uff0c\u907f\u514d\u904e\u5ea6\u522a\u9664
+  // 只有在「所有出現位置都落在排除語句內」時才視為未命中，避免過度刪除
   function allOccurrencesNegated(text, term) {
     let index = text.indexOf(term);
     if (index < 0) return false;
@@ -147,9 +159,13 @@
     const normalizedTerm = normalizeText(term).trim();
     if (!normalizedTerm) return false;
     if (/[\u3400-\u9fff]/.test(normalizedTerm)) {
-      const scoped = stripConflictingSuperstrings(text, normalizedTerm);
-      if (!scoped.includes(normalizedTerm)) return false;
-      return !allOccurrencesNegated(scoped, normalizedTerm);
+      // 健保條文常在中文與英文縮寫間留空白（「瀰漫性大型 B 細胞淋巴瘤」），
+      // 比對時兩邊都去掉空白才不會因排版差異而漏掉
+      const compact = (value) => String(value).replace(/\s+/gu, '');
+      const term = compact(normalizedTerm);
+      const scoped = compact(stripConflictingSuperstrings(text, normalizedTerm));
+      if (!scoped.includes(term)) return false;
+      return !allOccurrencesNegated(scoped, term);
     }
     if (normalizedTerm.length < 3) return false;
     return new RegExp(`(^|[^a-z0-9])${escapeRegExp(normalizedTerm)}([^a-z0-9]|$)`, 'i').test(text);
@@ -187,6 +203,33 @@
       .trim();
   }
 
+  // 健保會用類別標題涵蓋多個藥品，例如
+  //   9.69.免疫檢查點抑制劑(如 atezolizumab;nivolumab;pembrolizumab;…)
+  // 標題本身留作顯示名稱，但個別藥名必須保留成別名，
+  // 否則 NCCN 的 Pembrolizumab 永遠對不到任何健保條目。
+  // 括號是否尚未閉合（用於判斷標題是否跨行）
+  function unbalancedParens(value) {
+    const text = String(value || '');
+    const open = (text.match(/[（(]/gu) || []).length;
+    const close = (text.match(/[)）]/gu) || []).length;
+    return open > close;
+  }
+
+  function drugAliases(heading) {
+    const text = normalizeText(heading);
+    const names = new Set();
+    for (const group of text.matchAll(/[（(]\s*(?:如|包含|包括)?\s*([^（()）]*)[)）]?/gu)) {
+      for (const piece of String(group[1] || '').split(/[;；,，、\/]|\s+或\s+/u)) {
+        const name = piece.replace(/製劑|成分|注射劑|口服劑型|等$/gu, '').replace(/[^A-Za-z0-9\- ]/g, ' ').trim();
+        if (/^[A-Za-z][A-Za-z0-9\- ]{4,40}$/.test(name)) names.add(name);
+      }
+    }
+    // 標題本身若就是英文學名，也一併納入
+    const bare = cleanDrugLabel(text).replace(/[^A-Za-z0-9\- ]/g, ' ').trim();
+    if (/^[A-Za-z][A-Za-z0-9\- ]{3,40}$/.test(bare)) names.add(bare);
+    return [...names];
+  }
+
   function formatRestrictions(lines) {
     const cleaned = lines
       .map(line => normalizeText(line).trim())
@@ -211,6 +254,7 @@
       if (!current) return;
       current.content = formatRestrictions(current.lines);
       current.label = cleanDrugLabel(current.heading);
+      current.aliases = drugAliases(current.heading);
       current.endPage = current.lastPage;
       if (current.label && !/刪除/.test(current.heading) && current.content.length >= 20) entries.push(current);
       current = null;
@@ -223,7 +267,13 @@
         const heading = line.match(/^(9\.\d+(?:\.\d+){0,3})\.\s*(.+)$/);
         if (heading) {
           closeCurrent();
-          current = { section: heading[1], heading: heading[2], startPage: page.pageNumber, lastPage: page.pageNumber, lines: [] };
+          current = { section: heading[1], heading: heading[2], startPage: page.pageNumber, lastPage: page.pageNumber, lines: [], headingOpen: unbalancedParens(heading[2]) };
+        } else if (current && current.headingOpen) {
+          // 類別標題的藥名清單可能跨行（…avelumab; / ipilimumab 製劑)），
+          // 未接完就把後續行併回標題，否則清單尾端的藥名會被當成內文而漏掉
+          current.heading += line;
+          current.headingOpen = unbalancedParens(current.heading);
+          current.lastPage = page.pageNumber;
         } else if (current) {
           current.lines.push(line);
           current.lastPage = page.pageNumber;
@@ -252,6 +302,7 @@
         candidates.push({
           cancerId: card.id,
           label: entry.label,
+          aliases: entry.aliases || [],
           content: entry.content,
           coverageStatus: clear ? 'related_with_restrictions' : 'verification_needed',
           extractionStatus: clear ? 'auto_extracted' : 'review_needed',

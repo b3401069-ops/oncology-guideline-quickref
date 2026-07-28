@@ -168,7 +168,7 @@
         // Child-Pugh：肝癌治療選擇的關鍵條件，原本完全未擷取
         const childPugh = /child\s*-?\s*pugh/i.test(label) ? raw.match(/^\s*([ABC])/i) : null;
         if (childPugh) addFeature(output, 'child-pugh-' + childPugh[1].toLowerCase(), 'positive', field, value);
-        if (/MPN/i.test(label) && /(?:subtype|\u4e9e\u578b)/i.test(label)) {
+        if (/MPN/i.test(label) && /(?:subtype|亞型)/i.test(label)) {
           if (/\bPV\b/i.test(raw)) addFeature(output, 'mpn-pv', 'positive', field, value);
           if (/\bET\b/i.test(raw)) addFeature(output, 'mpn-et', 'positive', field, value);
           if (/\b(?:PMF|pre-PMF)\b/i.test(raw)) addFeature(output, 'mpn-mf', 'positive', field, value);

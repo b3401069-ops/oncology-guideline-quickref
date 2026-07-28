@@ -1837,7 +1837,7 @@
       if (!guidelines?.length) return '';
       return `
         <div class="border-t pt-3 mt-3">
-          <p class="text-sm font-medium text-gray-700 mb-2">NCCN \u5b98\u65b9\u5206\u985e\u6307\u5f15\uff1a</p>
+          <p class="text-sm font-medium text-gray-700 mb-2">NCCN 官方分類指引：</p>
           <div class="space-y-2">
             ${guidelines.map(g => `<a class="btn btn-ghost btn-sm" href="${esc(g.url)}" target="_blank" rel="noopener" style="justify-content:flex-start;text-align:left">${esc(g.title)} &#8599;</a>`).join('')}
           </div>
@@ -3422,6 +3422,8 @@
             id: `nhi-auto-${doc.id}-${candidate.sourceSection.replace(/[^a-z0-9.]/gi, '-')}-${candidate.cancerId}`,
             cancerId: candidate.cancerId,
             label: candidate.label,
+            // 類別標題（如「免疫檢查點抑制劑」）底下的個別藥名，供療程比對用
+            aliases: candidate.aliases || [],
             content: candidate.content,
             coverageStatus: candidate.coverageStatus,
             condition: null,

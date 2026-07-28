@@ -16,7 +16,7 @@
   const OPTION_SIGNAL = /\b(?:therapy|chemotherapy|immunotherapy|radiotherapy|resection|surgery|observation|observe|monitoring|surveillance|follow-up|clinical trial|transplant|ablation|embolization|excision|dissection|lobectomy|mastectomy|colectomy|prostatectomy|metastasectomy)\b|\b(?:RT|CRT|PRRT|SBRT|SRS|EBRT|IMRT|ADT|ARPI|SSA)\b|(?:mab|nib|zomib|fusp|parib|ciclib|toclax|limus|reotide|platin|taxel|mycin|rubicin|citabine|trexate|zolomide|toposide|otecan|lutamide|cycline|asone|amide|azine|mustine|phalan|cristine|blastine|folfox|folfiri|folfirinox|capox|capeox|chop|abvd|gemox)/i;
   const BOILERPLATE = /^(?:Version |NCCN Guidelines|Note:|Table of Contents|Discussion|References?|Preferred$|Other Recommended$|Useful in Certain Circumstances$|All recommendations|PRINCIPLES OF |PLEASE NOTE|Printed by|Copyright)/i;
   const CITATION_LINE = /\bet al\b|J Clin Oncol|N Engl J Med|Lancet|Cancer Res|Ann Oncol|Radiat Oncol|\bdoi\b|\b20\d{2};\d+/i;
-  const BULLET = /^[\u0017\u2022\u25ca\u25e6\u25aa\u25cf\u25a0\u25c6\uf0b7]/u;
+  const BULLET = /^[\u0017•◊◦▪●■◆\uf0b7]/u;
   const CATEGORY_DEFS = [
     { id: 'preferred', label: 'Preferred', pattern: /^Preferred(?: Regimens?)?$/i },
     { id: 'other', label: 'Other Recommended', pattern: /^Other Recommended(?: Regimens?)?$/i },
@@ -31,15 +31,15 @@
       .replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
   }
   function cleanLine(value) {
-    return normalizeText(value).replace(/^[\u0017\u2022\u25ca\u25e6\u25aa\u25cf\u25a0\u25c6\uf0b7\s]+/u, '')
+    return normalizeText(value).replace(/^[\u0017•◊◦▪●■◆\uf0b7\s]+/u, '')
       .replace(/\s+/g, ' ').trim();
   }
   function detectVersion(text) {
-    const match = text.match(/Version\s+(\d+(?:\.\d+)+)\s*[,\u2014-]?\s*(?:\d{2}\/\d{2}\/)?(20\d{2})?/i);
+    const match = text.match(/Version\s+(\d+(?:\.\d+)+)\s*[,—-]?\s*(?:\d{2}\/\d{2}\/)?(20\d{2})?/i);
     return match ? match[1] + (match[2] && !match[1].includes(match[2]) ? ' (' + match[2] + ')' : '') : '';
   }
   function detectVersionDate(text) {
-    return text.match(/Version\s+\d+(?:\.\d+)+\s*[\u2014-]\s*([A-Za-z]+\s+\d{1,2},\s+20\d{2})/i)?.[1] || '';
+    return text.match(/Version\s+\d+(?:\.\d+)+\s*[—-]\s*([A-Za-z]+\s+\d{1,2},\s+20\d{2})/i)?.[1] || '';
   }
   const SECTION_CODE = /^([A-Z][A-Z0-9]{1,10}(?:-[A-Z0-9]{1,8})+)(?:\s+(\d+)\s+OF\s+(\d+))?$/i;
   const NON_SECTION_CODES = /^(?:LOW-RISK|HIGH-RISK|INTERMEDIATE-RISK|VERY-HIGH-RISK|RE-EVALUATE|FIRST-LINE|SECOND-LINE|SUBSEQUENT-LINE|POST-TREATMENT)$/i;
