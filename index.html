@@ -194,6 +194,20 @@
     .doc-item { background: var(--green-50); border-radius: 12px; padding: 12px; display: flex; align-items: center; justify-content: space-between; }
     .doc-item-archived { background: var(--gray-50); }
     .filter-bar { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 16px; }
+    /* App 內 PDF 檢視器：手機瀏覽器對 blob URL 的 #page 支援不可靠，改自行渲染 */
+    .pdfv { position: fixed; inset: 0; display: flex; flex-direction: column; background: var(--gray-100); z-index: 40; }
+    .pdfv-bar { display: flex; align-items: center; gap: 6px; padding: 8px 10px; background: #fff; border-bottom: 1px solid var(--gray-200); flex-wrap: wrap; }
+    .pdfv-bar .grow { flex: 1; min-width: 0; }
+    .pdfv-title { font-size: 13px; font-weight: 600; color: var(--gray-800); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .pdfv-sub { font-size: 11px; color: var(--gray-500); }
+    .pdfv-btn { border: 1px solid var(--gray-200); background: #fff; border-radius: 8px; padding: 7px 10px; font-size: 14px; cursor: pointer; color: var(--gray-700); min-height: 38px; }
+    .pdfv-btn:disabled { opacity: .4; cursor: default; }
+    .pdfv-btn.primary { background: var(--primary-600); border-color: var(--primary-600); color: #fff; }
+    .pdfv-stage { flex: 1; overflow: auto; -webkit-overflow-scrolling: touch; display: flex; justify-content: center; padding: 10px; }
+    .pdfv-stage canvas { background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.15); max-width: none; height: auto; }
+    .pdfv-foot { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); background: #fff; border-top: 1px solid var(--gray-200); }
+    .pdfv-page-input { width: 62px; text-align: center; border: 1px solid var(--gray-200); border-radius: 8px; padding: 7px 4px; font-size: 15px; min-height: 38px; }
+    .pdfv-msg { padding: 24px; text-align: center; color: var(--gray-500); font-size: 14px; }
     .filter-chip { padding: 6px 12px; border-radius: 999px; font-size: 14px; white-space: nowrap; border: none; cursor: pointer; background: var(--gray-100); color: var(--gray-600); }
     .filter-chip.active { background: var(--primary-600); color: #fff; }
     .source-card { display: block; text-decoration: none; color: inherit; }
@@ -1619,6 +1633,9 @@
         routeParams.sub = parts[2] || '';
       } else if (parts[0] === 'pdf-library' && parts[1] === 'import') {
         routeParams.docId = parts[2] || '';
+      } else if (parts[0] === 'pdf' && parts[1]) {
+        routeParams.pdfKey = decodeURIComponent(parts[1]);
+        routeParams.pdfPage = Math.max(1, Number(parts[2]) || 1);
       }
     }
 
@@ -1651,7 +1668,11 @@
     // ========== Render Engine ==========
     async function render() {
       const app = document.getElementById('app');
-      if (currentRoute === '/') {
+      // 離開檢視器就釋放 PDF 文件，避免大檔留在記憶體
+      if (!currentRoute.startsWith('/pdf/')) await releasePdfViewer();
+      if (currentRoute.startsWith('/pdf/') && routeParams.pdfKey) {
+        await renderPdfViewer(app);
+      } else if (currentRoute === '/') {
         await renderHomePage(app);
       } else if (currentRoute.startsWith('/cancer/') && !routeParams.sub) {
         await renderCancerDetail(app);
@@ -3031,6 +3052,153 @@
         </div>
       `;
     }
+    // ========== App 內 PDF 檢視器 ==========
+    const pdfViewer = { key: '', doc: null, page: 1, zoom: 0, task: null, meta: null };
+
+    async function releasePdfViewer() {
+      if (pdfViewer.task) { try { pdfViewer.task.cancel(); } catch {} pdfViewer.task = null; }
+      if (pdfViewer.doc) { try { await pdfViewer.doc.destroy(); } catch {} }
+      pdfViewer.doc = null; pdfViewer.key = ''; pdfViewer.meta = null;
+    }
+
+    let pdfJsModulePromise;
+    function loadViewerPdfJs() {
+      if (!pdfJsModulePromise) {
+        pdfJsModulePromise = import(new URL('./vendor/pdf.min.mjs', location.href).href).then(pdfjs => {
+          pdfjs.GlobalWorkerOptions.workerSrc = new URL('./vendor/pdf.worker.min.mjs', location.href).href;
+          return pdfjs;
+        });
+      }
+      return pdfJsModulePromise;
+    }
+
+    async function renderPdfViewer(app) {
+      const key = routeParams.pdfKey;
+      const docs = await dbGetAll('documents');
+      const meta = docs.find(item => item.storageKey === key) || null;
+      const title = meta?.title || meta?.fileName || 'PDF';
+
+      app.innerHTML = `
+        <div class="pdfv">
+          <div class="pdfv-bar">
+            <button class="pdfv-btn" id="pdfv-back">← 返回</button>
+            <div class="grow">
+              <p class="pdfv-title">${esc(title)}</p>
+              <p class="pdfv-sub" id="pdfv-sub">載入中…</p>
+            </div>
+            <button class="pdfv-btn" id="pdfv-zoom-out" title="縮小">−</button>
+            <button class="pdfv-btn" id="pdfv-zoom-in" title="放大">＋</button>
+            <button class="pdfv-btn" id="pdfv-external" title="用外部應用程式開啟">↗</button>
+          </div>
+          <div class="pdfv-stage" id="pdfv-stage"><p class="pdfv-msg">正在載入 PDF…</p></div>
+          <div class="pdfv-foot">
+            <button class="pdfv-btn" id="pdfv-prev">‹ 上一頁</button>
+            <input class="pdfv-page-input" id="pdfv-page" inputmode="numeric" value="${routeParams.pdfPage}">
+            <span class="text-sm text-gray-500" id="pdfv-total">/ –</span>
+            <button class="pdfv-btn" id="pdfv-next">下一頁 ›</button>
+          </div>
+        </div>
+      `;
+
+      const stage = document.getElementById('pdfv-stage');
+      const subEl = document.getElementById('pdfv-sub');
+      const totalEl = document.getElementById('pdfv-total');
+      const pageInput = document.getElementById('pdfv-page');
+
+      document.getElementById('pdfv-back').addEventListener('click', () => {
+        if (history.length > 1) history.back();
+        else navigate(meta ? '/pdf-library' : '/');
+      });
+      document.getElementById('pdfv-external').addEventListener('click', () => window.openPdfExternal(key));
+
+      try {
+        if (pdfViewer.key !== key || !pdfViewer.doc) {
+          await releasePdfViewer();
+          const blob = await getPdfBlob(key);
+          if (!blob) throw new Error('找不到 PDF 檔案，可能需要重新匯入');
+          const pdfjs = await loadViewerPdfJs();
+          const task = pdfjs.getDocument({ data: new Uint8Array(await blob.arrayBuffer()), isEvalSupported: false });
+          pdfViewer.doc = await task.promise;
+          pdfViewer.key = key;
+          pdfViewer.zoom = 0;
+        }
+        pdfViewer.meta = meta;
+      } catch (error) {
+        stage.innerHTML = `<p class="pdfv-msg">${esc(error.message || '無法開啟 PDF')}</p>`;
+        subEl.textContent = '';
+        return;
+      }
+
+      const total = pdfViewer.doc.numPages;
+      totalEl.textContent = '/ ' + total;
+      pdfViewer.page = Math.min(Math.max(1, routeParams.pdfPage), total);
+      pageInput.value = pdfViewer.page;
+
+      // 同一份 PDF 內的章節代碼，讓使用者能對照 NCCN 印刷頁碼與實體頁碼
+      const sections = meta?.nccnStructure?.sections || [];
+      const sectionFor = (pageNumber) => sections.filter(s => s.page <= pageNumber).slice(-1)[0]?.code || '';
+
+      let renderToken = 0;
+      const paint = async () => {
+        const myToken = ++renderToken;
+        const pageNumber = pdfViewer.page;
+        subEl.textContent = `第 ${pageNumber} / ${total} 頁（實體頁碼）` +
+          (sectionFor(pageNumber) ? ' · 章節 ' + sectionFor(pageNumber) : '');
+        document.getElementById('pdfv-prev').disabled = pageNumber <= 1;
+        document.getElementById('pdfv-next').disabled = pageNumber >= total;
+        try {
+          const page = await pdfViewer.doc.getPage(pageNumber);
+          if (myToken !== renderToken) return;
+          const available = Math.max(240, stage.clientWidth - 20);
+          const base = page.getViewport({ scale: 1 });
+          const fitScale = available / base.width;
+          const scale = fitScale * Math.pow(1.25, pdfViewer.zoom);
+          const dpr = Math.min(window.devicePixelRatio || 1, 2);
+          const viewport = page.getViewport({ scale });
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.floor(viewport.width * dpr);
+          canvas.height = Math.floor(viewport.height * dpr);
+          canvas.style.width = Math.floor(viewport.width) + 'px';
+          canvas.style.height = Math.floor(viewport.height) + 'px';
+          const context = canvas.getContext('2d');
+          context.scale(dpr, dpr);
+          if (pdfViewer.task) { try { pdfViewer.task.cancel(); } catch {} }
+          // 先掛上 canvas 再等渲染完成：PDF.js 以 requestAnimationFrame 推進，
+          // 若等 promise 才顯示，畫面在背景分頁或未合成時會一直停在載入中。
+          stage.innerHTML = '';
+          stage.appendChild(canvas);
+          stage.scrollTop = 0;
+          pdfViewer.task = page.render({ canvasContext: context, viewport });
+          await pdfViewer.task.promise;
+          pdfViewer.task = null;
+          if (myToken !== renderToken) return;
+          page.cleanup();
+        } catch (error) {
+          if (error?.name === 'RenderingCancelledException' || myToken !== renderToken) return;
+          stage.innerHTML = `<p class="pdfv-msg">此頁無法顯示：${esc(error.message || '未知錯誤')}</p>`;
+        }
+      };
+
+      const goTo = (pageNumber) => {
+        const next = Math.min(Math.max(1, pageNumber), total);
+        if (next === pdfViewer.page) return;
+        pdfViewer.page = next;
+        pageInput.value = next;
+        // 用 replaceState 更新網址，避免每次翻頁都塞一筆歷史紀錄
+        history.replaceState(null, '', '#/pdf/' + encodeURIComponent(key) + '/' + next);
+        routeParams.pdfPage = next;
+        paint();
+      };
+
+      document.getElementById('pdfv-prev').addEventListener('click', () => goTo(pdfViewer.page - 1));
+      document.getElementById('pdfv-next').addEventListener('click', () => goTo(pdfViewer.page + 1));
+      pageInput.addEventListener('change', () => goTo(Number(pageInput.value) || 1));
+      document.getElementById('pdfv-zoom-in').addEventListener('click', () => { pdfViewer.zoom = Math.min(4, pdfViewer.zoom + 1); paint(); });
+      document.getElementById('pdfv-zoom-out').addEventListener('click', () => { pdfViewer.zoom = Math.max(-2, pdfViewer.zoom - 1); paint(); });
+
+      await paint();
+    }
+
     async function renderPdfLibrary(app) {
       const docs = await dbGetAll('documents');
       const cancerCards = await dbGetAll('cancerCards');
@@ -3932,15 +4100,22 @@
     window.addEventListener('hashchange', handleRoute);
 
     // Expose PDF function（page 有值時直接跳頁）
-    window.openPdf = async (key, page) => {
-      // 先在使用者手勢內同步開窗，await 之後才 window.open 會被 iOS 擋下
+    // iOS Safari 與 Android Chrome 對 blob URL 的 #page 片段支援不可靠，
+    // 直接開檔常常停在第 1 頁。改走 App 內檢視器，跳頁才能真正生效。
+    window.openPdf = (key, page) => {
+      if (!key) { showToast('找不到 PDF 檔案'); return; }
+      navigate('/pdf/' + encodeURIComponent(key) + (page ? '/' + page : ''));
+    };
+
+    // 保留外部開啟做為備援（想用系統 PDF App、或要同時開兩份對照時）
+    window.openPdfExternal = async (key) => {
       const win = window.open('', '_blank');
       try {
         const blob = await getPdfBlob(key);
         if (!blob) throw new Error('找不到 PDF 檔案');
-        const url = URL.createObjectURL(blob) + (page ? '#page=' + page : '');
+        const url = URL.createObjectURL(blob);
         if (win) { win.location = url; } else { window.location.href = url; }
-        setTimeout(() => URL.revokeObjectURL(url.split('#')[0]), 60000);
+        setTimeout(() => URL.revokeObjectURL(url), 120000);
       } catch (e) {
         if (win) win.close();
         showToast(e.message);
