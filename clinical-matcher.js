@@ -282,6 +282,15 @@
     return ({ recommendation: 12, pathway: 8, principles: 2, workup: -6, supporting: -8 })[role] ?? 0;
   }
 
+  // 條件命中數相同時，列出具名藥物的頁面比只提到情境的頁面更可用。
+  // 上限刻意壓低，避免蓋過條件比對本身。
+  const NAMED_DRUG = /(?:mab|nib|zomib|fusp|parib|ciclib|toclax|limus|reotide|platin|taxel|mycin|rubicin|citabine|trexate|zolomide|toposide|otecan|lutamide|cycline|asone|mustine|phalan|cristine|blastine|vedotin|deruxtecan)\b/i;
+  function namedDrugBonus(page) {
+    const count = (page.options || []).filter(option =>
+      typeof option !== 'string' && NAMED_DRUG.test(String(option.label || ''))).length;
+    return Math.min(count, 3);
+  }
+
   function isHccDocument(doc) {
     return /hepatocellular|\bHCC\b/i.test([doc?.title, doc?.fileName, doc?.source, doc?.guidelineName].filter(Boolean).join(' '));
   }
@@ -377,7 +386,7 @@
         const reasons = positive.filter(feature => featureMatchesPage(doc, page, feature)).map(feature => feature.key);
         if (!reasons.length) continue;
         const modality = pageModality(page);
-        const score = reasons.length * 4 + pageRoleScore(page.role);
+        const score = reasons.length * 4 + pageRoleScore(page.role) + namedDrugBonus(page);
         matches.push({ doc, page, score, reasons, features, modality });
       }
     }

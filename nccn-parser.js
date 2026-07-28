@@ -51,7 +51,7 @@
   function detectSectionCode(text, rows = []) {
     const footerMatches = rows
       .filter(row => row.y <= 55)
-      .map(row => sectionMatch(rowText(row)))
+      .flatMap(row => rowSegments(row).map(sectionMatch))
       .filter(Boolean);
     if (footerMatches.length) return footerMatches[0];
     const lines = text.split('\n').map(cleanLine).filter(Boolean);
@@ -132,19 +132,38 @@
     const text = String(value || '').trim();
     return /^\d+(?:[-,]\d+)*$/.test(text) || /^[a-z]{1,3}(?:,[a-z]{1,3})*(?:,\d+(?:-\d+)?)*$/.test(text);
   }
+  // NCCN 演算法頁是多欄版面。同一 y 座標上的片段可能來自不同欄，
+  // 直接串起來會把相鄰欄的文字接成一句（例如把 workup 欄和 treatment 欄
+  // 併成「Brain MRI ... Positive mediastinal nodes ...」）。
+  // 實測片段間距呈雙峰：行內 0–9pt、欄界 30pt 以上，故以 24pt 切欄。
+  const COLUMN_GAP = 24;
   function joinFragments(items) {
     let output = '';
+    let previousEnd = null;
     for (const item of items) {
       const text = String(item.text || '').trim();
       if (!text || isReferenceMarker(text)) continue;
+      const gap = previousEnd == null ? 0 : Number(item.x || 0) - previousEnd;
+      previousEnd = Number(item.end ?? item.x ?? 0);
       if (!output) output = text;
+      else if (gap >= COLUMN_GAP) output += '\n' + text;
       else if (/^[,.;:)\]\/]/.test(text) || /[-\/]$/.test(output)) output += text;
       else output += ' ' + text;
     }
     return normalizeText(output);
   }
+  // 整列文字：跨欄的部分會落在不同行
   function rowText(row) {
     return joinFragments(row.items);
+  }
+  // 需要單一字串時（例如比對章節代碼）逐段取用
+  function rowSegments(row) {
+    return rowText(row).split('\n').map(part => part.trim()).filter(Boolean);
+  }
+  // 只取目前欄的內容。cleanLine 會把換行收合成空白，
+  // 若直接丟進去會把相鄰欄的文字又接回同一句。
+  function firstColumn(value) {
+    return String(value || '').split('\n')[0].trim();
   }
   function recommendationHeaders(row) {
     const headers = [];
@@ -159,7 +178,7 @@
     const blocks = [];
     let current = null;
     for (const row of rows) {
-      const text = joinFragments(row.items.filter(item => item.x < firstColumnX - 4));
+      const text = firstColumn(joinFragments(row.items.filter(item => item.x < firstColumnX - 4)));
       if (!text || text.length > 140 || BOILERPLATE.test(text) || isReferenceMarker(text)) continue;
       if (!current || current.lastY - row.y > 14.5) {
         current = { startY: row.y, lastY: row.y, text };
@@ -175,15 +194,32 @@
     return blocks.filter(block => block.startY >= y)
       .sort((a, b) => (a.startY - y) - (b.startY - y))[0]?.text || '';
   }
+  // NCCN 演算法頁的欄位標題（全大寫）不是治療選項，
+  // 例如 FIRST-LINE THERAPY、ADJUVANT SYSTEMIC THERAPY、SUBSEQUENT THERAPY。
+  function isColumnHeading(text) {
+    const value = String(text || '').trim();
+    if (value.length < 5 || value.length > 60) return false;
+    if (/[a-z]/.test(value)) return false;
+    return /\b(?:THERAPY|TREATMENT|WORKUP|EVALUATION|SURVEILLANCE|FINDINGS|PRESENTATION|ASSESSMENT|DIAGNOSIS|STAGE|RISK)\b/.test(value);
+  }
   function isGroupHeading(text) {
     return /^(?:Chemotherapy|Immunotherapy|Targeted therapy|Systemic therapy|Radiation therapy|Chemoradiation|Endocrine therapy|Surgery|Local therapy|Other therapy|Treatment):$/i.test(text);
   }
+  // 檢查／分期／病理判讀等步驟不是治療選項。演算法頁的 workup 欄常與治療欄並排，
+  // 若讓它們沿用頁面型別，就會變成假的「全身治療」候選（Bronchoscopy、FDG-PET/CT…）。
+  const DIAGNOSTIC_SIGNAL = /\b(?:bronchoscopy|mediastinoscopy|thoracentesis|biopsy|aspiration|cytology|pathology review|histolog\w*|PFTs?|pulmonary function|spirometry|MRI|CT scan|CT with|FDG-PET|PET\/CT|PET scan|ultrasound|endoscopy|EUS|EBUS|colonoscopy|mammograph\w*|bone scan|x-ray|radiograph\w*|laborator\w*|blood tests?|CBC|LFTs?|molecular testing|biomarker testing|genetic testing|germline testing|staging workup|workup|evaluation|assessment|screening|smoking cessation|multidisciplinary)\b/i;
+  const TREATMENT_SIGNAL = /\b(?:therapy|chemotherapy|immunotherapy|radiotherapy|chemoradiation|resection|surgery|transplant|ablation|embolization|excision|dissection|ectomy|observation|surveillance|clinical trial)\b|(?:mab|nib|zomib|fusp|parib|ciclib|toclax|limus|reotide|platin|taxel|mycin|rubicin|citabine|trexate|zolomide|toposide|otecan|lutamide|cycline|asone|amide|azine|mustine|phalan|cristine|blastine)\b/i;
+
   function classifyModality(value, pageTypes = []) {
     const text = normalizeText(value);
     if (/surg|resect|excision|dissection|ectomy|transplant|operative/i.test(text)) return 'surgery';
     if (/radiation|radiotherapy|\bRT\b|SBRT|SRS|EBRT|IMRT|brachy/i.test(text)) return 'radiation';
     if (/surveillance|follow-up|monitoring|observation|restaging/i.test(text)) return 'followup';
     if (/systemic|chemotherapy|immunotherapy|targeted|endocrine|\bADT\b|\bARPI\b|\bSSA\b|mab|nib|zomib|fusp|parib|ciclib|toclax|platin|taxel|rubicin|citabine|lutamide|cycline|asone|amide|azine|mustine|phalan|cristine|blastine/i.test(text)) return 'systemic';
+    // 明顯是檢查步驟就標成 workup，之後會被排除在治療候選之外
+    if (DIAGNOSTIC_SIGNAL.test(text)) return 'workup';
+    // 沒有任何治療訊號時不再沿用頁面型別，避免把敘述文字誤標成治療
+    if (!TREATMENT_SIGNAL.test(text)) return 'other';
     for (const type of ['surgery', 'radiation', 'followup', 'systemic']) if (pageTypes.includes(type)) return type;
     return 'other';
   }
@@ -199,7 +235,12 @@
       conditions.push(match.slice(1, -1).trim());
       return '';
     }).replace(/\s+/g, ' ').trim();
+    // 欄位被切斷時常留下連接詞或未閉合括號（'or Lazertinib'、'Durvalumab (if'）
+    label = label.replace(/^(?:or|and|plus|then|followed by|±)\s+/i, '').trim();
+    label = label.replace(/\s*\((?:[^()]*)?$/, '').trim();
     label = label.replace(/[;,.]+$/, '').trim();
+    label = label.replace(/\s+(?:or|and|plus|with|for|if|in|of|the|to)$/i, '').trim();
+    if (isColumnHeading(label)) return null;
     const needsReview = (label.match(/\(/g) || []).length !== (label.match(/\)/g) || []).length ||
       label.length > 140 ||
       (!OPTION_SIGNAL.test(label) && !/^None$/i.test(label));
@@ -258,7 +299,7 @@
         current = null;
       };
       for (const row of tableRows) {
-        const text = joinFragments(row.items.filter(item => item.x >= header.x - 2 && item.x < columnEnd - 2));
+        const text = firstColumn(joinFragments(row.items.filter(item => item.x >= header.x - 2 && item.x < columnEnd - 2)));
         if (!text) continue;
         if (isGroupHeading(text)) {
           finish();
@@ -297,16 +338,20 @@
         const firstLineEnd = items.findIndex((fragment, index) => index > itemIndex && fragment.x >= columnEnd);
         const firstLine = items.slice(itemIndex, firstLineEnd >= 0 ? firstLineEnd : items.length)
           .map((fragment, index) => index ? fragment : { ...fragment, text: fragment.text.replace(BULLET, '').trim() });
-        let raw = joinFragments(firstLine);
+        let raw = firstColumn(joinFragments(firstLine));
         let lastY = row.y;
+        // 相鄰欄若沒有項目符號，columnEnd 會是無限大，續行就會誤抓右側欄的文字。
+        // 改以本欄第一行的實際右緣加上欄距作為邊界。
+        const firstLineRight = firstLine.reduce((max, fragment) => Math.max(max, Number(fragment.end ?? fragment.x ?? 0)), item.x);
+        const effectiveEnd = Number.isFinite(columnEnd) ? columnEnd : firstLineRight + COLUMN_GAP;
         for (let nextIndex = rowIndex + 1; nextIndex < rows.length; nextIndex++) {
           const nextRow = rows[nextIndex];
           if (lastY - nextRow.y > 18) break;
           const continuationItems = nextRow.items.filter(fragment =>
-            fragment.x >= item.x - 2 && fragment.x < columnEnd - 2 && !isReferenceMarker(fragment.text)
+            fragment.x >= item.x - 2 && fragment.x < effectiveEnd - 2 && !isReferenceMarker(fragment.text)
           );
           if (continuationItems.some(fragment => BULLET.test(fragment.text))) break;
-          const continuation = joinFragments(continuationItems);
+          const continuation = firstColumn(joinFragments(continuationItems));
           if (!continuation || BOILERPLATE.test(continuation)) continue;
           raw = normalizeText(raw + ' ' + continuation);
           lastY = nextRow.y;
@@ -338,12 +383,15 @@
   function fallbackSignalOptions(rows, pageTypes = []) {
     const options = [];
     for (const row of rows) {
-      const text = rowText(row);
-      if (text.length < 3 || text.length > 220 || BOILERPLATE.test(text) || CITATION_LINE.test(text) || !OPTION_SIGNAL.test(text)) continue;
-      const option = normalizeTreatmentOption(text, {
-        id: 'review', label: 'Needs source review', context: '', group: '', pageTypes,
-      });
-      if (option) options.push(option);
+      // 逐欄檢視，避免把相鄰欄的文字併成一個候選
+      for (const text of rowSegments(row)) {
+        if (text.length < 3 || text.length > 220 || BOILERPLATE.test(text) || CITATION_LINE.test(text) || !OPTION_SIGNAL.test(text)) continue;
+        const option = normalizeTreatmentOption(text, {
+          id: 'review', label: 'Needs source review', context: '', group: '', pageTypes,
+        });
+        if (option) options.push(option);
+        if (options.length >= 40) break;
+      }
       if (options.length >= 40) break;
     }
     return options;
@@ -356,7 +404,10 @@
     }
     options.push(...fallbackBulletOptions(layout.rows, pageTypes));
     if (!options.length) options.push(...fallbackSignalOptions(layout.rows, pageTypes));
-    const normalized = deduplicateOptions(options);
+    // 檢查步驟與無治療語意的敘述不列為治療候選；
+    // 演算法頁的 workup 欄與治療欄並排，不濾掉會混進候選清單
+    const treatments = options.filter(option => !['workup', 'other'].includes(option.modality));
+    const normalized = deduplicateOptions(treatments.length ? treatments : options.filter(option => option.modality !== 'workup'));
     const expanded = [];
     for (const option of normalized) {
       expanded.push(option, ...narrativeDrugCandidates(option));
