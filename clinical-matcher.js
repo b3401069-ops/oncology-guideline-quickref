@@ -1,8 +1,12 @@
 (() => {
   'use strict';
 
-  const UNKNOWN = /待檢|待確認|未評估|未做|不適用|unknown|pending|not assessed/i;
-  const NEGATIVE = /陰性|未檢出|無已知|無相關|wild\s*-?type|negative|not detected|pMMR|MSS|IHC\s*[01]\+|ISH\s*陰性|低表現/i;
+  // 「未知」必須涵蓋所有「還沒測／測不出來」的說法，否則會掉進陽性預設。
+  const UNKNOWN = /待檢|待確認|待測|未評估|未做|未檢測|未測|未檢驗|未送檢|無法判讀|不可評估|無法評估|檢測失敗|檢體不足|不適用|unknown|pending|not assessed|not evaluable|indeterminate|inconclusive|QNS/i;
+  // 「陰性」需涵蓋 IHC 0（無加號）、無致病變異等寫法。
+  const NEGATIVE = /陰性|未檢出|未發現|無已知|無相關|無致病|無突變|無變異|無擴增|無融合|無重排|wild\s*-?type|negative|not detected|no (?:known|detectable)|absent|pMMR|MSS|MMR\s*(?:proficient|intact)|IHC\s*[01](?:\+|\b)|ISH\s*陰性|低表現|未表現/i;
+  // 明確的陽性語意（含變異型態的寫法）。
+  const POSITIVE = /陽性|positive|檢出|已檢出|突變|mutat|variant|pathogenic|致病|fusion|融合|rearrang|重排|translocation|amplif|擴增|過度表現|高表現|overexpress|deletion|缺失|insertion|skipping|exon\s*\d+|MSI\s*-?\s*H|dMMR|MMRd|TMB\s*-?\s*(?:H|high)|high|陽性表現|detected/i;
   const MARKERS = [
     ['pd-l1', /PD\s*-?\s*L1/i], ['her2', /HER\s*-?\s*2|ERBB2/i], ['egfr', /\bEGFR\b/i],
     ['alk', /\bALK\b/i], ['ros1', /\bROS1\b/i], ['braf', /\bBRAF\b/i], ['brca', /\bBRCA1?\/?2?\b/i],
@@ -89,11 +93,35 @@
     output.push({ key, polarity, field: field.label || '', value: normalize(value), label: FEATURE_LABELS[key] || key.toUpperCase() });
   }
 
-  function markerPolarity(value) {
+  const NUMERIC_VALUE = /^[<>≥≤]?\s*(\d+(?:\.\d+)?)\s*%?$/;
+
+  // 數值型標記（PD-L1 TPS/CPS 等）只能依模板宣告的臨界值判定。
+  // 未宣告臨界值就回 unknown——絕不可把「數字存在」當成陽性。
+  function numericPolarity(text, field) {
+    const match = normalize(text).match(NUMERIC_VALUE);
+    if (!match) return null;
+    if (field?.markerPolarity === 'descriptive') return 'unknown';
+    const threshold = Number(field?.positiveAtLeast);
+    if (!Number.isFinite(threshold)) return 'unknown';
+    return Number(match[1]) >= threshold ? 'positive' : 'negative';
+  }
+
+  // 判定順序刻意由「明確否定／未知」到「明確肯定」，最後才落到 unknown。
+  // 舊版預設為 positive，會把 PD-L1 0%、未檢測誤判成陽性。
+  function markerPolarity(value, field, markerPattern) {
     const text = normalize(value);
+    if (!text) return 'unknown';
     if (UNKNOWN.test(text)) return 'unknown';
     if (NEGATIVE.test(text) || /HER2\s*[-−]/i.test(text)) return 'negative';
-    return 'positive';
+    const numeric = numericPolarity(text, field);
+    if (numeric) return numeric;
+    if (POSITIVE.test(text)) return 'positive';
+    // 選項本身寫出標記名（'ALK fusion'、'BRAF V600E'），代表使用者勾選它為「存在」
+    if (markerPattern) {
+      markerPattern.lastIndex = 0;
+      if (markerPattern.test(text)) return 'positive';
+    }
+    return 'unknown';
   }
 
   function extractClinicalFeatures(fields) {
@@ -127,6 +155,19 @@
 
         const bclc = /BCLC/i.test(label) ? raw.match(/^(0|A|B|C|D)$/i) : null;
         if (bclc) addFeature(output, 'bclc-' + bclc[1].toLowerCase(), 'positive', field, value);
+        // 分期欄位：I–IV 都要能路由（原本只有第四期會轉成 metastatic）
+        if (/分期|stage|風險分層/i.test(label)) {
+          // IIIA／IIB 等帶亞分期字尾也要能辨識，因此不能用 \b 收尾
+          const roman = raw.match(/^\s*(?:stage\s*|第)?(IV|III|II|I|[1-4])(?![VXI\d])/i);
+          const numeral = { '1': 'i', '2': 'ii', '3': 'iii', '4': 'iv' };
+          if (roman) {
+            const token = roman[1].toLowerCase();
+            addFeature(output, 'stage-' + (numeral[token] || token), 'positive', field, value);
+          }
+        }
+        // Child-Pugh：肝癌治療選擇的關鍵條件，原本完全未擷取
+        const childPugh = /child\s*-?\s*pugh/i.test(label) ? raw.match(/^\s*([ABC])/i) : null;
+        if (childPugh) addFeature(output, 'child-pugh-' + childPugh[1].toLowerCase(), 'positive', field, value);
         if (/MPN/i.test(label) && /(?:subtype|\u4e9e\u578b)/i.test(label)) {
           if (/\bPV\b/i.test(raw)) addFeature(output, 'mpn-pv', 'positive', field, value);
           if (/\bET\b/i.test(raw)) addFeature(output, 'mpn-et', 'positive', field, value);
@@ -143,7 +184,7 @@
         for (const [key, pattern] of MARKERS) {
           pattern.lastIndex = 0;
           if (!pattern.test(combined)) continue;
-          addFeature(output, key, markerPolarity(raw), field, value);
+          addFeature(output, key, markerPolarity(raw, field, pattern), field, value);
         }
         if (/MMR|MSI/i.test(label) && /pMMR|MSS/i.test(raw)) addFeature(output, 'msi-h/dmmr', 'negative', field, value);
       }
@@ -156,17 +197,67 @@
     return [option?.label, option?.group, option?.context, ...(option?.conditions || [])].filter(Boolean).join(' ').toLowerCase();
   }
 
+  // NCCN 表格內的藥名多半不會重複標記名稱（標記寫在欄位標題或上游情境），
+  // 只靠選項文字比對會讓「HER2 陰性看到 trastuzumab」這類矛盾無聲通過。
+  // 僅收錄「以該標記為適應症前提」的藥物；免疫檢查點抑制劑不列入
+  // （多數適應症不以 PD-L1 陽性為必要條件，列入會造成過度阻擋）。
+  const DRUG_MARKER_REQUIREMENTS = [
+    [/trastuzumab|pertuzumab|deruxtecan|emtansine|lapatinib|tucatinib|neratinib|margetuximab|zanidatamab/i, 'her2'],
+    [/osimertinib|erlotinib|gefitinib|afatinib|dacomitinib|mobocertinib|amivantamab|lazertinib/i, 'egfr'],
+    [/alectinib|brigatinib|ceritinib|lorlatinib|ensartinib/i, 'alk'],
+    [/olaparib|niraparib|rucaparib|talazoparib/i, 'brca'],
+    [/vemurafenib|dabrafenib|encorafenib|tovorafenib/i, 'braf'],
+    [/sotorasib|adagrasib/i, 'kras'],
+    [/larotrectinib|entrectinib|repotrectinib/i, 'ntrk'],
+    [/selpercatinib|pralsetinib/i, 'ret'],
+    [/capmatinib|tepotinib/i, 'met'],
+    [/pemigatinib|infigratinib|futibatinib|erdafitinib/i, 'fgfr'],
+    [/ivosidenib|enasidenib|olutasidenib|vorasidenib/i, 'idh'],
+    [/imatinib|avapritinib|ripretinib/i, 'kit'],
+    [/mirvetuximab/i, 'folr1'],
+    [/zolbetuximab/i, 'cldn18.2'],
+    [/elacestrant/i, 'esr1'],
+    [/alpelisib|capivasertib|inavolisib/i, 'pik3ca'],
+    [/midostaurin|gilteritinib|quizartinib/i, 'flt3'],
+    [/lutetium|lu\s*-?\s*177|177lu/i, 'psma'],
+  ];
+
+  function drugRequiresMarker(text, markerKey) {
+    return DRUG_MARKER_REQUIREMENTS.some(([pattern, key]) => key === markerKey && pattern.test(text));
+  }
+
   function optionAssessment(option, features) {
     const text = optionText(option);
     let score = 0;
     const conflicts = [];
+    const reviewNotes = [];
+    const seenMarkers = new Set();
     for (const feature of features || []) {
       const optionPolarity = featurePolarityInText(feature.key, text);
-      if (!optionPolarity) continue;
-      if (feature.polarity !== optionPolarity) conflicts.push(feature.label + '條件方向不符');
-      else score += 2;
+      if (optionPolarity) {
+        if (feature.polarity !== optionPolarity) conflicts.push(feature.label + '條件方向不符');
+        else score += 2;
+        seenMarkers.add(feature.key);
+        continue;
+      }
+      // 選項文字沒寫出標記，改查藥物→標記依賴表
+      if (drugRequiresMarker(text, feature.key)) {
+        seenMarkers.add(feature.key);
+        if (feature.polarity === 'negative') {
+          conflicts.push(feature.label + '為陰性，但此療程以該標記陽性為適應症前提');
+        } else if (feature.polarity === 'positive') {
+          score += 2;
+        }
+      }
     }
-    return { score, conflicts, blocked: conflicts.length > 0 };
+    // 療程需要某標記，但病患資料完全沒有該標記 → 需人工核對，不阻擋也不加分
+    for (const [pattern, key] of DRUG_MARKER_REQUIREMENTS) {
+      if (seenMarkers.has(key) || !pattern.test(text)) continue;
+      if ((features || []).some(item => item.key === key)) continue;
+      reviewNotes.push('此療程以 ' + key.toUpperCase() + ' 為適應症前提，尚未輸入該標記結果');
+      seenMarkers.add(key);
+    }
+    return { score, conflicts, reviewNotes, blocked: conflicts.length > 0 };
   }
 
   function pageModality(page) {
@@ -185,8 +276,10 @@
     if (types.includes('systemic')) return 'systemic';
     return 'treatment';
   }
+  // 角色權重必須大於單一條件的權重（4），否則多匹配一個條件的 workup 頁
+  // 會壓過真正的治療建議頁。
   function pageRoleScore(role) {
-    return ({ recommendation: 4, pathway: 3, principles: 1, workup: 0, supporting: -1 })[role] ?? 0;
+    return ({ recommendation: 12, pathway: 8, principles: 2, workup: -6, supporting: -8 })[role] ?? 0;
   }
 
   function isHccDocument(doc) {
@@ -234,22 +327,33 @@
     return rank < 0 ? DIAGNOSTIC_FIELD_PATTERNS.length : rank;
   }
 
+  // 解析器不會產生對應關鍵字的條件（例如 ECOG）永遠無法匹配任何頁面，
+  // 不該被當成「找不到對應頁面」的證據，應明示為僅供記錄。
+  const ROUTABLE_EXTRA_KEYS = /^(?:mpn-|sm-|bclc-|child-pugh-|stage-)/;
+  function isRoutableFeature(key) {
+    const vocabulary = window.NCCN_PARSER?.KEYWORD_VOCABULARY;
+    if (!vocabulary) return true;
+    return vocabulary.includes(String(key).toLowerCase()) || ROUTABLE_EXTRA_KEYS.test(String(key));
+  }
+
   function diagnoseTreatmentMatch(documents, fields) {
     const pages = (documents || []).flatMap(doc =>
       (doc.nccnStructure?.treatmentPages || []).map(page => ({ doc, page }))
     );
     const features = extractClinicalFeatures(fields);
-    const positiveFeatures = features.filter(item => item.polarity === 'positive');
+    const allPositive = features.filter(item => item.polarity === 'positive');
+    const recordOnlyFeatures = allPositive.filter(item => !isRoutableFeature(item.key));
+    const positiveFeatures = allPositive.filter(item => isRoutableFeature(item.key));
     const suggestedFields = (fields || []).filter(field => !hasValue(field.value))
       .filter(field => diagnosticFieldRank(field) < DIAGNOSTIC_FIELD_PATTERNS.length)
       .sort((a, b) => diagnosticFieldRank(a) - diagnosticFieldRank(b))
       .slice(0, 4);
 
     if (!pages.length) {
-      return { code: 'no_index', positiveFeatures, unmatchedFeatures: [], suggestedFields };
+      return { code: 'no_index', positiveFeatures, unmatchedFeatures: [], recordOnlyFeatures, suggestedFields };
     }
     if (!positiveFeatures.length) {
-      return { code: 'insufficient_conditions', positiveFeatures, unmatchedFeatures: [], suggestedFields };
+      return { code: 'insufficient_conditions', positiveFeatures, unmatchedFeatures: [], recordOnlyFeatures, suggestedFields };
     }
     const unmatchedFeatures = positiveFeatures.filter(feature =>
       !pages.some(({ doc, page }) => featureMatchesPage(doc, page, feature))
@@ -258,6 +362,7 @@
       code: unmatchedFeatures.length === positiveFeatures.length ? 'no_matching_page' : 'partial_match',
       positiveFeatures,
       unmatchedFeatures,
+      recordOnlyFeatures,
       suggestedFields,
     };
   }

@@ -19,9 +19,11 @@ test('seeds disease-specific fields for hematology guidelines that do not use so
   assert.equal(templates.version, 4);
 });
 
+// Windows checkouts may use CRLF; structural regexes below assume LF.
+const readSource = (file) => require('node:fs').readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+
 test('covers every cancer card with at least one disease-specific field', () => {
-  const fs = require('node:fs');
-  const html = fs.readFileSync('index.html', 'utf8');
+  const html = readSource('index.html');
   const additionalBlock = html.match(/const NCCN_ADDITIONAL_CATEGORIES = \{([\s\S]*?)\n    \};\n\n    for/)?.[1] || '';
   const idMapBlock = html.match(/const ID_MAP = \{([\s\S]*?)\n    \};/)?.[1] || '';
   const additionalIds = [...additionalBlock.matchAll(/\{ id: '([^']+)'/g)].map(match => match[1]);
@@ -36,8 +38,7 @@ test('covers every cancer card with at least one disease-specific field', () => 
 });
 
 test('multi-select negative and pending states are mutually exclusive', () => {
-  const fs = require('node:fs');
-  const source = fs.readFileSync('clinical-templates.js', 'utf8');
+  const source = readSource('clinical-templates.js');
   const cancerIds = [...new Set(source.split('\n')
     .filter(line => line.includes('ids: ['))
     .flatMap(line => [...line.matchAll(/'([^']+)'/g)].map(item => item[1])))];
@@ -64,8 +65,7 @@ test('ambiguous legacy states are visibly marked for confirmation', () => {
 });
 
 test('all cancer dropdown definitions use unique, non-empty keys and options', () => {
-  const fs = require('node:fs');
-  const templateSource = fs.readFileSync('clinical-templates.js', 'utf8');
+  const templateSource = readSource('clinical-templates.js');
   const cancerIds = [...new Set(templateSource.split('\n')
     .filter(line => line.includes('ids: ['))
     .flatMap(line => [...line.matchAll(/'([^']+)'/g)].map(item => item[1])))];

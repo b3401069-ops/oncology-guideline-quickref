@@ -113,10 +113,44 @@
     return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
+  // \u5b57\u9762\u4e0a\u4e92\u76f8\u5305\u542b\u3001\u81e8\u5e8a\u4e0a\u537b\u4e92\u65a5\u7684\u764c\u5225\u540d\u7a31\u3002
+  // \u4f8b\uff1a\u300c\u975e\u5c0f\u7d30\u80de\u80ba\u764c\u300d\u542b\u6709\u300c\u5c0f\u7d30\u80de\u80ba\u764c\u300d\u5b57\u6a23\uff0c\u4f46\u4e0d\u53ef\u56e0\u6b64\u628a NSCLC \u689d\u6587\u639b\u5230 SCLC\u3002
+  const CONFLICTING_SUPERSTRINGS = {
+    '\u5c0f\u7d30\u80de\u80ba\u764c': ['\u975e\u5c0f\u7d30\u80de\u80ba\u764c'],
+  };
+
+  // \u6392\u9664\u8a9e\u610f\uff08\u300c\u672c\u9805\u4e0d\u9069\u7528\u65bcX\u300d\u4e0d\u61c9\u8996\u70ba\u9069\u7528\u65bc X\uff09
+  const NEGATION_CUE = /\u4e0d\u9069\u7528|\u4e0d\u5f97\u4f7f\u7528|\u4e0d\u5f97\u7528|\u4e0d\u5305\u62ec|\u4e0d\u542b|\u9664\u5916|\u6392\u9664|\u4e0d\u4e88\u7d66\u4ed8|\u975e\u5c6c|\u4e0d\u9069\u5408/;
+  const NEGATION_WINDOW = 24;
+
+  function stripConflictingSuperstrings(text, term) {
+    let output = text;
+    for (const blocker of CONFLICTING_SUPERSTRINGS[term] || []) {
+      output = output.split(blocker).join('\u3000');
+    }
+    return output;
+  }
+
+  // \u53ea\u6709\u5728\u300c\u6240\u6709\u51fa\u73fe\u4f4d\u7f6e\u90fd\u843d\u5728\u6392\u9664\u8a9e\u53e5\u5167\u300d\u6642\u624d\u8996\u70ba\u672a\u547d\u4e2d\uff0c\u907f\u514d\u904e\u5ea6\u522a\u9664
+  function allOccurrencesNegated(text, term) {
+    let index = text.indexOf(term);
+    if (index < 0) return false;
+    while (index >= 0) {
+      const before = text.slice(Math.max(0, index - NEGATION_WINDOW), index);
+      if (!NEGATION_CUE.test(before)) return false;
+      index = text.indexOf(term, index + term.length);
+    }
+    return true;
+  }
+
   function termIncluded(text, term) {
     const normalizedTerm = normalizeText(term).trim();
     if (!normalizedTerm) return false;
-    if (/[\u3400-\u9fff]/.test(normalizedTerm)) return text.includes(normalizedTerm);
+    if (/[\u3400-\u9fff]/.test(normalizedTerm)) {
+      const scoped = stripConflictingSuperstrings(text, normalizedTerm);
+      if (!scoped.includes(normalizedTerm)) return false;
+      return !allOccurrencesNegated(scoped, normalizedTerm);
+    }
     if (normalizedTerm.length < 3) return false;
     return new RegExp(`(^|[^a-z0-9])${escapeRegExp(normalizedTerm)}([^a-z0-9]|$)`, 'i').test(text);
   }
@@ -204,7 +238,12 @@
       const directMatches = matchCancerCards(`${entry.heading}\n${entry.content}`, cards);
       const matchedCards = expandMatchedCards(directMatches, cards);
       const hints = conditionHints(entry.content);
-      const clear = matchedCards.length > 0 && /限|給付|治療|使用|適應症|病患|患者/u.test(entry.content);
+      // 舊判準只要出現「治療」或「使用」就算擷取成功，幾乎所有條目都會通過，
+      // 使「尚待核對」形同虛設。改為必須同時具備適應症語句、限制語句與可辨識結構。
+      const hasIndication = /適應症|限用於|限.{0,12}使用|用於治療|得使用於|給付/u.test(entry.content);
+      const hasRestriction = /限|不得|需|應|事前審查|療程|線治療|第[一二三四]線|除外|條件|病情/u.test(entry.content);
+      const hasStructure = /(?:^|\n)\s*(?:\d+[.、]|[（(]\d+[)）])/u.test(entry.content) || entry.content.length >= 60;
+      const clear = matchedCards.length > 0 && hasIndication && hasRestriction && hasStructure;
       if (!matchedCards.length) {
         unmatched.push({ section: entry.section, label: entry.label, page: entry.startPage });
         continue;

@@ -21,7 +21,11 @@
   const inferredExclusiveOptions = (type, options) => type !== 'multi_select' ? [] : options.filter(option =>
     /^(?:無(?:$|已知|上述|／)|未檢出$|待檢|待確認|pMMR／MSS$|其他／待|wild type／待)/i.test(option)
   );
-  const pf = (key, label, type = 'single_select', options = [], scope = 'cancer', metadata = {}) => {
+  const pf = (key, label, type = 'single_select', options = [], scope = 'cancer', metadata = {}, ...extra) => {
+    // 多傳的參數會被靜默丟棄（曾導致 exclusiveOptions 遺失），因此直接擋下
+    if (extra.length) throw new Error('pf(' + key + '): 參數過多，metadata 需合併為第 6 個參數');
+    if (typeof scope !== 'string') throw new Error('pf(' + key + '): scope 必須是字串，收到 ' + typeof scope);
+    if (metadata == null || typeof metadata !== 'object') throw new Error('pf(' + key + '): metadata 必須是物件');
     const optionLabels = Object.fromEntries(options.filter(option => ambiguousOptionLabels[option]).map(option => [option, ambiguousOptionLabels[option]]));
     Object.assign(optionLabels, metadata.optionLabels || {});
     const exclusiveOptions = [...new Set([...inferredExclusiveOptions(type, options), ...(metadata.exclusiveOptions || [])])];
@@ -121,7 +125,7 @@
       precisionFields: [
         pf('lowergyne-histology', '外陰／陰道癌組織型', 'single_select', ['鱗狀細胞癌','腺癌','黑色素瘤','其他','待確認']),
         pf('lowergyne-hpv-p16', 'HPV／p16', 'single_select', ['陽性','陰性','待檢','不適用']),
-        pf('lowergyne-pdl1-cps', 'PD-L1 CPS', 'number'),
+        pf('lowergyne-pdl1-cps', 'PD-L1 CPS', 'number', [], 'cancer', { positiveAtLeast: 1, help: 'CPS 0 視為陰性；≥1 視為有表現。實際用藥門檻依適應症與健保規定另行核對。' }),
       ],
     },
     {
@@ -244,7 +248,7 @@
       ids: ['adrenal_tumor'],
       precisionFields: [
         pf('adrenal-entity', '副腎腫瘤分類', 'single_select', ['adrenocortical carcinoma','pheochromocytoma','paraganglioma','adrenal neuroendocrine tumor','其他','待確認']),
-        pf('adrenal-functional', '副腎腫瘤功能狀態', 'multi_select', ['cortisol','aldosterone','androgen／estrogen','catecholamine','無功能性','待確認'], false, '', { exclusiveOptions: ['無功能性','待確認'] }),
+        pf('adrenal-functional', '副腎腫瘤功能狀態', 'multi_select', ['cortisol','aldosterone','androgen／estrogen','catecholamine','無功能性','待確認'], 'cancer', { exclusiveOptions: ['無功能性','待確認'] }),
         pf('adrenal-germline', '遺傳性副腎腫瘤評估', 'single_select', ['未評估','已送檢待報告','陽性','陰性']),
       ],
     },
@@ -294,7 +298,7 @@
         pf('nsclc-histology', 'NSCLC 組織型', 'single_select', ['腺癌','鱗狀細胞癌','大細胞／其他','NSCLC NOS','待確認']),
         pf('nsclc-drivers', 'NSCLC 驅動基因／可標靶變異', 'multi_select', ['EGFR sensitizing','EGFR exon 20 insertion','ALK fusion','ROS1 fusion','BRAF V600E','KRAS G12C','MET exon 14 skipping','MET amplification','RET fusion','NTRK1/2/3 fusion','ERBB2（HER2）mutation','NRG1 fusion','無已知可標靶變異','待檢']),
         pf('nsclc-pdl1-assay', 'PD-L1 檢測平台／clone', 'text'),
-        pf('nsclc-pdl1-tps', 'PD-L1 TPS（%）', 'number'),
+        pf('nsclc-pdl1-tps', 'PD-L1 TPS（%）', 'number', [], 'cancer', { positiveAtLeast: 1, help: 'TPS 0% 視為陰性；≥1% 視為有表現。≥50% 另有不同適應症，請核對原文與健保規定。' }),
         pf('nsclc-brain-mets', '腦轉移', 'single_select', ['無','有','待確認']),
         pf('nsclc-molecular-specimen', '分子檢測檢體', 'single_select', ['組織','血液 ctDNA','組織＋血液','待檢']),
       ],
@@ -324,7 +328,7 @@
         pf('breast-pr', 'PR', 'single_select', ['陽性','陰性','待檢']),
         pf('breast-her2', 'HER2 原始結果', 'single_select', ['IHC 0','IHC 1+','IHC 2+／ISH 陰性','IHC 2+／ISH 陽性','IHC 3+','待檢']),
         pf('breast-subtype', '乳癌臨床亞型', 'single_select', ['HR+/HER2-','HER2+','三陰性','待確認']),
-        pf('breast-pdl1-cps', 'PD-L1 CPS（晚期 TNBC）', 'number'),
+        pf('breast-pdl1-cps', 'PD-L1 CPS（晚期 TNBC）', 'number', [], 'cancer', { positiveAtLeast: 10, help: '晚期 TNBC 免疫治療常用門檻為 CPS ≥10；低於此值不視為陽性，仍請核對原文與健保規定。' }),
         pf('breast-advanced-alterations', '晚期乳癌相關分子變異', 'multi_select', ['PIK3CA','ESR1','AKT1','PTEN loss／alteration','BRCA1','BRCA2','PALB2','MSI-H／dMMR','TMB-High','NTRK fusion','無已知相關變異','待檢']),
         pf('breast-germline', '胚系遺傳檢測', 'single_select', ['未評估','不符合／暫不需','已送檢待報告','陽性','陰性','VUS']),
       ],
@@ -358,7 +362,7 @@
         pf('uppergi-site-histology', '上消化道原發／病理', 'single_select', ['食道鱗狀細胞癌','食道腺癌','胃食道交界腺癌','胃腺癌','其他／待確認']),
         pf('uppergi-her2', 'HER2', 'single_select', ['陽性','陰性','待檢／不適用']),
         pf('uppergi-mmr', 'MMR／MSI', 'single_select', ['pMMR／MSS','dMMR／MSI-H','待檢']),
-        pf('uppergi-pdl1-cps', 'PD-L1 CPS', 'number'),
+        pf('uppergi-pdl1-cps', 'PD-L1 CPS', 'number', [], 'cancer', { positiveAtLeast: 1, help: 'CPS 0 視為陰性；≥1 視為有表現。上消化道各適應症門檻（1／5／10）不同，請核對原文。' }),
         pf('uppergi-cldn18', 'CLDN18.2', 'single_select', ['陽性','陰性','待檢／不適用']),
         pf('uppergi-ebv', 'EBV 腫瘤狀態', 'single_select', ['陽性','陰性','待檢／不適用']),
       ],
@@ -422,7 +426,7 @@
         }),
         pf('hcc-albi', 'ALBI grade', 'single_select', ['1','2','3','待確認']),
         pf('hcc-macrovascular', '大血管侵犯', 'single_select', ['無','有','待確認']),
-        pf('hcc-afp', 'AFP（ng/mL）', 'number'),
+        pf('hcc-afp', 'AFP（ng/mL）', 'number', [], 'cancer', { markerPolarity: 'descriptive' }),
         pf('hcc-viral-status', '肝炎狀態', 'multi_select', ['HBsAg+','anti-HBc+','HCV RNA+','無已知病毒性肝炎','待確認']),
       ],
     },
@@ -449,7 +453,7 @@
         pf('net-primary', '神經內分泌腫瘤原發位置', 'text'),
         pf('net-differentiation', '分化／分類', 'single_select', ['well-differentiated NET','poorly differentiated NEC','MiNEN／混合型','待確認']),
         pf('net-grade', 'NET grade', 'single_select', ['G1','G2','G3','不適用／待確認']),
-        pf('net-ki67', 'Ki-67（%）', 'number'),
+        pf('net-ki67', 'Ki-67（%）', 'number', [], 'cancer', { markerPolarity: 'descriptive', help: 'Ki-67 用於分級（G1/G2/G3），不作為陽性／陰性標記比對。' }),
         pf('net-sstr', 'SSTR 狀態', 'single_select', ['陽性','陰性','待檢／不適用']),
         pf('net-functional', '功能性症候群', 'single_select', ['無','有','待確認']),
       ],
@@ -496,7 +500,7 @@
       ],
       precisionFields: [
         pf('cervix-histology', '子宮頸癌組織型', 'single_select', ['鱗狀細胞癌','腺癌','腺鱗癌','神經內分泌癌','其他']),
-        pf('cervix-pdl1-cps', 'PD-L1 CPS', 'number'),
+        pf('cervix-pdl1-cps', 'PD-L1 CPS', 'number', [], 'cancer', { positiveAtLeast: 1, help: 'CPS 0 視為陰性；≥1 視為有表現。' }),
         pf('cervix-molecular', '子宮頸癌其他分子標記', 'multi_select', ['MSI-H／dMMR','TMB-High','NTRK fusion','HER2 alteration','無','待檢']),
       ],
     },
@@ -568,7 +572,7 @@
       ],
       precisionFields: [
         pf('hn-primary-site', '頭頸癌原發部位', 'text'),
-        pf('hn-pdl1-cps', 'PD-L1 CPS', 'number'),
+        pf('hn-pdl1-cps', 'PD-L1 CPS', 'number', [], 'cancer', { positiveAtLeast: 1, help: 'CPS 0 視為陰性；≥1 視為有表現。' }),
         pf('hn-smoking', '吸菸史（pack-years）', 'number'),
       ],
     },
@@ -586,7 +590,7 @@
       precisionFields: [
         pf('npc-ebv', 'EBER', 'single_select', ['陽性','陰性','待檢']),
         pf('npc-ebv-dna', '血漿 EBV DNA', 'number'),
-        pf('npc-pdl1-cps', 'PD-L1 CPS（復發／轉移情境）', 'number'),
+        pf('npc-pdl1-cps', 'PD-L1 CPS（復發／轉移情境）', 'number', [], 'cancer', { positiveAtLeast: 1, help: 'CPS 0 視為陰性；≥1 視為有表現。' }),
       ],
     },
     {

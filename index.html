@@ -692,6 +692,13 @@
     // 共同欄位加上癌別專屬欄位，避免把所有生物標記塞在同一個選單。
     const PRESET_PRECISION = window.CLINICAL_TEMPLATES.commonPrecisionFields;
     const precisionTemplatesForCancer = window.CLINICAL_TEMPLATES.precisionForCancer;
+    // 極性中繼資料必須一起存進 IndexedDB，比對器才知道數值欄位的陽性臨界值
+    const precisionPolarityMetadata = (template) => {
+      const output = {};
+      if (Number.isFinite(Number(template?.positiveAtLeast))) output.positiveAtLeast = Number(template.positiveAtLeast);
+      if (template?.markerPolarity) output.markerPolarity = template.markerPolarity;
+      return output;
+    };
     const togglePrecisionMultiValue = window.CLINICAL_TEMPLATES.toggleMultiValue;
 
     // ========== 小工具 ==========
@@ -757,8 +764,8 @@
       review: { label: '需開原頁核對', color: '#4b5563', background: '#f3f4f6' },
     };
     const nccnOptionAssessment = (option, features) => window.CLINICAL_MATCHER.optionAssessment(option, features);
-    const renderNccnTreatmentOption = (option, doc, page) => {
-      const openAttrs = doc.storageKey ? `role="button" tabindex="0" onclick="openPdf('${doc.storageKey}', ${page.page})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openPdf('${doc.storageKey}', ${page.page})}"` : '';
+    const renderNccnTreatmentOption = (option, doc, page, assessment) => {
+      const openAttrs = doc.storageKey ? `role="button" tabindex="0" onclick="openPdf('${jsStr(doc.storageKey)}', ${page.page})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openPdf('${doc.storageKey}', ${page.page})}"` : '';
       const openStyle = doc.storageKey ? 'cursor:pointer;' : '';
       if (typeof option === 'string') return `<li ${openAttrs} style="padding:9px 0;border-top:1px solid #dbeafe;list-style:none;${openStyle}"><div style="display:flex;justify-content:space-between;gap:8px"><span>${esc(option)}</span>${doc.storageKey ? `<span class="text-xs text-blue-700" style="white-space:nowrap">PDF p.${page.page} ›</span>` : ''}</div></li>`;
       const meta = nccnRecommendationMeta[option.recommendation] || nccnRecommendationMeta.review;
@@ -781,6 +788,7 @@
         ${conditions.map(condition => `<p class="text-xs mt-1" style="color:#92400e">• 適用條件：${esc(condition)}</p>`).join('')}
         ${references.length ? `<p class="text-xs text-gray-500 mt-1">指引參考：${esc(references.join('、'))}</p>` : ''}
         ${option.needsReview ? '<p class="text-xs text-gray-500 mt-1">此項切分不確定，請開啟原頁核對。</p>' : ''}
+        ${(assessment?.reviewNotes || []).map(note => `<p class="text-xs mt-1" style="color:#92400e">⚠ 需人工核對：${esc(note)}</p>`).join('')}
       </li>`;
     };
     const renderNccnTreatmentMatch = ({ doc, page, reasons, features }) => {
@@ -801,12 +809,12 @@
       return `<div class="bg-blue-50 rounded-lg p-3">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
           <div class="min-w-0"><p class="text-sm font-semibold text-blue-900">${esc(pageLabel || page.title)}</p><p class="text-xs text-blue-700 mt-1">符合目前條件：${esc(nccnReasonText(reasons))}</p></div>
-          ${doc.storageKey ? `<button class="btn btn-ghost btn-sm" style="width:auto;white-space:nowrap" onclick="openPdf('${doc.storageKey}', ${page.page})">p.${page.page}</button>` : ''}
+          ${doc.storageKey ? `<button class="btn btn-ghost btn-sm" style="width:auto;white-space:nowrap" onclick="openPdf('${jsStr(doc.storageKey)}', ${page.page})">p.${page.page}</button>` : ''}
         </div>
         ${contexts.length ? `<div class="mt-3"><p class="text-xs font-medium text-gray-500">適用情境</p>${contexts.map(context => `<p class="text-sm text-gray-800 mt-1">${esc(context)}</p>`).join('')}</div>` : ''}
-        ${visible.length ? `<ul class="mt-3" style="padding:0;margin-bottom:0">${visible.map(item => renderNccnTreatmentOption(item.option, doc, page)).join('')}</ul>${matching.length > visible.length ? `<p class="text-xs text-gray-500 mt-2">另有 ${matching.length - visible.length} 項，請開啟原頁查看完整表格。</p>` : ''}` : doc.storageKey ? `<button class="btn btn-ghost btn-sm mt-2" style="width:100%;text-align:left" onclick="openPdf('${doc.storageKey}', ${page.page})">開啟 PDF p.${page.page} 核對</button>` : '<p class="text-xs text-gray-500 mt-2">此頁無法可靠拆成單一療程。</p>'}
+        ${visible.length ? `<ul class="mt-3" style="padding:0;margin-bottom:0">${visible.map(item => renderNccnTreatmentOption(item.option, doc, page, item.assessment)).join('')}</ul>${matching.length > visible.length ? `<p class="text-xs text-gray-500 mt-2">另有 ${matching.length - visible.length} 項，請開啟原頁查看完整表格。</p>` : ''}` : doc.storageKey ? `<button class="btn btn-ghost btn-sm mt-2" style="width:100%;text-align:left" onclick="openPdf('${jsStr(doc.storageKey)}', ${page.page})">開啟 PDF p.${page.page} 核對</button>` : '<p class="text-xs text-gray-500 mt-2">此頁無法可靠拆成單一療程。</p>'}
         ${blockedCount ? `<p class="text-xs mt-2" style="color:#92400e">已隱藏 ${blockedCount} 項與陰性條件衝突的候選。</p>` : ''}
-        ${nextSteps.length && doc.storageKey ? `<div class="mt-3"><p class="text-xs font-medium text-gray-500">後續／相關步驟</p><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${nextSteps.map(step => `<button class="btn btn-ghost btn-sm" style="width:auto" onclick="openPdf('${doc.storageKey}', ${step.page})">${esc(step.code)} · p.${step.page}</button>`).join('')}</div></div>` : ''}
+        ${nextSteps.length && doc.storageKey ? `<div class="mt-3"><p class="text-xs font-medium text-gray-500">後續／相關步驟</p><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${nextSteps.map(step => `<button class="btn btn-ghost btn-sm" style="width:auto" onclick="openPdf('${jsStr(doc.storageKey)}', ${step.page})">${esc(step.code)} · p.${step.page}</button>`).join('')}</div></div>` : ''}
       </div>`;
     };
 
@@ -870,7 +878,7 @@
         ${note.extractedConditionHints?.length ? `<p class="text-xs text-gray-500 mt-2">條文涉及：${esc(note.extractedConditionHints.join('、'))}</p>` : ''}
         ${renderNhiRestrictions(note.content)}
         ${note.condition ? `<p class="text-xs text-gray-500 mt-2">對應欄位：${esc(condLabel(note.condition))}</p>` : ''}
-        ${linked?.storageKey ? `<button class="text-sm text-blue-700 mt-2" style="font-weight:500" onclick="openPdf('${linked.storageKey}', ${Number(note.sourcePageStart) || 1})">📄 開啟給付規定 PDF${note.sourcePageStart ? ' · p.' + esc(note.sourcePageStart) : ''}</button>` : ''}
+        ${linked?.storageKey ? `<button class="text-sm text-blue-700 mt-2" style="font-weight:500" onclick="openPdf('${jsStr(linked.storageKey)}', ${Number(note.sourcePageStart) || 1})">📄 開啟給付規定 PDF${note.sourcePageStart ? ' · p.' + esc(note.sourcePageStart) : ''}</button>` : ''}
       </div>`;
     const normalizeNhiTreatmentName = window.NHI_SELECTOR.normalizeTreatmentName;
     const groupNhiTreatments = window.NHI_SELECTOR.groupTreatments;
@@ -1027,13 +1035,16 @@
         if (item.sourceType !== '內建癌別範本' && !builtInId) continue;
         const templateKey = item.sourceTemplateKey || (builtInId ? String(item.id).slice(idPrefix.length) : '');
         const template = precisionTemplatesForCancer(item.cancerId).find(candidate => candidate.key === templateKey);
-        if (!template || (!template.help && !template.optionLabels && !template.exclusiveOptions)) continue;
+        if (!template || (!template.help && !template.optionLabels && !template.exclusiveOptions &&
+          template.positiveAtLeast === undefined && !template.markerPolarity)) continue;
         const nextHelp = template.help || '';
         const nextOptionLabels = { ...(template.optionLabels || {}) };
         const nextExclusiveOptions = [...(template.exclusiveOptions || [])];
+        const nextPolarity = precisionPolarityMetadata(template);
         const metadataMatches = item.sourceType === '內建癌別範本' && item.sourceTemplateKey === templateKey &&
           item.help === nextHelp && JSON.stringify(item.optionLabels || {}) === JSON.stringify(nextOptionLabels) &&
-          JSON.stringify(item.exclusiveOptions || []) === JSON.stringify(nextExclusiveOptions);
+          JSON.stringify(item.exclusiveOptions || []) === JSON.stringify(nextExclusiveOptions) &&
+          item.positiveAtLeast === nextPolarity.positiveAtLeast && item.markerPolarity === nextPolarity.markerPolarity;
         if (metadataMatches) continue;
         clinicalPrecisionMetadata.push({
           ...item,
@@ -1042,6 +1053,7 @@
           help: nextHelp,
           optionLabels: nextOptionLabels,
           exclusiveOptions: nextExclusiveOptions,
+          ...nextPolarity,
         });
       }
       await dbPutMany('precisionFields', clinicalPrecisionMetadata);
@@ -1107,6 +1119,7 @@
               help: template.help || '',
               optionLabels: { ...(template.optionLabels || {}) },
               exclusiveOptions: [...(template.exclusiveOptions || [])],
+              ...precisionPolarityMetadata(template),
               sourceType: '內建癌別範本',
               sourceTemplateKey: template.key,
               templateScope: template.scope,
@@ -1312,12 +1325,26 @@
       URL.revokeObjectURL(url);
     }
 
+    // 記錄 id 會進到 inline handler 與 DOM 屬性，只允許安全字元，
+    // 避免被竄改的備份藉由 id 注入程式碼
+    const SAFE_RECORD_ID = /^[A-Za-z0-9_:.-]{1,160}$/;
+    const SAFE_STORAGE_KEY = /^[A-Za-z0-9_-]{1,120}$/;
+
     function validateBackupStores(data) {
       for (const store of BACKUP_STORES) {
         const items = data[store] || [];
         if (!Array.isArray(items)) throw new Error('備份格式錯誤：' + store);
         for (const item of items) {
           if (!item || typeof item.id !== 'string' || !item.id) throw new Error('備份格式錯誤：' + store + ' 缺少 id');
+          if (!SAFE_RECORD_ID.test(item.id)) throw new Error('備份格式錯誤：' + store + ' 的 id 含不允許的字元，已中止匯入');
+          if (item.storageKey != null && item.storageKey !== '' &&
+            (typeof item.storageKey !== 'string' || !SAFE_STORAGE_KEY.test(item.storageKey))) {
+            throw new Error('備份格式錯誤：' + store + ' 的 storageKey 含不允許的字元，已中止匯入');
+          }
+          if (item.cancerId != null && item.cancerId !== '' &&
+            (typeof item.cancerId !== 'string' || !SAFE_RECORD_ID.test(item.cancerId))) {
+            throw new Error('備份格式錯誤：' + store + ' 的 cancerId 含不允許的字元，已中止匯入');
+          }
         }
       }
     }
@@ -1326,6 +1353,9 @@
       const output = [];
       for (const pdf of pdfs || []) {
         if (!pdf?.key || typeof pdf.data !== 'string') throw new Error('PDF 批次格式錯誤');
+        // key 會成為 storageKey 並進入 inline handler，格式必須受限
+        if (typeof pdf.key !== 'string' || !SAFE_STORAGE_KEY.test(pdf.key)) throw new Error('PDF 批次的識別碼含不允許的字元，已中止匯入');
+        if (!/^data:application\/pdf(?:;[a-z0-9\-=]+)*;base64,/i.test(pdf.data)) throw new Error('PDF 批次內容格式錯誤');
         const buf = await (await fetch(pdf.data)).arrayBuffer();
         if (requireIntegrity) {
           if (!pdf.sha256 || !Number.isFinite(Number(pdf.byteLength))) throw new Error('PDF 缺少校驗資料：' + (pdf.title || pdf.key));
@@ -1552,6 +1582,13 @@
       return String(s ?? '').replace(/[&<>"']/g, c => (
         { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]
       ));
+    }
+
+    // inline handler（onclick="fn('...')"）需要兩層跳脫：先處理 JS 字串層的
+    // 反斜線與單引號，再交給 esc 處理 HTML 屬性層。只用 esc 會被 HTML 解碼還原
+    // 成真正的單引號而跳出字串。
+    function jsStr(value) {
+      return esc(String(value ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'"));
     }
 
     // ========== Toast ==========
@@ -1792,7 +1829,7 @@
       const statusClass = hasDocs ? 'status-maintained' : 'status-pending';
       const statusText = hasDocs ? '已有指引' : expectsNccn ? '待匯入 PDF' : '自訂分類';
       return `
-        <div class="cancer-item" onclick="navigate('/cancer/${card.id}')">
+        <div class="cancer-item" onclick="navigate('/cancer/${jsStr(card.id)}')">
           <div class="min-w-0 flex-1">
             <div class="flex items-center gap-2 mb-1">
               <span class="cancer-name truncate">${esc(card.zhName)}</span>
@@ -1819,7 +1856,7 @@
         <nav class="nav">
           <div class="nav-inner">
             ${items.map(i => `
-              <button class="nav-btn ${i.id === active ? 'active' : ''}" onclick="navigate('${i.path}')">
+              <button class="nav-btn ${i.id === active ? 'active' : ''}" onclick="navigate('${jsStr(i.path)}')">
                 <span class="nav-icon">${i.icon}</span>
                 <span>${i.label}</span>
               </button>
@@ -1869,7 +1906,7 @@
             ${filledPf.flatMap(f => (Array.isArray(f.value) ? f.value : [f.value]).map(v => `<span class="tag tag-category">${esc(v)}</span>`)).join('')}
           </div>` : ''}
 
-          <button class="btn btn-primary mb-4" onclick="navigate('/cancer/${card.id}/quickref')">📋 快速參考</button>
+          <button class="btn btn-primary mb-4" onclick="navigate('/cancer/${jsStr(card.id)}/quickref')">📋 快速參考</button>
 
           <!-- Guideline Documents -->
           <div class="card section">
@@ -1887,7 +1924,7 @@
                       <p class="text-sm font-medium text-green-800 truncate">${esc(d.title)}</p>
                       <p class="text-xs text-green-600">${esc(d.source)} · ${esc(d.version)}</p>
                     </div>
-                    ${d.storageKey ? `<button class="btn btn-ghost btn-sm text-green-700" onclick="openPdf('${d.storageKey}')">開啟</button>` :
+                    ${d.storageKey ? `<button class="btn btn-ghost btn-sm text-green-700" onclick="openPdf('${jsStr(d.storageKey)}')">開啟</button>` :
                       '<span class="text-xs text-gray-400 shrink-0">需重新匯入</span>'}
                   </div>
                 `).join('')}
@@ -1897,7 +1934,7 @@
                   ${archivedDocs.map(d => `
                     <div class="doc-item doc-item-archived mt-2">
                       <p class="text-xs text-gray-500 truncate">${esc(d.title)} (${esc(d.version)})</p>
-                      ${d.storageKey ? `<button class="text-xs text-gray-400" onclick="openPdf('${d.storageKey}')">開啟</button>` :
+                      ${d.storageKey ? `<button class="text-xs text-gray-400" onclick="openPdf('${jsStr(d.storageKey)}')">開啟</button>` :
                         '<span class="text-xs text-gray-400">需重新匯入</span>'}
                     </div>
                   `).join('')}
@@ -1912,7 +1949,7 @@
             ${card.mustReadSections.length ? `<ul class="space-y-2">${card.mustReadSections.map(s => {
               const ps = parseSection(s);
               const st = condState(ps.cond, pfMap);
-              const jump = ps.page && jumpDoc ? `<button class="text-sm" style="margin-left:auto;color:var(--primary-600);font-weight:500;white-space:nowrap" onclick="openPdf('${jumpDoc.storageKey}', ${ps.page})">p.${ps.page} →</button>` :
+              const jump = ps.page && jumpDoc ? `<button class="text-sm" style="margin-left:auto;color:var(--primary-600);font-weight:500;white-space:nowrap" onclick="openPdf('${jsStr(jumpDoc.storageKey)}', ${ps.page})">p.${ps.page} →</button>` :
                 ps.page ? `<span class="text-xs text-gray-400" style="margin-left:auto">p.${ps.page}</span>` : '';
               const mark = st === 'met' ? '<span class="tag tag-category" style="margin-left:6px">✦ ' + esc(condLabel(ps.cond)) + '</span>' :
                 st === 'unmet' ? '<span class="tag" style="margin-left:6px">僅當 ' + esc(condLabel(ps.cond)) + '</span>' : '';
@@ -1925,11 +1962,11 @@
           <div class="card section">
             <div class="flex-between">
               <h2 class="section-title">✅ 不要漏</h2>
-              ${checklists.some(c => c.checked) ? `<button class="btn btn-ghost btn-sm" style="width:auto;padding:4px 10px" onclick="window._resetChecks('${card.id}')">重設勾選</button>` : ''}
+              ${checklists.some(c => c.checked) ? `<button class="btn btn-ghost btn-sm" style="width:auto;padding:4px 10px" onclick="window._resetChecks('${jsStr(card.id)}')">重設勾選</button>` : ''}
             </div>
             ${checklists.length ? `<div class="space-y-2">${[...checklists].map(c => ({ c, st: condState(c.condition, pfMap) })).sort((a, b) => condRank(a.st) - condRank(b.st)).map(({ c, st }) => `
               <label class="list-item" style="cursor:pointer;${st === 'unmet' ? 'opacity:.5' : ''}${st === 'met' ? 'background:var(--primary-50);border-radius:8px;padding-left:6px;padding-right:6px' : ''}">
-                <input type="checkbox" ${c.checked ? 'checked' : ''} style="margin-top:2px" onchange="window._toggleCheck('${c.id}', this.checked, this)">
+                <input type="checkbox" ${c.checked ? 'checked' : ''} style="margin-top:2px" onchange="window._toggleCheck('${jsStr(c.id)}', this.checked, this)">
                 <div><p class="text-sm text-gray-700" style="${c.checked ? 'text-decoration:line-through;color:var(--gray-400)' : ''}">${esc(c.label)}</p><p class="text-xs text-gray-400">${esc(c.category)} · ${esc(c.importance)}${st === 'met' ? ' · ↳ 因 ' + esc(condLabel(c.condition)) : st === 'unmet' ? ' · 僅當 ' + esc(condLabel(c.condition)) : ''}</p></div>
               </label>
             `).join('')}</div>` : '<p class="text-sm text-gray-400">尚未建立 checklist</p>'}
@@ -1939,20 +1976,20 @@
           <div class="card section">
             <div class="flex-between">
               <h2 class="section-title">🎯 我要更精準</h2>
-              ${filledPf.length ? `<button type="button" class="btn btn-ghost btn-sm" style="width:auto" onclick="window._newCase('${card.id}')">清空／新個案</button>` : ''}
+              ${filledPf.length ? `<button type="button" class="btn btn-ghost btn-sm" style="width:auto" onclick="window._newCase('${jsStr(card.id)}')">清空／新個案</button>` : ''}
             </div>
             ${precisionFields.length ? `<div class="space-y-3">${precisionFields.map(f => {
               if (f.type === 'multi_select') {
                 return `<div class="form-group" id="precision-field-${esc(f.id)}"><label class="label">${esc(f.label)}${f.required ? ' *' : ''}</label>
                   <div style="display:flex;flex-wrap:wrap;gap:6px">${f.options.map((o, i) => {
                     const on = Array.isArray(f.value) && f.value.includes(o);
-                    return `<button type="button" class="tag ${on ? 'tag-category' : ''}" style="cursor:pointer;border:none;padding:6px 12px" onclick="window._togglePfMulti('${f.id}', ${i})">${esc(precisionOptionLabel(f, o))}</button>`;
+                    return `<button type="button" class="tag ${on ? 'tag-category' : ''}" style="cursor:pointer;border:none;padding:6px 12px" onclick="window._togglePfMulti('${jsStr(f.id)}', ${i})">${esc(precisionOptionLabel(f, o))}</button>`;
                   }).join('')}</div></div>`;
               }
               if (f.type === 'text' || f.type === 'number') {
-                return `<div class="form-group" id="precision-field-${esc(f.id)}"><label class="label">${esc(f.label)}${f.required ? ' *' : ''}</label><input class="input" type="${f.type === 'number' ? 'number' : 'text'}" value="${esc(f.value || '')}" placeholder="（未輸入）" onchange="window._setPfValue('${f.id}', this.value.trim(), this)"></div>`;
+                return `<div class="form-group" id="precision-field-${esc(f.id)}"><label class="label">${esc(f.label)}${f.required ? ' *' : ''}</label><input class="input" type="${f.type === 'number' ? 'number' : 'text'}" value="${esc(f.value || '')}" placeholder="（未輸入）" onchange="window._setPfValue('${jsStr(f.id)}', this.value.trim(), this)"></div>`;
               }
-              return `<div class="form-group" id="precision-field-${esc(f.id)}"><label class="label">${esc(f.label)}${f.required ? ' *' : ''}</label><select class="input" onchange="window._setPfValue('${f.id}', this.value, this)">
+              return `<div class="form-group" id="precision-field-${esc(f.id)}"><label class="label">${esc(f.label)}${f.required ? ' *' : ''}</label><select class="input" onchange="window._setPfValue('${jsStr(f.id)}', this.value, this)">
                 <option value="">（未輸入）</option>
                 ${f.options.map(o => `<option value="${esc(o)}" ${f.value === o ? 'selected' : ''}>${esc(precisionOptionLabel(f, o))}</option>`).join('')}
               </select>${f.help ? `<p class="text-xs text-gray-400 mt-1">${esc(f.help)}</p>` : ''}</div>`;
@@ -1982,10 +2019,10 @@
 
           <!-- Actions -->
           <div class="space-y-3 mt-6">
-            <button class="btn btn-secondary" onclick="navigate('/cancer/${card.id}/edit')">✏️ 編輯此癌別</button>
-            <button class="btn btn-ghost" onclick="navigate('/cancer/${card.id}/checklist')">編輯 Checklist</button>
-            <button class="btn btn-ghost" onclick="navigate('/cancer/${card.id}/precision')">編輯精準欄位</button>
-            <button class="btn btn-ghost" onclick="navigate('/cancer/${card.id}/nhi')">編輯藥物／療程健保</button>
+            <button class="btn btn-secondary" onclick="navigate('/cancer/${jsStr(card.id)}/edit')">✏️ 編輯此癌別</button>
+            <button class="btn btn-ghost" onclick="navigate('/cancer/${jsStr(card.id)}/checklist')">編輯 Checklist</button>
+            <button class="btn btn-ghost" onclick="navigate('/cancer/${jsStr(card.id)}/precision')">編輯精準欄位</button>
+            <button class="btn btn-ghost" onclick="navigate('/cancer/${jsStr(card.id)}/nhi')">編輯藥物／療程健保</button>
           </div>
           ${renderNav('')}
         </div>
@@ -2059,7 +2096,7 @@
 
       app.innerHTML = `
         <div class="container">
-          <button class="back-btn" onclick="navigate('/cancer/${card.id}')">← 返回</button>
+          <button class="back-btn" onclick="navigate('/cancer/${jsStr(card.id)}')">← 返回</button>
           <h1 class="text-2xl font-bold mb-1">快速參考</h1>
           <p class="text-sm text-gray-500 mb-6">${esc(card.zhName)} · ${esc(card.enName)}</p>
 
@@ -2076,7 +2113,7 @@
             ${hasDocs ? currentDocs.map(d => `
               <div class="bg-green-50 rounded-lg p-3 flex-between">
                 <div><p class="text-sm font-medium text-green-800">✅ 已匯入 ${esc(d.version)}</p><p class="text-xs text-green-600">${esc(d.title)}</p></div>
-                ${d.storageKey ? `<button class="text-sm text-green-700 font-medium" onclick="openPdf('${d.storageKey}')">一鍵開啟</button>` :
+                ${d.storageKey ? `<button class="text-sm text-green-700 font-medium" onclick="openPdf('${jsStr(d.storageKey)}')">一鍵開啟</button>` :
                   '<span class="text-xs text-gray-400 shrink-0">需重新匯入</span>'}
               </div>
             `).join('') : `
@@ -2090,7 +2127,7 @@
           <div class="nhi-query-overview mb-4">
             <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
               <span class="text-xs text-gray-500 font-medium">本次查詢條件</span>
-              <button type="button" class="btn btn-ghost btn-sm" onclick="window._newCase('${card.id}')" style="width:auto;min-height:40px;padding:6px 10px">清空／新個案</button>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="window._newCase('${jsStr(card.id)}')" style="width:auto;min-height:40px;padding:6px 10px">清空／新個案</button>
             </div>
             <div class="mt-2" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
               ${filledPf.length ? filledPf.flatMap(field => (Array.isArray(field.value) ? field.value : [field.value]).map(value => `<span class="tag tag-category">${esc(field.label)}：${esc(value)}</span>`)).join('') : '<span class="text-xs text-gray-400">尚未輸入條件</span>'}
@@ -2100,7 +2137,7 @@
           <div class="card section">
             <h2 class="section-title">📖 必查章節</h2>
             ${secVisible.length ? `<ul class="space-y-2">${secVisible.map(({ ps, st }) => {
-              const jump = ps.page && jumpDoc ? `<button class="text-sm" style="margin-left:auto;color:var(--primary-600);font-weight:500;white-space:nowrap" onclick="openPdf('${jumpDoc.storageKey}', ${ps.page})">p.${ps.page} →</button>` :
+              const jump = ps.page && jumpDoc ? `<button class="text-sm" style="margin-left:auto;color:var(--primary-600);font-weight:500;white-space:nowrap" onclick="openPdf('${jsStr(jumpDoc.storageKey)}', ${ps.page})">p.${ps.page} →</button>` :
                 ps.page ? `<span class="text-xs text-gray-400" style="margin-left:auto">p.${ps.page}</span>` : '';
               const mark = st === 'met' ? '<span class="tag tag-category" style="margin-left:6px">✦</span>' : '';
               return `<li class="list-item"><span class="list-dot">•</span><span class="text-sm text-gray-700">${esc(ps.name)}</span>${mark}${jump}</li>`;
@@ -2111,11 +2148,11 @@
           <div class="card section">
             <div class="flex-between">
               <h2 class="section-title">✅ 不要漏</h2>
-              ${clVisible.some(x => x.c.checked) ? `<button class="btn btn-ghost btn-sm" style="width:auto;padding:4px 10px" onclick="window._resetChecks('${card.id}')">重設勾選</button>` : ''}
+              ${clVisible.some(x => x.c.checked) ? `<button class="btn btn-ghost btn-sm" style="width:auto;padding:4px 10px" onclick="window._resetChecks('${jsStr(card.id)}')">重設勾選</button>` : ''}
             </div>
             ${clVisible.length ? `<div class="space-y-2">${clVisible.map(({ c, st }) => `
               <label class="list-item" style="cursor:pointer;${st === 'met' ? 'background:var(--primary-50);border-radius:8px;padding-left:6px;padding-right:6px' : ''}">
-                <input type="checkbox" ${c.checked ? 'checked' : ''} style="margin-top:2px" onchange="window._toggleCheck('${c.id}', this.checked, this)">
+                <input type="checkbox" ${c.checked ? 'checked' : ''} style="margin-top:2px" onchange="window._toggleCheck('${jsStr(c.id)}', this.checked, this)">
                 <p class="text-sm text-gray-700" style="${c.checked ? 'text-decoration:line-through;color:var(--gray-400)' : ''}">${esc(c.label)}${st === 'met' ? ' <span class="tag tag-category">↳ 因 ' + esc(condLabel(c.condition)) + '</span>' : ''}</p>
               </label>
             `).join('')}</div>${clHidden ? `<p class="text-xs text-gray-400 mt-2">另有 ${clHidden} 項情境相關項目未符合目前輸入</p>` : ''}` :
@@ -2141,7 +2178,7 @@
                 ${nccnDiagnosisFeatureLabels.length ? `<p class="text-sm text-gray-600 mt-2">已辨識：${esc(nccnDiagnosisFeatureLabels.join("、"))}</p>` : `<p class="text-sm text-gray-600 mt-2">目前輸入尚未形成病程、線別或生物標記條件。</p>`}
                 ${nccnDiagnosisUnmatchedLabels.length ? `<p class="text-sm mt-2" style="color:var(--amber-700)">索引未找到：${esc(nccnDiagnosisUnmatchedLabels.join("、"))}</p>` : ""}
                 ${nccnDiagnosticFields.length ? `<div id="nccn-diagnostic-panel" class="nhi-query-panel mt-3"><p class="text-sm font-semibold text-gray-700 mb-3">可優先補填</p>${nccnDiagnosticFields.map(renderNhiQueryField).join("")}<button type="button" class="btn btn-primary" id="nccn-diagnostic-submit-btn">重新查詢療程</button></div>` : ""}
-                ${jumpDoc?.storageKey ? `<button type="button" class="btn btn-ghost btn-sm mt-2" onclick="openPdf('${jumpDoc.storageKey}')">直接開啟原始指引核對</button>` : ""}
+                ${jumpDoc?.storageKey ? `<button type="button" class="btn btn-ghost btn-sm mt-2" onclick="openPdf('${jsStr(jumpDoc.storageKey)}')">直接開啟原始指引核對</button>` : ""}
               </div>` :
               hasDocs ? `<div class="bg-gray-50 rounded p-3"><p class="text-sm text-gray-600">PDF 已匯入，但尚未建立內部章節索引。</p><button class="btn btn-secondary btn-sm mt-3" onclick="navigate('/pdf-library')">前往解析 NCCN 指引</button></div>` :
               '<p class="text-sm text-gray-400">請先匯入 NCCN PDF。</p>'}
@@ -2150,7 +2187,7 @@
           <div class="card section">
             <div class="flex-between">
               <h2 class="section-title">💊 選擇藥物／療程查健保</h2>
-              <button type="button" class="btn btn-ghost btn-sm" onclick="window._newCase('${card.id}')" style="width:auto;white-space:nowrap">清空</button>
+              <button type="button" class="btn btn-ghost btn-sm" onclick="window._newCase('${jsStr(card.id)}')" style="width:auto;white-space:nowrap">清空</button>
             </div>
             ${treatmentGroups.length ? `
               <div class="nhi-treatment-options" role="group" aria-label="藥物或療程">
@@ -2188,7 +2225,7 @@
                   return renderNhiNoteCard(n, st, linked, heading);
                 }).join('')}</div>
               ` : '<div class="bg-gray-50 rounded p-3"><p class="text-sm text-gray-500">尚未選擇藥物／療程</p></div>'}
-            ` : `<div class="bg-gray-50 rounded p-3"><p class="text-sm text-gray-500">尚未建立藥物／療程健保資料；這不代表沒有給付。</p><button class="btn btn-secondary btn-sm mt-3" onclick="navigate('/cancer/${card.id}/nhi')">新增藥物／療程</button></div>`}
+            ` : `<div class="bg-gray-50 rounded p-3"><p class="text-sm text-gray-500">尚未建立藥物／療程健保資料；這不代表沒有給付。</p><button class="btn btn-secondary btn-sm mt-3" onclick="navigate('/cancer/${jsStr(card.id)}/nhi')">新增藥物／療程</button></div>`}
             ${generalNhiEntries.length ? `<details class="mt-3">
               <summary class="text-sm text-gray-600" style="cursor:pointer;font-weight:500">一般健保查核提醒（${generalNhiEntries.length}）</summary>
               <div class="space-y-2 mt-2">${generalNhiEntries.map(({ n, st }) => {
@@ -2351,7 +2388,7 @@
 
       app.innerHTML = `
         <div class="container">
-          <button class="back-btn" onclick="navigate('/cancer/${card.id}')">← 返回</button>
+          <button class="back-btn" onclick="navigate('/cancer/${jsStr(card.id)}')">← 返回</button>
           <h1 class="text-2xl font-bold mb-1">編輯癌別</h1>
           <p class="text-sm text-gray-500 mb-6">${esc(card.zhName)}</p>
 
@@ -2443,7 +2480,7 @@
 
       app.innerHTML = `
         <div class="container">
-          <button class="back-btn" onclick="navigate('/cancer/${card.id}')">← 返回</button>
+          <button class="back-btn" onclick="navigate('/cancer/${jsStr(card.id)}')">← 返回</button>
           <h1 class="text-2xl font-bold mb-1">不要漏 Checklist</h1>
           <p class="text-sm text-gray-500 mb-6">${esc(card.zhName)}</p>
 
@@ -2558,8 +2595,8 @@
                 </div>
               </div>
               <div class="flex gap-1">
-                <button class="btn btn-ghost btn-sm" onclick="window._editChecklist('${item.id}')">編輯</button>
-                <button class="btn btn-ghost btn-sm text-red-500" onclick="window._deleteChecklist('${item.id}')">刪除</button>
+                <button class="btn btn-ghost btn-sm" onclick="window._editChecklist('${jsStr(item.id)}')">編輯</button>
+                <button class="btn btn-ghost btn-sm text-red-500" onclick="window._deleteChecklist('${jsStr(item.id)}')">刪除</button>
               </div>
             </div>
           `;
@@ -2586,7 +2623,7 @@
 
       app.innerHTML = `
         <div class="container">
-          <button class="back-btn" onclick="navigate('/cancer/${card.id}')">← 返回</button>
+          <button class="back-btn" onclick="navigate('/cancer/${jsStr(card.id)}')">← 返回</button>
           <h1 class="text-2xl font-bold mb-1">精準化欄位</h1>
           <p class="text-sm text-gray-500 mb-6">${esc(card.zhName)}</p>
 
@@ -2684,7 +2721,7 @@
         let added = 0;
         for (const p of templates) {
           if ([p.label, ...(p.aliases || [])].some(label => existing.has(String(label).trim().toLocaleLowerCase()))) continue;
-          await dbPut('precisionFields', { id: crypto.randomUUID(), cancerId: card.id, label: p.label, type: p.type, required: false, options: [...p.options], help: p.help || '', optionLabels: { ...(p.optionLabels || {}) }, exclusiveOptions: [...(p.exclusiveOptions || [])], sourceType: '內建癌別範本', sourceTemplateKey: p.key, templateScope: p.scope });
+          await dbPut('precisionFields', { id: crypto.randomUUID(), cancerId: card.id, label: p.label, type: p.type, required: false, options: [...p.options], help: p.help || '', optionLabels: { ...(p.optionLabels || {}) }, exclusiveOptions: [...(p.exclusiveOptions || [])], ...precisionPolarityMetadata(p), sourceType: '內建癌別範本', sourceTemplateKey: p.key, templateScope: p.scope });
           added++;
         }
         showToast(added ? `已加入 ${added} 個本癌別欄位` : '本癌別欄位皆已存在');
@@ -2710,8 +2747,8 @@
                 ${item.help ? `<p class="text-xs text-gray-400 mt-1">${esc(item.help)}</p>` : ''}
               </div>
               <div class="flex gap-1">
-                <button class="btn btn-ghost btn-sm" onclick="window._editPrecision('${item.id}')">編輯</button>
-                <button class="btn btn-ghost btn-sm text-red-500" onclick="window._deletePrecision('${item.id}')">刪除</button>
+                <button class="btn btn-ghost btn-sm" onclick="window._editPrecision('${jsStr(item.id)}')">編輯</button>
+                <button class="btn btn-ghost btn-sm text-red-500" onclick="window._deletePrecision('${jsStr(item.id)}')">刪除</button>
               </div>
             </div>
           `;
@@ -2747,7 +2784,7 @@
 
       app.innerHTML = `
         <div class="container">
-          <button class="back-btn" onclick="navigate('/cancer/${card.id}')">← 返回</button>
+          <button class="back-btn" onclick="navigate('/cancer/${jsStr(card.id)}')">← 返回</button>
           <h1 class="text-2xl font-bold mb-1">藥物／療程健保資料</h1>
           <p class="text-sm text-gray-500 mb-6">${esc(card.zhName)}</p>
 
@@ -2858,11 +2895,11 @@
                 ${item.extractedConditionHints?.length ? `<p class="text-xs text-gray-500 mt-2">條文涉及：${esc(item.extractedConditionHints.join('、'))}</p>` : ''}
                 ${renderNhiRestrictions(item.content)}
                 ${item.condition ? `<p class="text-xs text-gray-500 mt-2">對應欄位：${esc(condLabel(item.condition))}</p>` : ''}
-                ${docMap[item.sourceDocumentId]?.storageKey ? `<button class="text-sm mt-2" style="display:block;color:var(--primary-600);font-weight:500" onclick="openPdf('${docMap[item.sourceDocumentId].storageKey}', ${Number(item.sourcePageStart) || 1})">📄 開啟 ${esc(docMap[item.sourceDocumentId].title)}${item.sourcePageStart ? ' · p.' + esc(item.sourcePageStart) : ''}</button>` : ''}
+                ${docMap[item.sourceDocumentId]?.storageKey ? `<button class="text-sm mt-2" style="display:block;color:var(--primary-600);font-weight:500" onclick="openPdf('${jsStr(docMap[item.sourceDocumentId].storageKey)}', ${Number(item.sourcePageStart) || 1})">📄 開啟 ${esc(docMap[item.sourceDocumentId].title)}${item.sourcePageStart ? ' · p.' + esc(item.sourcePageStart) : ''}</button>` : ''}
               </div>
               <div class="flex gap-1">
-                <button class="btn btn-ghost btn-sm" onclick="window._editNhi('${item.id}')">編輯</button>
-                <button class="btn btn-ghost btn-sm text-red-500" onclick="window._deleteNhi('${item.id}')">刪除</button>
+                <button class="btn btn-ghost btn-sm" onclick="window._editNhi('${jsStr(item.id)}')">編輯</button>
+                <button class="btn btn-ghost btn-sm text-red-500" onclick="window._deleteNhi('${jsStr(item.id)}')">刪除</button>
               </div>
             </div>`;
         }).join('');
@@ -2872,7 +2909,7 @@
       if (archivedItems.length) {
         archiveEl.innerHTML = `<details class="card mt-4"><summary class="font-semibold text-gray-700" style="cursor:pointer">封存舊版（${archivedItems.length}）</summary><div class="space-y-2 mt-3">${archivedItems.map(item => {
           const linked = docMap[item.sourceDocumentId];
-          return `<div class="bg-gray-50 rounded p-3"><p class="text-sm font-medium text-gray-700">${esc(item.label)}</p>${renderNhiSourceMeta(item)}<p class="text-xs text-gray-500 mt-1">封存於：${esc(item.supersededAt || item.updatedAt || '未記錄')}</p>${linked?.storageKey ? `<button class="btn btn-ghost btn-sm mt-2" onclick="openPdf('${linked.storageKey}', ${Number(item.sourcePageStart) || 1})">開啟原規定</button>` : ''}</div>`;
+          return `<div class="bg-gray-50 rounded p-3"><p class="text-sm font-medium text-gray-700">${esc(item.label)}</p>${renderNhiSourceMeta(item)}<p class="text-xs text-gray-500 mt-1">封存於：${esc(item.supersededAt || item.updatedAt || '未記錄')}</p>${linked?.storageKey ? `<button class="btn btn-ghost btn-sm mt-2" onclick="openPdf('${jsStr(linked.storageKey)}', ${Number(item.sourcePageStart) || 1})">開啟原規定</button>` : ''}</div>`;
         }).join('')}</div></details>`;
       }
 
@@ -3076,7 +3113,7 @@
                     ${doc.archived ? '<span class="status status-pending">已封存</span>' : ''}
                   </div>
                   <p class="text-xs text-gray-500 mt-1">${esc(doc.source)} · ${esc(doc.version)}${doc.verifiedAt ? ` · 已確認 ${esc(doc.verifiedAt)}` : ''}</p>
-                  ${isStaleDoc(doc) ? `<p class="text-xs mt-1" style="color:var(--amber-700)">⏰ 超過 6 個月未確認版本 <button class="text-xs" style="color:var(--primary-600);font-weight:500;border:none;background:none;cursor:pointer" onclick="window._verifyDoc('${doc.id}')">確認為最新</button></p>` : ''}
+                  ${isStaleDoc(doc) ? `<p class="text-xs mt-1" style="color:var(--amber-700)">⏰ 超過 6 個月未確認版本 <button class="text-xs" style="color:var(--primary-600);font-weight:500;border:none;background:none;cursor:pointer" onclick="window._verifyDoc('${jsStr(doc.id)}')">確認為最新</button></p>` : ''}
                   ${doc.nhiExtraction ? `<p class="text-xs mt-1" style="color:var(--blue-700)">健保解析：${doc.nhiExtraction.noteCount || 0} 筆資料 · ${doc.nhiExtraction.cancerCount || 0} 個癌別 · ${esc(doc.nhiExtraction.extractedAt || '')}</p>` : ''}
                   ${redirectGuidelines.length ? `<p class="text-xs mt-1" style="color:var(--amber-700)">NCCN 分拆公告：真正指引為 ${esc(redirectGuidelines.join('、'))}；此公告無需解析。</p>` : doc.nccnStructure ? '<p class="text-xs mt-1" style="color:var(--blue-700)">NCCN 索引：' + (doc.nccnStructure.sections?.length || 0) + ' 個章節頁 · ' + (doc.nccnStructure.treatmentPages?.length || 0) + ' 個治療相關頁 · ' + esc(doc.nccnStructure.version || doc.version || '') + '</p>' : ''}
                   ${doc.nccnParseError ? '<p class="text-xs mt-1" style="color:var(--amber-700)">NCCN 待核對：' + esc(doc.nccnParseError.message || '無法建立章節索引') + '</p>' : ''}
@@ -3084,14 +3121,14 @@
               </div>
               ${tags ? `<div class="flex gap-1 mb-3">${tags}</div>` : ''}
               <div class="flex gap-2" style="flex-wrap:wrap">
-                ${doc.storageKey ? `<button class="btn btn-ghost btn-sm flex-1" onclick="openPdf('${doc.storageKey}')">開啟</button>` :
+                ${doc.storageKey ? `<button class="btn btn-ghost btn-sm flex-1" onclick="openPdf('${jsStr(doc.storageKey)}')">開啟</button>` :
                   '<span class="btn btn-ghost btn-sm flex-1 text-gray-400" style="cursor:default">需重新匯入</span>'}
-                <button class="btn btn-ghost btn-sm" onclick="navigate('/pdf-library/import/${doc.id}')">編輯</button>
-                ${!doc.current && !doc.archived ? `<button class="btn btn-ghost btn-sm text-green-600" onclick="window._setCurrent('${doc.id}')">設為目前</button>` : ''}
-                ${!doc.archived ? `<button class="btn btn-ghost btn-sm text-gray-500" onclick="window._archiveDoc('${doc.id}')">封存</button>` : ''}
-                <button class="btn btn-ghost btn-sm text-red-500" onclick="window._deleteDoc('${doc.id}')">刪除</button>
+                <button class="btn btn-ghost btn-sm" onclick="navigate('/pdf-library/import/${jsStr(doc.id)}')">編輯</button>
+                ${!doc.current && !doc.archived ? `<button class="btn btn-ghost btn-sm text-green-600" onclick="window._setCurrent('${jsStr(doc.id)}')">設為目前</button>` : ''}
+                ${!doc.archived ? `<button class="btn btn-ghost btn-sm text-gray-500" onclick="window._archiveDoc('${jsStr(doc.id)}')">封存</button>` : ''}
+                <button class="btn btn-ghost btn-sm text-red-500" onclick="window._deleteDoc('${jsStr(doc.id)}')">刪除</button>
               </div>
-              ${doc.storageKey && NHI_PARSER.isNhiDocument(doc) && !doc.archived ? `<button class="btn btn-secondary btn-sm mt-3" onclick="window._parseNhiDoc('${doc.id}')">${doc.nhiExtraction ? '重新解析健保規定' : '解析健保規定'}</button>` : ''}
+              ${doc.storageKey && NHI_PARSER.isNhiDocument(doc) && !doc.archived ? `<button class="btn btn-secondary btn-sm mt-3" onclick="window._parseNhiDoc('${jsStr(doc.id)}')">${doc.nhiExtraction ? '重新解析健保規定' : '解析健保規定'}</button>` : ''}
               ${doc.storageKey && NCCN_PARSER.isNccnDocument(doc) && !doc.archived && doc.nccnParseError ? '<button class="btn btn-secondary btn-sm mt-3" onclick="window._parseNccnDoc(\'' + doc.id + '\')">重試此份 NCCN</button>' : ''}
             </div>
           `;

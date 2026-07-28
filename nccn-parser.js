@@ -96,8 +96,7 @@
     }
     return options;
   }
-  function pageKeywords(text) {
-    const terms = [
+  const KEYWORD_TERMS = [
       ['first-line', /first[- ]line|initial systemic|primary (?:systemic )?(?:therapy|treatment)|newly diagnosed/i], ['second-line', /second[- ]line|subsequent therapy|progression|previously treated|relapsed/i],
       ['metastatic', /metastatic|distant metast/i], ['unresectable', /unresectable/i], ['resectable', /\bresectable\b/i],
       ['neoadjuvant', /neoadjuvant|preoperative/i], ['adjuvant', /adjuvant|postoperative/i],
@@ -114,12 +113,21 @@
       ['limited-stage-sclc', /limited[- ]stage/i], ['extensive-stage-sclc', /extensive[- ]stage/i],
       ['bclc-0', /BCLC\s*(?:stage\s*)?0\b/i], ['bclc-a', /BCLC\s*(?:stage\s*)?A\b/i],
       ['bclc-b', /BCLC\s*(?:stage\s*)?B\b/i], ['bclc-c', /BCLC\s*(?:stage\s*)?C\b/i], ['bclc-d', /BCLC\s*(?:stage\s*)?D\b/i],
+      ['stage-i', /\bstage\s*(?:I|1)(?![IVX\d])/i], ['stage-ii', /\bstage\s*(?:II|2)(?![IVX\d])/i],
+      ['stage-iii', /\bstage\s*(?:III|3)(?![IVX\d])/i], ['stage-iv', /\bstage\s*(?:IV|4)(?![IVX\d])/i],
+      ['child-pugh-a', /Child\s*-?\s*Pugh(?:\s+class)?\s*[-:：]?\s*A\d?\b/i],
+      ['child-pugh-b', /Child\s*-?\s*Pugh(?:\s+class)?\s*[-:：]?\s*B\d?\b/i],
+      ['child-pugh-c', /Child\s*-?\s*Pugh(?:\s+class)?\s*[-:：]?\s*C\d?\b/i],
       ['recurrent', /recurren|relapse/i], ['followup', /surveillance|follow-up|monitoring/i],
       ['poorly differentiated NEC', /poorly differentiated[\s\S]{0,80}(?:NEC|neuroendocrine carcinoma)/i],
       ['well-differentiated NET', /well differentiated[\s\S]{0,80}(?:NET|neuroendocrine tumor)/i],
-    ];
-    return terms.filter(([, pattern]) => pattern.test(text)).map(([label]) => label);
+  ];
+  function pageKeywords(text) {
+    return KEYWORD_TERMS.filter(([, pattern]) => pattern.test(text)).map(([label]) => label);
   }
+  // 比對器用來判斷哪些病患條件真的能路由到頁面；
+  // 不在此清單中的條件屬「僅供記錄」，不應被當成「找不到對應頁面」的證據。
+  const KEYWORD_VOCABULARY = Object.freeze(KEYWORD_TERMS.map(([label]) => String(label).toLowerCase()));
   function isReferenceMarker(value) {
     const text = String(value || '').trim();
     return /^\d+(?:[-,]\d+)*$/.test(text) || /^[a-z]{1,3}(?:,[a-z]{1,3})*(?:,\d+(?:-\d+)?)*$/.test(text);
@@ -355,13 +363,20 @@
     }
     return deduplicateOptions(expanded);
   }
-  function detectPageRole(text, options = []) {
+  function detectPageRole(text, options = [], section = {}) {
     if (options.some(option => typeof option !== 'string' && ['preferred', 'other', 'useful'].includes(option.recommendation))) {
       return 'recommendation';
     }
+    // NCCN 慣例：數字結尾的章節代碼（HCC-4）是演算法頁，字母結尾（HCC-F）是原則／附錄。
+    // 演算法頁常在腳註引用 "See Principles of Surgery"，不可因此被降級成 principles。
+    const numberedAlgorithm = /-\d+$/.test(String(section.code || ''));
+    const headLines = text.split('\n').slice(0, 15).map(cleanLine).filter(Boolean);
+    const head = headLines.join(' ');
+    if (/^PRINCIPLES OF/i.test(headLines[0] || '') || (!numberedAlgorithm && /PRINCIPLES OF/i.test(head))) return 'principles';
+    if (/\b(?:TREATMENT|THERAPY|SURVEILLANCE)\b/i.test(head)) return 'pathway';
+    if (/\b(?:WORKUP|EVALUATION|DIAGNOSIS)\b/i.test(head)) return 'workup';
+    if (numberedAlgorithm) return 'pathway';
     if (/PRINCIPLES OF/i.test(text)) return 'principles';
-    if (/(?:^|\n)\s*(?:WORKUP|EVALUATION|DIAGNOSIS)(?:\s|$)/i.test(text)) return 'workup';
-    if (/(?:^|\n)\s*(?:(?:PRIMARY|INITIAL|SUBSEQUENT|ADJUVANT|NEOADJUVANT)\s+)?(?:TREATMENT|THERAPY|SURVEILLANCE)(?:\s|$)/i.test(text)) return 'pathway';
     return 'supporting';
   }
   function extractNextStepReferences(text, currentCode) {
@@ -432,7 +447,7 @@
           const treatmentOptions = extractTreatmentOptions(layout, types);
           if (treatmentOptions.length) treatmentPages.push({
             page: pageNumber, sectionCode: section.code, sectionPart: section.part, sectionTotal: section.total,
-            title: pageTitle(text, section), types, role: detectPageRole(text, treatmentOptions),
+            title: pageTitle(text, section), types, role: detectPageRole(text, treatmentOptions, section),
             keywords: pageKeywords(text), options: treatmentOptions,
             nextStepRefs: extractNextStepReferences(text, section.code),
           });
@@ -470,6 +485,7 @@
   }
   window.NCCN_PARSER = {
     schemaVersion: SCHEMA_VERSION,
+    KEYWORD_VOCABULARY,
     isNccnDocument,
     normalizeText,
     detectVersion,
