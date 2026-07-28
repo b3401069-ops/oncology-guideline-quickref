@@ -204,7 +204,9 @@
   const DRUG_MARKER_REQUIREMENTS = [
     [/trastuzumab|pertuzumab|deruxtecan|emtansine|lapatinib|tucatinib|neratinib|margetuximab|zanidatamab/i, 'her2'],
     [/osimertinib|erlotinib|gefitinib|afatinib|dacomitinib|mobocertinib|amivantamab|lazertinib/i, 'egfr'],
-    [/alectinib|brigatinib|ceritinib|lorlatinib|ensartinib/i, 'alk'],
+    [/alectinib|brigatinib|ceritinib|lorlatinib|ensartinib|crizotinib/i, 'alk'],
+    // crizotinib 與 entrectinib 同時用於 ALK 與 ROS1，兩邊都列
+    [/crizotinib|entrectinib|repotrectinib|taletrectinib|lorlatinib/i, 'ros1'],
     [/olaparib|niraparib|rucaparib|talazoparib/i, 'brca'],
     [/vemurafenib|dabrafenib|encorafenib|tovorafenib/i, 'braf'],
     [/sotorasib|adagrasib/i, 'kras'],
@@ -224,6 +226,18 @@
 
   function drugRequiresMarker(text, markerKey) {
     return DRUG_MARKER_REQUIREMENTS.some(([pattern, key]) => key === markerKey && pattern.test(text));
+  }
+
+  // 驅動基因變異臨床上幾乎互斥（一位病人不會同時是 EGFR 與 ALK 陽性）。
+  // 處方附錄整頁列出各驅動基因的療程，若不排除，ALK 陽性的病人會看到
+  // EGFR 標題底下的處方。
+  const EXCLUSIVE_DRIVERS = ['egfr', 'alk', 'ros1', 'braf', 'ret', 'met', 'kras', 'ntrk', 'nrg1'];
+  function conflictingDriver(text, positiveDriverKey) {
+    for (const key of EXCLUSIVE_DRIVERS) {
+      if (key === positiveDriverKey) continue;
+      if (featurePolarityInText(key, text) === 'positive') return key;
+    }
+    return '';
   }
 
   function optionAssessment(option, features) {
@@ -248,6 +262,12 @@
         } else if (feature.polarity === 'positive') {
           score += 2;
         }
+        continue;
+      }
+      // 病人已有某個驅動基因陽性，此選項卻掛在另一個驅動基因底下 → 不適用
+      if (feature.polarity === 'positive' && EXCLUSIVE_DRIVERS.includes(feature.key)) {
+        const other = conflictingDriver(text, feature.key);
+        if (other) conflicts.push(feature.label + '陽性，但此項屬於 ' + other.toUpperCase() + ' 的治療情境');
       }
     }
     // 療程需要某標記，但病患資料完全沒有該標記 → 需人工核對，不阻擋也不加分
@@ -285,6 +305,15 @@
   // 條件命中數相同時，列出具名藥物的頁面比只提到情境的頁面更可用。
   // 上限刻意壓低，避免蓋過條件比對本身。
   const NAMED_DRUG = /(?:mab|nib|zomib|fusp|parib|ciclib|toclax|limus|reotide|platin|taxel|mycin|rubicin|citabine|trexate|zolomide|toposide|otecan|lutamide|cycline|asone|mustine|phalan|cristine|blastine|vedotin|deruxtecan)\b/i;
+  const isMarkerFeature = (key) => MARKERS.some(([markerKey]) => markerKey === key);
+  // 該頁是否有「選項本身或其情境」提到此標記，或有以該標記為前提的藥物
+  function pageHasOptionEvidence(page, feature) {
+    return (page.options || []).some(option => {
+      const text = optionText(option);
+      return featurePolarityInText(feature.key, text) === 'positive' || drugRequiresMarker(text, feature.key);
+    });
+  }
+
   function namedDrugBonus(page) {
     const count = (page.options || []).filter(option =>
       typeof option !== 'string' && NAMED_DRUG.test(String(option.label || ''))).length;
@@ -383,10 +412,20 @@
     const matches = [];
     for (const doc of documents || []) {
       for (const page of doc.nccnStructure?.treatmentPages || []) {
-        const reasons = positive.filter(feature => featureMatchesPage(doc, page, feature)).map(feature => feature.key);
+        const matched = positive.filter(feature => featureMatchesPage(doc, page, feature));
+        const reasons = matched.map(feature => feature.key);
         if (!reasons.length) continue;
         const modality = pageModality(page);
-        const score = reasons.length * 4 + pageRoleScore(page.role) + namedDrugBonus(page);
+        // 生物標記若只出現在頁面關鍵字、卻沒有任何選項或其情境提到它，
+        // 代表這頁只是「順帶提及」（例如整頁列出各驅動基因處方的附錄），
+        // 證據力遠低於真正針對該標記的頁面。
+        // 病人明確給了驅動基因時，能對上該標記的頁面應勝過只符合
+        // 「轉移＋第一線」這類通用情境的頁面。
+        const evidenceScore = matched.reduce((sum, feature) => {
+          if (!isMarkerFeature(feature.key)) return sum + 4;
+          return sum + (pageHasOptionEvidence(page, feature) ? 9 : 1);
+        }, 0);
+        const score = evidenceScore + pageRoleScore(page.role) + namedDrugBonus(page);
         matches.push({ doc, page, score, reasons, features, modality });
       }
     }

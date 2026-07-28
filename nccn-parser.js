@@ -160,6 +160,26 @@
   function rowSegments(row) {
     return rowText(row).split('\n').map(part => part.trim()).filter(Boolean);
   }
+  // 保留每個欄位分段的起始座標，供「這個選項屬於哪個標題底下」判斷
+  function rowColumns(row) {
+    const columns = [];
+    let current = null;
+    let previousEnd = null;
+    for (const item of row.items) {
+      const text = String(item.text || '').trim();
+      if (!text || isReferenceMarker(text)) continue;
+      const gap = previousEnd == null ? 0 : Number(item.x || 0) - previousEnd;
+      previousEnd = Number(item.end ?? item.x ?? 0);
+      if (!current || gap >= COLUMN_GAP) {
+        current = { x: Number(item.x || 0), end: previousEnd, text };
+        columns.push(current);
+      } else {
+        current.text += (/^[,.;:)\]\/]/.test(text) || /[-\/]$/.test(current.text) ? '' : ' ') + text;
+        current.end = previousEnd;
+      }
+    }
+    return columns.map(column => ({ ...column, text: normalizeText(column.text) }));
+  }
   // 只取目前欄的內容。cleanLine 會把換行收合成空白，
   // 若直接丟進去會把相鄰欄的文字又接回同一句。
   function firstColumn(value) {
@@ -322,12 +342,40 @@
     }
     return options;
   }
+  // 處方附錄頁（NSCL-J 之類）的選項是純項目符號清單，沒有推薦欄標題，
+  // 但上方會有「EGFR Exon 19 Deletion … First-Line Therapy」這種情境標題。
+  // 不綁定的話，整頁的處方都會被視為適用於頁面上出現過的任一標記。
+  const CONTEXT_HEADING = /\b(?:EGFR|ALK|ROS1|BRAF|RET|MET|KRAS|NTRK|NRG1|HER2|PD-L1|MSI|dMMR|TMB|exon|mutation|rearrangement|fusion|positive|negative|first-line|second-line|subsequent|maintenance|adjuvant|neoadjuvant|metastatic|unresectable|recurrent|stage)\b/i;
+  const DRUG_TOKEN = /(?:mab|nib|zomib|fusp|parib|ciclib|toclax|limus|reotide|platin|taxel|mycin|rubicin|citabine|trexate|zolomide|toposide|otecan|lutamide|cycline|asone|mustine|phalan|cristine|blastine|vedotin|deruxtecan)\b/i;
+  // 「EGFR Exon 19 Deletion … First-Line Therapy」「PD-L1 ≥50% First-Line Therapy」
+  // 這類是情境標題，不是療程本身：帶臨床情境字樣但不含藥名。
+  function isContextHeading(text) {
+    const value = cleanLine(text);
+    if (value.length < 6 || value.length > 80) return false;
+    if (DRUG_TOKEN.test(value)) return false;
+    if (BOILERPLATE.test(value) || CITATION_LINE.test(value)) return false;
+    return CONTEXT_HEADING.test(value);
+  }
+  // 以 x 座標分欄記錄目前生效的情境標題
+  const columnBucket = (x) => Math.round(Number(x || 0) / 40);
+
   function fallbackBulletOptions(rows, pageTypes = []) {
     const options = [];
     const bulletXs = [...new Set(rows.flatMap(row => row.items.filter(item => BULLET.test(item.text)).map(item => Math.round(item.x))))].sort((a, b) => a - b);
+    // 依閱讀順序累積情境標題。標題有時置中跨越整張表（PD-L1 ≥50% FIRST-LINE
+    // THERAPY），有時對齊單一欄，因此同時保留頁面層級與欄位層級兩種。
+    const contextByColumn = new Map();
+    let pageContext = '';
     let group = '';
     for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
       const row = rows[rowIndex];
+      // 沒有項目符號、且看起來是情境標題的分段，更新該欄的情境
+      for (const column of rowColumns(row)) {
+        if (BULLET.test(column.text) || !isContextHeading(column.text)) continue;
+        const heading = cleanLine(column.text);
+        contextByColumn.set(columnBucket(column.x), heading);
+        pageContext = heading;
+      }
       const items = row.items.filter(item => !isReferenceMarker(item.text));
       for (let itemIndex = 0; itemIndex < items.length; itemIndex++) {
         const item = items[itemIndex];
@@ -361,8 +409,17 @@
           group = cleaned.replace(/:$/, '');
           continue;
         }
+        // 標題本身不是療程；記錄為情境後跳過
+        if (isContextHeading(cleaned)) {
+          contextByColumn.set(columnBucket(item.x), cleaned);
+          pageContext = cleaned;
+          continue;
+        }
+        const bucket = columnBucket(item.x);
+        const context = contextByColumn.get(bucket)
+          ?? contextByColumn.get(bucket - 1) ?? contextByColumn.get(bucket + 1) ?? pageContext;
         const option = normalizeTreatmentOption(cleaned, {
-          id: 'review', label: 'Needs source review', context: '', group, pageTypes,
+          id: 'review', label: 'Needs source review', context, group, pageTypes,
         });
         if (option) options.push(option);
         if (options.length >= 40) break;
@@ -396,11 +453,27 @@
     }
     return options;
   }
+  // 表格上方（常置中）的情境標題，供推薦表路徑補上 context
+  function headingAbove(rows, y) {
+    let best = null;
+    for (const row of rows) {
+      if (row.y <= y) continue;
+      for (const column of rowColumns(row)) {
+        if (BULLET.test(column.text) || !isContextHeading(column.text)) continue;
+        if (!best || row.y - y < best.distance) best = { distance: row.y - y, text: cleanLine(column.text) };
+      }
+    }
+    return best?.text || '';
+  }
   function extractTreatmentOptions(layout, pageTypes = []) {
     const options = [];
     for (let index = 0; index < layout.rows.length; index++) {
       const headers = recommendationHeaders(layout.rows[index]);
-      if (headers.length >= 2) options.push(...parseRecommendationTable(layout.rows, index, headers.map(header => ({ ...header, pageTypes }))));
+      if (headers.length < 2) continue;
+      const fallbackContext = headingAbove(layout.rows, layout.rows[index].y);
+      const tableOptions = parseRecommendationTable(layout.rows, index, headers.map(header => ({ ...header, pageTypes })));
+      for (const option of tableOptions) if (!option.context) option.context = fallbackContext;
+      options.push(...tableOptions);
     }
     options.push(...fallbackBulletOptions(layout.rows, pageTypes));
     if (!options.length) options.push(...fallbackSignalOptions(layout.rows, pageTypes));

@@ -116,3 +116,11 @@ test('單一藥品條目的商品名也要成為別名', () => {
   assert.ok(entry.aliases.includes('Carboplatin'));
   assert.ok(entry.aliases.includes('Paraplatin'));
 });
+
+test('條文過長時要標示截斷，不可靜默丟棄', () => {
+  const long = Array.from({ length: 900 }, (_, i) => (i + 1) + '. 限用於乳癌病人之治療，需經事前審查核准後使用。').join('\n');
+  const pages = [{ pageNumber: 1, text: '9.99.測試藥品\n' + long }];
+  const entry = parser.parsePages(pages, cards).entries[0];
+  assert.ok(entry.content.length > 14000 - 1);
+  assert.match(entry.content, /條文過長已截斷/);
+});

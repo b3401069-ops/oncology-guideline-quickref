@@ -542,6 +542,35 @@
     };
 
     // 健保署藥品給付規定官方頁面（腫瘤科查第9節 抗癌瘤藥物）
+    // App 內有數組互相涵蓋的癌別卡（NCCN 合併指引 vs 細分部位）。
+    // 指引 PDF 與健保註記可能只掛在其中一張卡上，查另一張時會顯示「尚未匯入」，
+    // 因此查詢時要沿著涵蓋關係一起聚合。
+    const CARD_COVERAGE = {
+      mesothelioma: ['pleural_mesothelioma', 'peritoneal_mesothelioma'],
+      colorectal_cancer: ['colon_cancer', 'rectal_cancer'],
+      lymphoma: ['b_cell_lymphomas', 't_cell_lymphomas', 'hodgkin_lymphoma', 'cutaneous_lymphomas'],
+      head_neck_cancers: ['oral_cavity_cancer', 'oropharyngeal_cancer', 'hypopharyngeal_cancer',
+        'laryngeal_cancer', 'nasopharyngeal_cancer', 'salivary_gland_cancer'],
+      cns_cancers: ['brain_tumor', 'spinal_cord_tumor', 'brain_metastasis'],
+      hepatobiliary_cancers: ['hepatocellular_carcinoma', 'biliary_tract_cancer'],
+      neuroendocrine_adrenal_tumors: ['neuroendocrine_tumor', 'adrenal_tumor'],
+      bone_cancer: ['osteosarcoma', 'ewing_sarcoma'],
+      non_melanoma_skin_cancer: ['basal_cell_skin_cancer', 'squamous_cell_skin_cancer'],
+      ovarian_fallopian_peritoneal_cancers: ['ovarian_cancer', 'fallopian_tube_cancer', 'primary_peritoneal_cancer'],
+      uterine_neoplasms: ['endometrial_cancer'],
+    };
+    const CARD_COVERED_BY = (() => {
+      const map = {};
+      for (const [parent, children] of Object.entries(CARD_COVERAGE)) {
+        for (const child of children) (map[child] ||= []).push(parent);
+      }
+      return map;
+    })();
+    // 本卡片 + 它涵蓋的卡片 + 涵蓋它的卡片
+    const relatedCancerIds = (cancerId) => [...new Set([
+      cancerId, ...(CARD_COVERAGE[cancerId] || []), ...(CARD_COVERED_BY[cancerId] || []),
+    ])];
+
     const NHI_DRUG_URL = 'https://www.nhi.gov.tw/ch/np-2505-1.html';
     const NHI_FULL_DOWNLOAD_URL = 'https://www.nhi.gov.tw/ch/np-2508-1.html';
     const NHI_CHAPTER_DOWNLOAD_URL = 'https://www.nhi.gov.tw/ch/np-3397-1.html';
@@ -1892,12 +1921,13 @@
       if (!card) { navigate('/'); return; }
 
       const docs = await dbGetAll('documents');
-      const myDocs = docs.filter(d => d.cancerIds?.includes(card.id));
+      const relatedIds = relatedCancerIds(card.id);
+      const myDocs = docs.filter(d => d.cancerIds?.some(id => relatedIds.includes(id)));
       const currentDocs = myDocs.filter(d => d.current && !d.archived);
       const archivedDocs = myDocs.filter(d => d.archived);
 
       const checklists = (await dbGetAll('checklists')).filter(c => c.cancerId === card.id);
-      const nhiNotes = nhiNotesForCancer(await dbGetAll('nhiNotes'), card.id);
+      const nhiNotes = nhiNotesForCancer(await dbGetAll('nhiNotes'), card.id, relatedIds);
       const precisionFields = await getCasePrecisionFields(card.id);
       const jumpDoc = currentDocs.find(d => d.storageKey);
       const pfMap = buildPfMap(precisionFields);
@@ -2055,10 +2085,11 @@
       if (!card) { navigate('/'); return; }
 
       const docs = await dbGetAll('documents');
-      const currentDocs = docs.filter(d => d.cancerIds?.includes(card.id) && d.current && !d.archived);
+      const relatedIds = relatedCancerIds(card.id);
+      const currentDocs = docs.filter(d => d.cancerIds?.some(id => relatedIds.includes(id)) && d.current && !d.archived);
       const checklists = (await dbGetAll('checklists')).filter(c => c.cancerId === card.id);
       const precisionFields = await getCasePrecisionFields(card.id);
-      const nhiNotes = nhiNotesForCancer(await dbGetAll('nhiNotes'), card.id);
+      const nhiNotes = nhiNotesForCancer(await dbGetAll('nhiNotes'), card.id, relatedIds);
 
       const hasDocs = currentDocs.length > 0;
       const jumpDoc = currentDocs.find(d => d.storageKey);
@@ -2792,7 +2823,8 @@
     async function renderNhi(app) {
       const card = await dbGet('cancerCards', routeParams.cancerId);
       if (!card) { navigate('/'); return; }
-      const allItems = (await dbGetAll('nhiNotes')).filter(n => n.cancerId === card.id);
+      const relatedIds = relatedCancerIds(card.id);
+      const allItems = (await dbGetAll('nhiNotes')).filter(n => relatedIds.includes(n.cancerId));
       const items = allItems.filter(note => window.NHI_VERSIONING.isActive(note));
       const archivedItems = allItems.filter(note => !window.NHI_VERSIONING.isActive(note));
       const allDocs = await dbGetAll('documents');
@@ -4160,11 +4192,24 @@
     window._setPfValue = async (id, value, el) => {
       const anchorId = 'precision-field-' + id;
       const anchorTop = el?.closest('.form-group')?.getBoundingClientRect().top;
+      // 重繪會換掉整棵 DOM；手機上焦點一掉鍵盤就收起來，
+      // 連續填好幾個自由欄位時每次都要重新點。重繪後把焦點與游標放回原欄位。
+      const wasFocused = !!el && document.activeElement === el;
+      const caret = wasFocused && typeof el.selectionEnd === 'number' ? el.selectionEnd : null;
       const f = await dbGet('precisionFields', id);
       if (f) {
         window.CASE_STATE.setValue(f.cancerId, id, value);
         clearNhiQueryState(f.cancerId);
         await handleRoute({ preserveScroll: true, anchorId, anchorTop });
+        if (wasFocused) {
+          const next = document.getElementById(anchorId)?.querySelector('input, select, textarea');
+          if (next) {
+            next.focus({ preventScroll: true });
+            if (caret != null && typeof next.setSelectionRange === 'function') {
+              try { next.setSelectionRange(caret, caret); } catch {}
+            }
+          }
+        }
       }
     };
     // 精準欄位多選：以選項 index 切換，避免特殊字元進到 onclick

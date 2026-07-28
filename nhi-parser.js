@@ -230,6 +230,7 @@
     return [...names];
   }
 
+  const CONTENT_LIMIT = 14000;
   function formatRestrictions(lines) {
     const cleaned = lines
       .map(line => normalizeText(line).trim())
@@ -240,7 +241,11 @@
       if (!groups.length || startsItem) groups.push(line);
       else groups[groups.length - 1] += (/[a-z0-9)]$/i.test(groups[groups.length - 1]) && /^[a-z0-9(]/i.test(line) ? ' ' : '') + line;
     }
-    return groups.join('\n').slice(0, 14000).trim();
+    const joined = groups.join('\n').trim();
+    // 少數藥品（免疫治療等）的限制條件很長，尾端常是事前審查與線數限制。
+    // 靜默截斷會讓使用者誤以為看到的是完整條文，因此明確標示並提示看原文。
+    if (joined.length <= CONTENT_LIMIT) return joined;
+    return joined.slice(0, CONTENT_LIMIT).trim() + '\n⚠ 條文過長已截斷，後續內容請開啟原始 PDF 核對。';
   }
 
   function conditionHints(text) {

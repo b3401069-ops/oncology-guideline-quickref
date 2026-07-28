@@ -19,8 +19,11 @@
     none: '尚未找到同名健保資料',
   };
 
-  function notesForCancer(notes, cancerId) {
-    const accepted = new Set([cancerId, ...(RELATED_CARD_IDS[cancerId] || [])]);
+  // relatedIds 由呼叫端提供（癌別卡涵蓋關係），未提供時退回內建對照
+  function notesForCancer(notes, cancerId, relatedIds) {
+    const accepted = new Set(relatedIds?.length
+      ? relatedIds
+      : [cancerId, ...(RELATED_CARD_IDS[cancerId] || [])]);
     return (notes || []).filter(note => accepted.has(note.cancerId) && (window.NHI_VERSIONING?.isActive(note) ?? (note.archived !== true && note.current !== false)));
   }
 

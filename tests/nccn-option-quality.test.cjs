@@ -72,3 +72,49 @@ test('條件命中數相同時，列出具名藥物的頁面優先', () => {
   ]);
   assert.equal(matches[0].page.sectionCode, 'NSCL-21');
 });
+
+test('處方附錄的選項要綁定其上方的情境標題', () => {
+  // NSCL-J 版面：置中標題 + 底下的項目符號清單
+  const rows = [
+    row(490, [frag(283, 'PD-L1 ≥50% FIRST-LINE THERAPY (PS 0–2)', 200)]),
+    row(446, [frag(28, '• Pembrolizumab followed by maintenance Pembrolizumab (category 1)', 300)]),
+    row(434, [frag(28, '• Atezolizumab followed by maintenance Atezolizumab (category 1)', 300)]),
+  ];
+  const options = parser.extractTreatmentOptions(layout(rows), ['systemic']);
+  assert.ok(options.length >= 1, '應擷取到療程');
+  for (const option of options) {
+    assert.match(option.context, /PD-L1/, option.label + ' 未綁定情境');
+  }
+  // 標題本身不得成為療程
+  assert.ok(!options.some(item => /FIRST-LINE THERAPY \(PS/.test(item.label)));
+});
+
+test('驅動基因互斥：ALK 陽性不得看到 EGFR 情境下的處方', () => {
+  const alkPositive = matcher.extractClinicalFeatures([
+    { label: 'NSCLC 驅動基因／可標靶變異', value: 'ALK fusion' },
+  ]);
+  const egfrOption = { label: 'Osimertinib (category 1)', context: 'EGFR Exon 19 Deletion First-Line Therapy', modality: 'systemic' };
+  assert.equal(matcher.optionAssessment(egfrOption, alkPositive).blocked, true);
+  // 同情境的 ALK 處方不受影響
+  const alkOption = { label: 'Alectinib (category 1)', context: 'ALK Rearrangement First-Line Therapy', modality: 'systemic' };
+  assert.equal(matcher.optionAssessment(alkOption, alkPositive).blocked, false);
+});
+
+test('標記只出現在頁面關鍵字、無選項佐證時證據力較弱', () => {
+  const pages = [
+    // 附錄頁：關鍵字有 ALK，但選項全是免疫治療
+    { page: 100, sectionCode: 'NSCL-J', role: 'recommendation', types: ['systemic'],
+      keywords: ['metastatic', 'first-line', 'alk'],
+      options: [{ label: 'Pembrolizumab', modality: 'systemic' }, { label: 'Atezolizumab', modality: 'systemic' }] },
+    // ALK 專屬頁：選項就是 ALK 抑制劑
+    { page: 54, sectionCode: 'NSCL-28', role: 'pathway', types: ['systemic'],
+      keywords: ['metastatic', 'alk'],
+      options: [{ label: 'Alectinib', modality: 'systemic' }, { label: 'Brigatinib', modality: 'systemic' }] },
+  ];
+  const matches = matcher.matchTreatmentPages([{ nccnStructure: { treatmentPages: pages } }], [
+    { label: '病程情境', value: '轉移／全身性' },
+    { label: '治療階段／線別', value: '第一線' },
+    { label: 'NSCLC 驅動基因／可標靶變異', value: 'ALK fusion' },
+  ]);
+  assert.equal(matches[0].page.sectionCode, 'NSCL-28');
+});
