@@ -92,10 +92,6 @@ async function main() {
   const files = fs.readdirSync(pdfRoot).filter(file => /\.pdf$/i.test(file)).sort();
   assert.ok(files.length >= 60, `Expected the full NCCN set, found ${files.length} PDFs`);
   const missingGuidelines = missingCatalogGuidelines(files);
-  assert.deepEqual(missingGuidelines, [], [
-    `The NCCN folder has ${files.length} PDFs but is missing ${missingGuidelines.length} expected guideline families:`,
-    ...missingGuidelines.map(title => `- ${title}`),
-  ].join('\n'));
   const anomalies = [];
 
   for (let index = 0; index < files.length; index++) {
@@ -124,7 +120,11 @@ async function main() {
   }
 
   assert.deepEqual(anomalies, [], JSON.stringify(anomalies, null, 2));
-  console.log(`All ${files.length} NCCN PDFs passed structural and treatment-exposure checks.`);
+  assert.deepEqual(missingGuidelines, [], [
+    `The ${files.length} existing NCCN PDFs passed parser checks, but the folder is missing ${missingGuidelines.length} of 69 expected guideline families:`,
+    ...missingGuidelines.map(title => `- ${title}`),
+  ].join('\n'));
+  console.log(`All ${files.length} NCCN PDFs passed structural, treatment-exposure and catalog-completeness checks.`);
 }
 
 main().catch(error => {

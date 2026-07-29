@@ -6,13 +6,14 @@
 
 - 量測日期：2026-07-29
 - 解析器：`nccn-parser.js` schemaVersion 7（commit 664452e）
-- 來源：`OneDrive/Neo-BOT/癌症醫院/NCCN 指引/App 專用`，66 份，119 MB
+- 來源：`OneDrive/Neo-BOT/癌症醫院/NCCN 指引/App 專用`，現有 66 份，119 MB；App 目錄預期 69 個指引家族
 
 ## 總覽
 
 | 項目 | 結果 |
 |---|---|
-| 解析成功 | **66 / 66**（失敗 0） |
+| 現有 PDF 解析成功 | **66 / 66**（失敗 0） |
+| App 目錄完整度 | **66 / 69**；缺少 3 個指引家族 |
 | 狀態 | 65 `parsed` + 1 `redirect_notice` |
 | 版本偵測 | 66 / 66 全部成功 |
 | 低文字量頁面 | 0（無掃描檔／圖片式 PDF） |
@@ -24,6 +25,8 @@
 | 總耗時 | 102 秒（平均每份 1.5 秒） |
 
 頁面角色分佈：pathway 829、principles 637、recommendation 102、workup 64、supporting 28。
+
+目前資料夾缺少 **Acute Myeloid Leukemia、Head and Neck Cancers、Thyroid Carcinoma**。因此 66/66 只表示現有 PDF 都能被解析，不表示 App 目錄已完整覆蓋。
 
 `Hepatobiliary Cancers.pdf` 只有 1 頁且狀態為 `redirect_notice`，因為該指引已拆分為 Hepatocellular Carcinoma 與 Biliary Tract Cancers——解析器正確辨識並提示，屬預期行為。
 
@@ -137,6 +140,8 @@ Basal Cell Skin Cancer（3%）、Wilms Tumor（6%）、Pediatric Soft Tissue Sar
 ```bash
 npm run audit:nccn-all
 ```
+
+此命令會先跑完現有 PDF 的結構與療程曝光檢查，再檢查 69 個預期指引家族是否齊全；缺少任何家族時會以失敗結束並列出名稱。
 
 **沒有 Node 的機器**：用瀏覽器跑。先把 PDF 複製到 repo 下的 `_local-pdfs/`（已 gitignore，屬版權素材，用完請刪除），啟動靜態伺服器後在主控台載入 `NCCN_PARSER.extractAndParse()` 逐份解析並彙總。注意 Service Worker 對模組採 cache-first，改過解析器要先 `caches.delete()` 再重載。
 

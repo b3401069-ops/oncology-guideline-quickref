@@ -4,7 +4,7 @@
   // 「未知」必須涵蓋所有「還沒測／測不出來」的說法，否則會掉進陽性預設。
   const UNKNOWN = /待檢|待確認|待測|未評估|未做|未檢測|未測|未檢驗|未送檢|無法判讀|不可評估|無法評估|檢測失敗|檢體不足|不適用|unknown|pending|not assessed|not evaluable|indeterminate|inconclusive|QNS/i;
   // 「陰性」需涵蓋 IHC 0（無加號）、無致病變異等寫法。
-  const NEGATIVE = /陰性|未檢出|未發現|無已知|無相關|無致病|無突變|無變異|無擴增|無融合|無重排|wild\s*-?type|negative|not detected|no (?:known|detectable)|absent|pMMR|MSS|MMR\s*(?:proficient|intact)|IHC\s*[01](?:\+|\b)|ISH\s*陰性|低表現|未表現/i;
+  const NEGATIVE = /陰性|未檢出|未發現|無已知|無相關|無致病|無突變|無變異|無擴增|無融合|無重排|wild\s*-?type|negative|not detected|no (?:known|detectable)|absent|pMMR|MSS|MMR\s*(?:proficient|intact)|IHC\s*0(?:\+|\b)|ISH\s*陰性|未表現/i;
   // 明確的陽性語意（含變異型態的寫法）。
   const POSITIVE = /陽性|positive|檢出|已檢出|突變|mutat|variant|pathogenic|致病|fusion|融合|rearrang|重排|translocation|amplif|擴增|過度表現|高表現|overexpress|deletion|缺失|insertion|skipping|exon\s*\d+|MSI\s*-?\s*H|dMMR|MMRd|TMB\s*-?\s*(?:H|high)|high|陽性表現|detected/i;
   const MARKERS = [
@@ -70,6 +70,14 @@
     return text.toLowerCase().includes(String(key || '').toLowerCase());
   }
 
+  function her2Polarity(text) {
+    const value = normalize(text);
+    if (/IHC\s*1\+|IHC\s*2\+\s*[／/]?\s*ISH\s*(?:陰性|negative)|HER2\s*[- ]?(?:low|ultralow)|低表現/i.test(value)) return 'low';
+    if (/IHC\s*3\+|IHC\s*2\+\s*[／/]?\s*ISH\s*(?:陽性|positive)/i.test(value)) return 'positive';
+    if (/IHC\s*0(?:\+|\b)/i.test(value)) return 'negative';
+    return null;
+  }
+
   function featurePolarityInText(key, value) {
     const text = normalize(value);
     const marker = MARKERS.find(([markerKey]) => markerKey === key);
@@ -80,6 +88,10 @@
     const local = text.slice(Math.max(0, match.index - 28), match.index + match[0].length + 40);
     if (key === 'msi-h/dmmr') {
       return /pMMR|MSS|MMR\s*(?:proficient|intact)|microsatellite stable/i.test(local) ? 'negative' : 'positive';
+    }
+    if (key === 'her2') {
+      const polarity = her2Polarity(local);
+      if (polarity) return polarity;
     }
     return NEGATIVE.test(local) || /(?:^|\s)[-−](?:\s|$)/.test(local) ? 'negative' : 'positive';
   }
@@ -108,14 +120,19 @@
 
   // 判定順序刻意由「明確否定／未知」到「明確肯定」，最後才落到 unknown。
   // 舊版預設為 positive，會把 PD-L1 0%、未檢測誤判成陽性。
-  function markerPolarity(value, field, markerPattern) {
+  function markerPolarity(value, field, markerPattern, markerKey) {
     const text = normalize(value);
     if (!text) return 'unknown';
     if (UNKNOWN.test(text)) return 'unknown';
+    if (markerKey === 'her2') {
+      const polarity = her2Polarity(text);
+      if (polarity) return polarity;
+    }
     if (NEGATIVE.test(text) || /HER2\s*[-−]/i.test(text)) return 'negative';
     const numeric = numericPolarity(text, field);
     if (numeric) return numeric;
     if (POSITIVE.test(text)) return 'positive';
+    if (markerKey === 'braf' && /V600(?:E|K)|non[- ]?V600\s+(?:alteration|mutation)/i.test(text)) return 'positive';
     // 選項本身寫出標記名（'ALK fusion'、'BRAF V600E'），代表使用者勾選它為「存在」
     if (markerPattern) {
       markerPattern.lastIndex = 0;
@@ -184,7 +201,7 @@
         for (const [key, pattern] of MARKERS) {
           pattern.lastIndex = 0;
           if (!pattern.test(combined)) continue;
-          addFeature(output, key, markerPolarity(raw, field, pattern), field, value);
+          addFeature(output, key, markerPolarity(raw, field, pattern, key), field, value);
         }
         if (/MMR|MSI/i.test(label) && /pMMR|MSS/i.test(raw)) addFeature(output, 'msi-h/dmmr', 'negative', field, value);
       }
@@ -202,30 +219,44 @@
   // 僅收錄「以該標記為適應症前提」的藥物；免疫檢查點抑制劑不列入
   // （多數適應症不以 PD-L1 陽性為必要條件，列入會造成過度阻擋）。
   const DRUG_MARKER_REQUIREMENTS = [
-    [/trastuzumab|pertuzumab|deruxtecan|emtansine|lapatinib|tucatinib|neratinib|margetuximab|zanidatamab/i, 'her2'],
-    [/osimertinib|erlotinib|gefitinib|afatinib|dacomitinib|mobocertinib|amivantamab|lazertinib/i, 'egfr'],
-    [/alectinib|brigatinib|ceritinib|lorlatinib|ensartinib|crizotinib/i, 'alk'],
-    // crizotinib 與 entrectinib 同時用於 ALK 與 ROS1，兩邊都列
-    [/crizotinib|entrectinib|repotrectinib|taletrectinib|lorlatinib/i, 'ros1'],
-    [/olaparib|niraparib|rucaparib|talazoparib/i, 'brca'],
-    [/vemurafenib|dabrafenib|encorafenib|tovorafenib/i, 'braf'],
-    [/sotorasib|adagrasib/i, 'kras'],
-    [/larotrectinib|entrectinib|repotrectinib/i, 'ntrk'],
-    [/selpercatinib|pralsetinib/i, 'ret'],
-    [/capmatinib|tepotinib/i, 'met'],
-    [/pemigatinib|infigratinib|futibatinib|erdafitinib/i, 'fgfr'],
-    [/ivosidenib|enasidenib|olutasidenib|vorasidenib/i, 'idh'],
-    [/imatinib|avapritinib|ripretinib/i, 'kit'],
-    [/mirvetuximab/i, 'folr1'],
-    [/zolbetuximab/i, 'cldn18.2'],
-    [/elacestrant/i, 'esr1'],
-    [/alpelisib|capivasertib|inavolisib/i, 'pik3ca'],
-    [/midostaurin|gilteritinib|quizartinib/i, 'flt3'],
-    [/lutetium|lu\s*-?\s*177|177lu/i, 'psma'],
+    { pattern: /deruxtecan/i, anyOf: ['her2'], acceptedPolarities: ['positive', 'low'] },
+    { pattern: /trastuzumab|pertuzumab|emtansine|lapatinib|tucatinib|neratinib|margetuximab|zanidatamab/i, anyOf: ['her2'] },
+    { pattern: /osimertinib|erlotinib|gefitinib|afatinib|dacomitinib|mobocertinib|amivantamab|lazertinib/i, anyOf: ['egfr'] },
+    { pattern: /lorlatinib/i, anyOf: ['alk'] },
+    { pattern: /alectinib|brigatinib|ceritinib|ensartinib/i, anyOf: ['alk'] },
+    { pattern: /crizotinib/i, anyOf: ['alk', 'ros1'] },
+    { pattern: /entrectinib|repotrectinib/i, anyOf: ['ros1', 'ntrk'] },
+    { pattern: /taletrectinib/i, anyOf: ['ros1'] },
+    { pattern: /larotrectinib/i, anyOf: ['ntrk'] },
+    { pattern: /olaparib|niraparib|rucaparib|talazoparib/i, anyOf: ['brca'] },
+    { pattern: /vemurafenib|dabrafenib|encorafenib|tovorafenib/i, anyOf: ['braf'] },
+    { pattern: /sotorasib|adagrasib/i, anyOf: ['kras'] },
+    { pattern: /selpercatinib|pralsetinib/i, anyOf: ['ret'] },
+    { pattern: /capmatinib|tepotinib/i, anyOf: ['met'] },
+    { pattern: /pemigatinib|infigratinib|futibatinib|erdafitinib/i, anyOf: ['fgfr'] },
+    { pattern: /ivosidenib|enasidenib|olutasidenib|vorasidenib/i, anyOf: ['idh'] },
+    { pattern: /imatinib|avapritinib|ripretinib/i, anyOf: ['kit'] },
+    { pattern: /mirvetuximab/i, anyOf: ['folr1'] },
+    { pattern: /zolbetuximab/i, anyOf: ['cldn18.2'] },
+    { pattern: /elacestrant/i, anyOf: ['esr1'] },
+    { pattern: /capivasertib/i, anyOf: ['pik3ca', 'akt1', 'pten'] },
+    { pattern: /alpelisib|inavolisib/i, anyOf: ['pik3ca'] },
+    { pattern: /midostaurin|gilteritinib|quizartinib/i, anyOf: ['flt3'] },
+    { pattern: /dotatate|lutathera/i, anyOf: ['sstr'] },
+    { pattern: /vipivotide|pluvicto|PSMA.{0,30}(?:177|lutetium)|(?:177|lutetium).{0,30}PSMA/i, anyOf: ['psma'] },
+    { pattern: /lutetium|lu\s*-?\s*177|177lu/i, anyOf: ['sstr', 'psma'] },
   ];
 
+  function drugRequirementFor(text) {
+    return DRUG_MARKER_REQUIREMENTS.find(rule => rule.pattern.test(text)) || null;
+  }
+
   function drugRequiresMarker(text, markerKey) {
-    return DRUG_MARKER_REQUIREMENTS.some(([pattern, key]) => key === markerKey && pattern.test(text));
+    return drugRequirementFor(text)?.anyOf.includes(markerKey) || false;
+  }
+
+  function requirementLabel(rule) {
+    return rule.anyOf.map(key => FEATURE_LABELS[key] || key.toUpperCase()).join('／');
   }
 
   // 驅動基因變異臨床上幾乎互斥（一位病人不會同時是 EGFR 與 ALK 陽性）。
@@ -245,23 +276,13 @@
     let score = 0;
     const conflicts = [];
     const reviewNotes = [];
-    const seenMarkers = new Set();
+    const requirement = drugRequirementFor(text);
+
     for (const feature of features || []) {
       const optionPolarity = featurePolarityInText(feature.key, text);
       if (optionPolarity) {
         if (feature.polarity !== optionPolarity) conflicts.push(feature.label + '條件方向不符');
         else score += 2;
-        seenMarkers.add(feature.key);
-        continue;
-      }
-      // 選項文字沒寫出標記，改查藥物→標記依賴表
-      if (drugRequiresMarker(text, feature.key)) {
-        seenMarkers.add(feature.key);
-        if (feature.polarity === 'negative') {
-          conflicts.push(feature.label + '為陰性，但此療程以該標記陽性為適應症前提');
-        } else if (feature.polarity === 'positive') {
-          score += 2;
-        }
         continue;
       }
       // 病人已有某個驅動基因陽性，此選項卻掛在另一個驅動基因底下 → 不適用
@@ -270,12 +291,23 @@
         if (other) conflicts.push(feature.label + '陽性，但此項屬於 ' + other.toUpperCase() + ' 的治療情境');
       }
     }
-    // 療程需要某標記，但病患資料完全沒有該標記 → 需人工核對，不阻擋也不加分
-    for (const [pattern, key] of DRUG_MARKER_REQUIREMENTS) {
-      if (seenMarkers.has(key) || !pattern.test(text)) continue;
-      if ((features || []).some(item => item.key === key)) continue;
-      reviewNotes.push('此療程以 ' + key.toUpperCase() + ' 為適應症前提，尚未輸入該標記結果');
-      seenMarkers.add(key);
+
+    if (requirement) {
+      const accepted = requirement.acceptedPolarities || ['positive'];
+      const relevant = (features || []).filter(feature => requirement.anyOf.includes(feature.key));
+      const satisfied = relevant.some(feature => accepted.includes(feature.polarity));
+      if (satisfied) {
+        score += 2;
+      } else if (relevant.length) {
+        const allAlternativesKnown = requirement.anyOf.every(key => relevant.some(feature => feature.key === key));
+        if (requirement.anyOf.length === 1 || allAlternativesKnown) {
+          conflicts.push(requirementLabel(requirement) + '條件不符，但此療程以其中一項符合為適應症前提');
+        } else {
+          reviewNotes.push('此療程需符合 ' + requirementLabel(requirement) + ' 其中一項；目前資料僅排除部分標記');
+        }
+      } else {
+        reviewNotes.push('此療程需符合 ' + requirementLabel(requirement) + ' 其中一項，尚未輸入相關標記結果');
+      }
     }
     return { score, conflicts, reviewNotes, blocked: conflicts.length > 0 };
   }
@@ -306,11 +338,12 @@
   // 上限刻意壓低，避免蓋過條件比對本身。
   const NAMED_DRUG = /(?:mab|nib|zomib|fusp|parib|ciclib|toclax|limus|reotide|platin|taxel|mycin|rubicin|citabine|trexate|zolomide|toposide|otecan|lutamide|cycline|asone|mustine|phalan|cristine|blastine|vedotin|deruxtecan)\b/i;
   const isMarkerFeature = (key) => MARKERS.some(([markerKey]) => markerKey === key);
+  const isActionablePolarity = (polarity) => polarity === 'positive' || polarity === 'low';
   // 該頁是否有「選項本身或其情境」提到此標記，或有以該標記為前提的藥物
   function pageHasOptionEvidence(page, feature) {
     return (page.options || []).some(option => {
       const text = optionText(option);
-      return featurePolarityInText(feature.key, text) === 'positive' || drugRequiresMarker(text, feature.key);
+      return ['positive', 'low'].includes(featurePolarityInText(feature.key, text)) || drugRequiresMarker(text, feature.key);
     });
   }
 
@@ -379,7 +412,7 @@
       (doc.nccnStructure?.treatmentPages || []).map(page => ({ doc, page }))
     );
     const features = extractClinicalFeatures(fields);
-    const allPositive = features.filter(item => item.polarity === 'positive');
+    const allPositive = features.filter(item => isActionablePolarity(item.polarity));
     const recordOnlyFeatures = allPositive.filter(item => !isRoutableFeature(item.key));
     const positiveFeatures = allPositive.filter(item => isRoutableFeature(item.key));
     const suggestedFields = (fields || []).filter(field => !hasValue(field.value))
@@ -407,7 +440,7 @@
 
   function matchTreatmentPages(documents, fields, limit = 12) {
     const features = extractClinicalFeatures(fields);
-    const positive = features.filter(item => item.polarity === 'positive');
+    const positive = features.filter(item => isActionablePolarity(item.polarity));
     if (!positive.length) return [];
     const matches = [];
     for (const doc of documents || []) {

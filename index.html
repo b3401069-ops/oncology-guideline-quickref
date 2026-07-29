@@ -807,10 +807,16 @@
       review: { label: '需開原頁核對', color: '#4b5563', background: '#f3f4f6' },
     };
     const nccnOptionAssessment = (option, features) => window.CLINICAL_MATCHER.optionAssessment(option, features);
+    const safePdfPage = (value) => {
+      const pageNumber = Number(value);
+      return Number.isSafeInteger(pageNumber) && pageNumber >= 1 && pageNumber <= 20000 ? pageNumber : 1;
+    };
     const renderNccnTreatmentOption = (option, doc, page, assessment) => {
-      const openAttrs = doc.storageKey ? `role="button" tabindex="0" onclick="openPdf('${jsStr(doc.storageKey)}', ${page.page})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openPdf('${doc.storageKey}', ${page.page})}"` : '';
+      const pdfPage = safePdfPage(page?.page);
+      const storageKey = jsStr(doc.storageKey);
+      const openAttrs = doc.storageKey ? `role="button" tabindex="0" onclick="openPdf('${storageKey}', ${pdfPage})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openPdf('${storageKey}', ${pdfPage})}"` : '';
       const openStyle = doc.storageKey ? 'cursor:pointer;' : '';
-      if (typeof option === 'string') return `<li ${openAttrs} style="padding:9px 0;border-top:1px solid #dbeafe;list-style:none;${openStyle}"><div style="display:flex;justify-content:space-between;gap:8px"><span>${esc(option)}</span>${doc.storageKey ? `<span class="text-xs text-blue-700" style="white-space:nowrap">PDF p.${page.page} ›</span>` : ''}</div></li>`;
+      if (typeof option === 'string') return `<li ${openAttrs} style="padding:9px 0;border-top:1px solid #dbeafe;list-style:none;${openStyle}"><div style="display:flex;justify-content:space-between;gap:8px"><span>${esc(option)}</span>${doc.storageKey ? `<span class="text-xs text-blue-700" style="white-space:nowrap">PDF p.${pdfPage} ›</span>` : ''}</div></li>`;
       const meta = nccnRecommendationMeta[option.recommendation] || nccnRecommendationMeta.review;
       const conditions = (option.conditions || []).filter(Boolean);
       const references = (option.references || []).filter(Boolean);
@@ -825,7 +831,7 @@
             ${option.modality ? `<span class="tag">${esc(modalityLabels[option.modality] || option.modality)}</span>` : ''}
             <span class="text-sm font-semibold text-gray-900" style="overflow-wrap:anywhere">${esc(option.label)}</span>
           </div>
-          ${doc.storageKey ? `<span class="text-xs text-blue-700" style="white-space:nowrap;padding-top:3px">PDF p.${page.page} ›</span>` : ''}
+          ${doc.storageKey ? `<span class="text-xs text-blue-700" style="white-space:nowrap;padding-top:3px">PDF p.${pdfPage} ›</span>` : ''}
         </div>
         ${option.group ? `<p class="text-xs text-gray-500 mt-1">${esc(option.group)}</p>` : ''}
         ${conditions.map(condition => `<p class="text-xs mt-1" style="color:#92400e">• 適用條件：${esc(condition)}</p>`).join('')}
@@ -835,6 +841,7 @@
       </li>`;
     };
     const renderNccnTreatmentMatch = ({ doc, page, reasons, features }) => {
+      const pdfPage = safePdfPage(page?.page);
       const allOptions = page.options || [];
       const ranked = allOptions.map((option, index) => ({
         option,
@@ -852,12 +859,12 @@
       return `<div class="bg-blue-50 rounded-lg p-3">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
           <div class="min-w-0"><p class="text-sm font-semibold text-blue-900">${esc(pageLabel || page.title)}</p><p class="text-xs text-blue-700 mt-1">符合目前條件：${esc(nccnReasonText(reasons))}</p></div>
-          ${doc.storageKey ? `<button class="btn btn-ghost btn-sm" style="width:auto;white-space:nowrap" onclick="openPdf('${jsStr(doc.storageKey)}', ${page.page})">p.${page.page}</button>` : ''}
+          ${doc.storageKey ? `<button class="btn btn-ghost btn-sm" style="width:auto;white-space:nowrap" onclick="openPdf('${jsStr(doc.storageKey)}', ${pdfPage})">p.${pdfPage}</button>` : ''}
         </div>
         ${contexts.length ? `<div class="mt-3"><p class="text-xs font-medium text-gray-500">適用情境</p>${contexts.map(context => `<p class="text-sm text-gray-800 mt-1">${esc(context)}</p>`).join('')}</div>` : ''}
-        ${visible.length ? `<ul class="mt-3" style="padding:0;margin-bottom:0">${visible.map(item => renderNccnTreatmentOption(item.option, doc, page, item.assessment)).join('')}</ul>${matching.length > visible.length ? `<p class="text-xs text-gray-500 mt-2">另有 ${matching.length - visible.length} 項，請開啟原頁查看完整表格。</p>` : ''}` : doc.storageKey ? `<button class="btn btn-ghost btn-sm mt-2" style="width:100%;text-align:left" onclick="openPdf('${jsStr(doc.storageKey)}', ${page.page})">開啟 PDF p.${page.page} 核對</button>` : '<p class="text-xs text-gray-500 mt-2">此頁無法可靠拆成單一療程。</p>'}
+        ${visible.length ? `<ul class="mt-3" style="padding:0;margin-bottom:0">${visible.map(item => renderNccnTreatmentOption(item.option, doc, page, item.assessment)).join('')}</ul>${matching.length > visible.length ? `<p class="text-xs text-gray-500 mt-2">另有 ${matching.length - visible.length} 項，請開啟原頁查看完整表格。</p>` : ''}` : doc.storageKey ? `<button class="btn btn-ghost btn-sm mt-2" style="width:100%;text-align:left" onclick="openPdf('${jsStr(doc.storageKey)}', ${pdfPage})">開啟 PDF p.${pdfPage} 核對</button>` : '<p class="text-xs text-gray-500 mt-2">此頁無法可靠拆成單一療程。</p>'}
         ${blockedCount ? `<p class="text-xs mt-2" style="color:#92400e">已隱藏 ${blockedCount} 項與陰性條件衝突的候選。</p>` : ''}
-        ${nextSteps.length && doc.storageKey ? `<div class="mt-3"><p class="text-xs font-medium text-gray-500">後續／相關步驟</p><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${nextSteps.map(step => `<button class="btn btn-ghost btn-sm" style="width:auto" onclick="openPdf('${jsStr(doc.storageKey)}', ${step.page})">${esc(step.code)} · p.${step.page}</button>`).join('')}</div></div>` : ''}
+        ${nextSteps.length && doc.storageKey ? `<div class="mt-3"><p class="text-xs font-medium text-gray-500">後續／相關步驟</p><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${nextSteps.map(step => `<button class="btn btn-ghost btn-sm" style="width:auto" onclick="openPdf('${jsStr(doc.storageKey)}', ${safePdfPage(step.page)})">${esc(step.code)} · p.${safePdfPage(step.page)}</button>`).join('')}</div></div>` : ''}
       </div>`;
     };
 
@@ -1373,6 +1380,32 @@
     const SAFE_RECORD_ID = /^[A-Za-z0-9_:.-]{1,160}$/;
     const SAFE_STORAGE_KEY = /^[A-Za-z0-9_-]{1,120}$/;
 
+    function validateDocumentStructure(item) {
+      const structure = item.nccnStructure;
+      if (structure == null) return;
+      if (typeof structure !== 'object' || Array.isArray(structure)) throw new Error('備份格式錯誤：NCCN 索引不是物件');
+      for (const key of ['sections', 'treatmentPages']) {
+        const pages = structure[key];
+        if (pages == null) continue;
+        if (!Array.isArray(pages)) throw new Error('備份格式錯誤：NCCN ' + key + ' 不是陣列');
+        for (const page of pages) {
+          const pageNumber = Number(page?.page);
+          if (!Number.isSafeInteger(pageNumber) || pageNumber < 1 || pageNumber > 20000) {
+            throw new Error('備份格式錯誤：NCCN ' + key + ' 含無效頁碼');
+          }
+          if (key === 'treatmentPages' && page.nextSteps != null) {
+            if (!Array.isArray(page.nextSteps)) throw new Error('備份格式錯誤：NCCN nextSteps 不是陣列');
+            for (const step of page.nextSteps) {
+              const stepPage = Number(step?.page);
+              if (!Number.isSafeInteger(stepPage) || stepPage < 1 || stepPage > 20000) {
+                throw new Error('備份格式錯誤：NCCN nextSteps 含無效頁碼');
+              }
+            }
+          }
+        }
+      }
+    }
+
     function validateBackupStores(data) {
       for (const store of BACKUP_STORES) {
         const items = data[store] || [];
@@ -1388,6 +1421,7 @@
             (typeof item.cancerId !== 'string' || !SAFE_RECORD_ID.test(item.cancerId))) {
             throw new Error('備份格式錯誤：' + store + ' 的 cancerId 含不允許的字元，已中止匯入');
           }
+          if (store === 'documents') validateDocumentStructure(item);
         }
       }
     }
@@ -1670,7 +1704,9 @@
 
     async function handleRoute(options = {}) {
       const preserveScroll = options?.preserveScroll === true;
-      const previousScrollY = document.scrollingElement?.scrollTop ?? window.scrollY;
+      const previousScrollY = Number.isFinite(options?.restoreScrollY)
+        ? options.restoreScrollY
+        : (document.scrollingElement?.scrollTop ?? window.scrollY);
       const anchorId = options?.anchorId || '';
       const measuredAnchorTop = document.getElementById(anchorId)?.getBoundingClientRect().top;
       const anchorTop = Number.isFinite(options?.anchorTop) ? options.anchorTop : measuredAnchorTop;
@@ -3138,8 +3174,7 @@
       const pageInput = document.getElementById('pdfv-page');
 
       document.getElementById('pdfv-back').addEventListener('click', () => {
-        if (history.length > 1) history.back();
-        else navigate(meta ? '/pdf-library' : '/');
+        if (!restorePdfReturnState()) navigate(meta ? '/pdf-library' : '/');
       });
       document.getElementById('pdfv-external').addEventListener('click', () => window.openPdfExternal(key));
 
@@ -3329,7 +3364,7 @@
                 <button class="btn btn-ghost btn-sm text-red-500" onclick="window._deleteDoc('${jsStr(doc.id)}')">刪除</button>
               </div>
               ${doc.storageKey && NHI_PARSER.isNhiDocument(doc) && !doc.archived ? `<button class="btn btn-secondary btn-sm mt-3" onclick="window._parseNhiDoc('${jsStr(doc.id)}')">${doc.nhiExtraction ? '重新解析健保規定' : '解析健保規定'}</button>` : ''}
-              ${doc.storageKey && NCCN_PARSER.isNccnDocument(doc) && !doc.archived && doc.nccnParseError ? '<button class="btn btn-secondary btn-sm mt-3" onclick="window._parseNccnDoc(\'' + doc.id + '\')">重試此份 NCCN</button>' : ''}
+              ${doc.storageKey && NCCN_PARSER.isNccnDocument(doc) && !doc.archived && doc.nccnParseError ? '<button class="btn btn-secondary btn-sm mt-3" onclick="window._parseNccnDoc(\'' + jsStr(doc.id) + '\')">重試此份 NCCN</button>' : ''}
             </div>
           `;
         }).join('');
@@ -4130,14 +4165,40 @@
     // Expose navigate globally
     window.navigate = navigate;
 
-    // Handle back/forward and manual hash edits
-    window.addEventListener('hashchange', handleRoute);
+    // Handle back/forward and manual hash edits. Returning from the PDF viewer restores the source position.
+    const PDF_RETURN_STATE_KEY = 'pdf-return-state';
+    const readPdfReturnState = () => {
+      try { return JSON.parse(sessionStorage.getItem(PDF_RETURN_STATE_KEY) || 'null'); }
+      catch { return null; }
+    };
+    const restorePdfReturnState = () => {
+      const state = readPdfReturnState();
+      if (!state?.path || !Number.isFinite(Number(state.scrollY))) return false;
+      if (history.length > 1) history.back();
+      else window.location.hash = state.path;
+      return true;
+    };
+    window.addEventListener('hashchange', () => {
+      const state = readPdfReturnState();
+      if (state?.path === getHashPath()) {
+        sessionStorage.removeItem(PDF_RETURN_STATE_KEY);
+        handleRoute({ preserveScroll: true, restoreScrollY: Number(state.scrollY) });
+      } else {
+        handleRoute();
+      }
+    });
 
     // Expose PDF function（page 有值時直接跳頁）
     // iOS Safari 與 Android Chrome 對 blob URL 的 #page 片段支援不可靠，
     // 直接開檔常常停在第 1 頁。改走 App 內檢視器，跳頁才能真正生效。
     window.openPdf = (key, page) => {
       if (!key) { showToast('找不到 PDF 檔案'); return; }
+      if (!getHashPath().startsWith('/pdf/')) {
+        sessionStorage.setItem(PDF_RETURN_STATE_KEY, JSON.stringify({
+          path: getHashPath(),
+          scrollY: document.scrollingElement?.scrollTop ?? window.scrollY,
+        }));
+      }
       navigate('/pdf/' + encodeURIComponent(key) + (page ? '/' + page : ''));
     };
 

@@ -41,3 +41,12 @@ test('若模組有變更，app-version.js 必須一起更新', () => {
     '這次變更動到 ' + changed.filter(f => CACHE_BUSTED_FILES.includes(f)).join('、') +
     '，但沒有更新 app-version.js；使用者會拿到混版的快取');
 });
+
+test('備份匯入會驗證 NCCN 巢狀頁碼，inline handler 不使用原始值', () => {
+  const html = read('index.html');
+  assert.match(html, /function validateDocumentStructure\(item\)/);
+  assert.match(html, /Number\.isSafeInteger\(pageNumber\)/);
+  assert.match(html, /const safePdfPage = \(value\)/);
+  assert.doesNotMatch(html, /openPdf\('\$\{doc\.storageKey\}/);
+  assert.doesNotMatch(html, /\+ doc\.id \+/);
+});

@@ -40,3 +40,9 @@ test('先掛上 canvas 再等待渲染完成', () => {
 test('檢視器標示頁碼基準，避免與 NCCN 印刷頁碼混淆', () => {
   assert.match(html, /實體頁碼/);
 });
+
+test('從 PDF 返回時會保存並還原來源頁面位置', () => {
+  assert.match(html, /pdf-return-state/);
+  assert.match(html, /scrollY/);
+  assert.match(html, /restorePdfReturnState/);
+});

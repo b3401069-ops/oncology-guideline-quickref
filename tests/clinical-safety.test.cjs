@@ -42,6 +42,15 @@ test('未測與陰性的寫法不會被當成陽性', () => {
   assert.equal(polarityOf([field('CRC 其他可作用標記', 'BRAF V600E')], 'braf'), 'positive');
 });
 
+test('App 實際選項值必須保留 BRAF 與 HER2 的臨床狀態', () => {
+  assert.equal(polarityOf([templateField('colorectal_cancer', 'crc-braf', 'V600E')], 'braf'), 'positive');
+  assert.equal(polarityOf([templateField('breast_cancer', 'breast-her2', 'IHC 3+')], 'her2'), 'positive');
+  assert.equal(polarityOf([templateField('breast_cancer', 'breast-her2', 'IHC 2+／ISH 陽性')], 'her2'), 'positive');
+  assert.equal(polarityOf([templateField('breast_cancer', 'breast-her2', 'IHC 1+')], 'her2'), 'low');
+  assert.equal(polarityOf([templateField('breast_cancer', 'breast-her2', 'IHC 2+／ISH 陰性')], 'her2'), 'low');
+  assert.equal(polarityOf([templateField('breast_cancer', 'breast-her2', 'IHC 0')], 'her2'), 'negative');
+});
+
 test('標記陰性時，即使藥名未寫出標記也要擋下標靶療程', () => {
   const her2Negative = matcher.extractClinicalFeatures([field('HER2', '陰性')]);
   const blocked = matcher.optionAssessment({ label: 'Trastuzumab + pertuzumab + docetaxel' }, her2Negative);
@@ -54,6 +63,48 @@ test('標記陰性時，即使藥名未寫出標記也要擋下標靶療程', ()
   assert.equal(matcher.optionAssessment({ label: 'Carboplatin + paclitaxel' }, her2Negative).blocked, false);
   const pdl1Zero = matcher.extractClinicalFeatures([templateField('nsclc', 'nsclc-pdl1-tps', '0')]);
   assert.equal(matcher.optionAssessment({ label: 'Pembrolizumab' }, pdl1Zero).blocked, false);
+});
+
+test('同一藥物的替代適應症使用 OR，不要求所有標記同時陽性', () => {
+  const alkPositiveRos1Negative = matcher.extractClinicalFeatures([
+    field('ALK', '陽性'),
+    field('ROS1', '陰性'),
+  ]);
+  assert.equal(matcher.optionAssessment({ label: 'Lorlatinib' }, alkPositiveRos1Negative).blocked, false);
+
+  const ros1PositiveNtrkNegative = matcher.extractClinicalFeatures([
+    field('ROS1', '陽性'),
+    field('NTRK', '陰性'),
+  ]);
+  assert.equal(matcher.optionAssessment({ label: 'Repotrectinib' }, ros1PositiveNtrkNegative).blocked, false);
+
+  const allNegative = matcher.extractClinicalFeatures([
+    field('ROS1', '陰性'),
+    field('NTRK', '陰性'),
+  ]);
+  assert.equal(matcher.optionAssessment({ label: 'Repotrectinib' }, allNegative).blocked, true);
+});
+
+test('放射配體與 HER2-low 療程依各自適應標記判讀', () => {
+  const sstrPositive = matcher.extractClinicalFeatures([templateField('neuroendocrine_tumor', 'net-sstr', '陽性')]);
+  const netAssessment = matcher.optionAssessment({ label: 'Lutetium Lu-177 dotatate' }, sstrPositive);
+  assert.equal(netAssessment.blocked, false);
+  assert.equal(netAssessment.reviewNotes.some(note => /PSMA/.test(note)), false);
+
+  const psmaPositive = matcher.extractClinicalFeatures([templateField('prostate_cancer', 'prostate-psma', '陽性')]);
+  assert.equal(matcher.optionAssessment({ label: 'Lutetium Lu-177 vipivotide tetraxetan' }, psmaPositive).blocked, false);
+
+  const her2Low = matcher.extractClinicalFeatures([templateField('breast_cancer', 'breast-her2', 'IHC 1+')]);
+  assert.equal(matcher.optionAssessment({ label: 'Trastuzumab deruxtecan' }, her2Low).blocked, false);
+  assert.equal(matcher.optionAssessment({ label: 'Trastuzumab + pertuzumab' }, her2Low).blocked, true);
+});
+
+test('Capivasertib 可由 PIK3CA、AKT1 或 PTEN 任一變異支持', () => {
+  const akt1PositivePik3caNegative = matcher.extractClinicalFeatures([
+    field('AKT1', '陽性'),
+    field('PIK3CA', '陰性'),
+  ]);
+  assert.equal(matcher.optionAssessment({ label: 'Capivasertib + fulvestrant' }, akt1PositivePik3caNegative).blocked, false);
 });
 
 test('療程需要某標記但尚未輸入時，標示為需人工核對而非直接採用', () => {

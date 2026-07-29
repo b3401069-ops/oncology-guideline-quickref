@@ -31,6 +31,10 @@ test('SCLC 專屬條文仍要正確命中', () => {
   assert.deepEqual(names('限用於廣泛期小細胞肺癌第一線治療'), ['小細胞肺癌']);
 });
 
+test('癌別後方的不得使用與不予給付也屬排除語意', () => {
+  assert.deepEqual(names('小細胞肺癌患者不得使用本項'), []);
+  assert.deepEqual(names('本藥用於小細胞肺癌不予給付'), []);
+});
 test('同時提及兩種肺癌時兩者都要命中', () => {
   assert.deepEqual(new Set(names('本藥適用於小細胞肺癌與非小細胞肺癌')), new Set(['非小細胞肺癌', '小細胞肺癌']));
 });

@@ -133,6 +133,7 @@
 
   // 排除語意（「本項不適用於X」不應視為適用於 X）
   const NEGATION_CUE = /不適用|不得使用|不得用|不包括|不含|除外|排除|不予給付|非屬|不適合/;
+  const POSTFIX_NEGATION_CUE = /^(?:(?:患者|病人|個案|之?治療)[，、,:：;； ]*)?(?:不適用|不得使用|不得用|不包括|不含|除外|排除|不予給付|非屬|不適合)/;
   const NEGATION_WINDOW = 24;
 
   function stripConflictingSuperstrings(text, term) {
@@ -149,7 +150,8 @@
     if (index < 0) return false;
     while (index >= 0) {
       const before = text.slice(Math.max(0, index - NEGATION_WINDOW), index);
-      if (!NEGATION_CUE.test(before)) return false;
+      const after = text.slice(index + term.length, index + term.length + NEGATION_WINDOW);
+      if (!NEGATION_CUE.test(before) && !POSTFIX_NEGATION_CUE.test(after)) return false;
       index = text.indexOf(term, index + term.length);
     }
     return true;
