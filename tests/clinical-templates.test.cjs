@@ -16,7 +16,7 @@ test('seeds disease-specific fields for hematology guidelines that do not use so
     const fields = templates.precisionForCancer(cancerId);
     assert.ok(fields.some(field => field.key === fieldKey), `${cancerId}: ${fieldKey}`);
   }
-  assert.equal(templates.version, 4);
+  assert.equal(templates.version, 5);
 });
 
 // Windows checkouts may use CRLF; structural regexes below assume LF.
@@ -92,4 +92,11 @@ test('explains Child-Pugh score ranges without changing compatibility values', (
   assert.equal(field.optionLabels.A5, 'A5（A 級，5 分）');
   assert.equal(field.optionLabels.C, 'C（C 級，10–15 分）');
   assert.match(field.help, /A 級＝5–6 分/);
+});
+test('breast template includes structured postoperative decision fields', () => {
+  const keys = new Set(templates.precisionForCancer('breast_cancer').map(field => field.key));
+  for (const key of [
+    'breast-pathology-scope', 'breast-surgery-path', 'breast-pt', 'breast-pn',
+    'breast-grade', 'breast-lvi', 'breast-menopause', 'breast-genomic-assay', 'breast-oncotype-rs',
+  ]) assert.ok(keys.has(key), key);
 });

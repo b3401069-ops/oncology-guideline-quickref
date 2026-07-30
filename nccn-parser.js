@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const SCHEMA_VERSION = 7;
+  const SCHEMA_VERSION = 8;
   let pdfJsPromise;
   const PAGE_TYPES = [
     ['systemic', /PRINCIPLES OF (?:SYSTEMIC|ANTI-TUMOR)|SYSTEMIC (?:ANTI-TUMOR )?THERAPY/i],
@@ -104,6 +104,14 @@
       ['first-line', /first[- ]line|initial systemic|primary (?:systemic )?(?:therapy|treatment)|newly diagnosed/i], ['second-line', /second[- ]line|subsequent therapy|progression|previously treated|relapsed/i],
       ['metastatic', /metastatic|distant metast/i], ['unresectable', /unresectable/i], ['resectable', /\bresectable\b/i],
       ['neoadjuvant', /neoadjuvant|preoperative/i], ['adjuvant', /adjuvant|postoperative/i],
+      ['breast-hr-positive', /HR[- ]POSITIVE/i], ['breast-hr-negative', /HR[- ]NEGATIVE|triple[- ]negative/i],
+      ['breast-her2-positive', /HER2[- ]POSITIVE/i], ['breast-her2-negative', /HER2[- ]NEGATIVE|triple[- ]negative/i],
+      ['breast-dcis', /\bDCIS\b|ductal carcinoma in situ/i],
+      ['breast-upfront-surgery', /after upfront surgery/i],
+      ['breast-post-neoadjuvant', /after preoperative systemic (?:therapy|treatment)/i],
+      ['breast-residual-disease', /residual (?:invasive )?disease/i], ['breast-pcr', /\bpCR\b|pathologic complete response/i],
+      ['breast-node-positive', /node[- ]positive|\bpN[1-3]\b|ypN\+/i], ['breast-node-negative', /node[- ]negative|\bpN0\b|ypN0/i],
+      ['breast-genomic-assay', /gene expression assay|21[- ]gene|Oncotype|recurrence score/i],
       ['MSI-H/dMMR', /MSI-H|dMMR/i], ['TMB-H', /TMB-H|tumor mutational burden-high/i],
       ['PD-L1', /PD\s*-?\s*L1/i], ['HER2', /HER\s*-?\s*2/i], ['EGFR', /\bEGFR\b/i], ['ALK', /\bALK\b/i],
       ['BRAF', /\bBRAF\b/i], ['BRCA', /\bBRCA1?\/?2?\b/i], ['NTRK', /\bNTRK\b/i], ['RET', /\bRET\b/i],
@@ -236,7 +244,7 @@
 
   function classifyModality(value, pageTypes = []) {
     const text = normalizeText(value);
-    if (/surg|resect|excision|dissection|ectomy|transplant|operative/i.test(text)) return 'surgery';
+    if (/surg|resect|excision|dissection|ectomy|transplant|\boperative\b/i.test(text)) return 'surgery';
     if (/radiation|radiotherapy|\bRT\b|SBRT|SRS|EBRT|IMRT|brachy/i.test(text)) return 'radiation';
     if (/surveillance|follow-up|monitoring|observation|restaging/i.test(text)) return 'followup';
     if (/systemic|chemotherapy|immunotherapy|targeted|endocrine|\bADT\b|\bARPI\b|\bSSA\b|mab|nib|zomib|fusp|parib|ciclib|toclax|platin|taxel|rubicin|citabine|lutamide|cycline|asone|amide|azine|mustine|phalan|cristine|blastine/i.test(text)) return 'systemic';
@@ -432,7 +440,65 @@
     }
     return options;
   }
-  function deduplicateOptions(options) {
+  // Some NCCN pathway tables place treatment sentences in a flowchart column
+  // without bullets or recommendation headers. Breast BINV-5 through BINV-10
+  // use this layout, so the ordinary fallbacks otherwise return histology labels
+  // such as "Ductal/NST" instead of the actual adjuvant treatment branches.
+  const UNBULLETED_TREATMENT_START = /^(?:No adjuvant therapy|Consider adjuvant (?:chemotherapy|endocrine therapy|abemaciclib|ribociclib)|Adjuvant (?:chemotherapy|endocrine therapy))/i;
+  function fallbackUnbulletedTreatmentOptions(layout, pageTypes = []) {
+    if (!/SYSTEMIC ADJUVANT TREATMENT:/i.test(layout.text || '')) return [];
+    const rows = layout.rows || [];
+    const rightBoundaries = rows.flatMap(row => rowColumns(row))
+      .filter(column => /^(?:Adjuvant whole|breast RT|or PMRT|Follow-up)\b/i.test(column.text))
+      .map(column => column.x);
+    const options = [];
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+      const row = rows[rowIndex];
+      for (const column of rowColumns(row)) {
+        const initial = cleanLine(column.text);
+        if (column.x < 250 || column.x > 670 || BULLET.test(initial) || !UNBULLETED_TREATMENT_START.test(initial)) continue;
+        const rightBoundary = rightBoundaries.filter(x => x > column.x + 60).sort((a, b) => a - b)[0]
+          ?? column.x + 250;
+        const treatmentText = (items) => normalizeText(items
+          .filter(item => !isReferenceMarker(item.text))
+          .map(item => String(item.text || '').trim())
+          .filter(Boolean).join(' '));
+        let raw = treatmentText(row.items.filter(item => item.x >= column.x - 3 && item.x < rightBoundary - 2));
+        let lastY = row.y;
+        for (let nextIndex = rowIndex + 1; nextIndex < rows.length; nextIndex++) {
+          const nextRow = rows[nextIndex];
+          if (lastY - nextRow.y > 18) break;
+          const continuationColumns = rowColumns(nextRow).filter(candidate =>
+            candidate.x >= column.x - 3 && candidate.x < rightBoundary - 2
+          );
+          if (continuationColumns.some(candidate => UNBULLETED_TREATMENT_START.test(cleanLine(candidate.text)))) break;
+          const continuation = treatmentText(nextRow.items.filter(item =>
+            item.x >= column.x - 3 && item.x < rightBoundary - 2
+          ));
+          if (!continuation || BOILERPLATE.test(continuation)) continue;
+          raw = normalizeText(raw + ' ' + continuation);
+          lastY = nextRow.y;
+        }
+        const option = normalizeTreatmentOption(raw, {
+          id: 'review', label: 'Needs source review', context: '', group: '', pageTypes,
+        });
+        if (!option) continue;
+        option.label = option.label.replace(/chemotherapy adjuvant olaparib/i, 'chemotherapy and adjuvant olaparib');
+        option.modality = 'systemic';
+        if (/HR-NEGATIVE\s*[–-]\s*HER2-NEGATIVE/i.test(layout.text || '')) {
+          if (/^No adjuvant therapy/i.test(option.label)) {
+            option.conditions.push('pT1a（≤0.5 cm）且 pN0');
+          } else if (/^Consider adjuvant chemotherapy/i.test(option.label)) {
+            option.conditions.push('pT1a 且 pN1mi，或 pT1b');
+          } else if (/^Adjuvant chemotherapy/i.test(option.label)) {
+            option.conditions.push('pT1c–pT3（>1 cm），或 pN+（轉移灶 >2 mm）');
+          }
+        }
+        options.push(option);
+      }
+    }
+    return options;
+  }  function deduplicateOptions(options) {
     const seen = new Set();
     return options.filter(option => {
       const key = option.label.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
@@ -480,11 +546,16 @@
       options.push(...tableOptions);
     }
     options.push(...fallbackBulletOptions(layout.rows, pageTypes));
+    options.push(...fallbackUnbulletedTreatmentOptions(layout, pageTypes));
     if (!options.length) options.push(...fallbackSignalOptions(layout.rows, pageTypes));
     // 檢查步驟與無治療語意的敘述不列為治療候選；
-    // 演算法頁的 workup 欄與治療欄並排，不濾掉會混進候選清單
-    const treatments = options.filter(option => !['workup', 'other'].includes(option.modality));
-    const normalized = deduplicateOptions(treatments.length ? treatments : options.filter(option => option.modality !== 'workup'));
+    // 演算法頁的 workup 欄與治療欄並排，不濾掉會混進候選清單。
+    // 乳癌術後流程表左側的病理型態是入口條件，不是治療選項。
+    const optionPool = /SYSTEMIC ADJUVANT TREATMENT:/i.test(layout.text || '')
+      ? options.filter(option => !/^(?:Ductal\/NST|Lobular|Mixed|Micropapillary|Metaplastic)$/i.test(option.label))
+      : options;
+    const treatments = optionPool.filter(option => !['workup', 'other'].includes(option.modality));
+    const normalized = deduplicateOptions(treatments.length ? treatments : optionPool.filter(option => option.modality !== 'workup'));
     const expanded = [];
     for (const option of normalized) {
       expanded.push(option, ...narrativeDrugCandidates(option));
@@ -611,10 +682,19 @@
       await pdf.destroy();
     }
   }
-  window.NCCN_PARSER = {
+  function isCurrentStructure(doc) {
+    const version = Number(doc?.nccnStructure?.schemaVersion || 0);
+    if (version === SCHEMA_VERSION) return true;
+    if (SCHEMA_VERSION === 8 && version === 7) {
+      const identity = [doc?.title, doc?.fileName, doc?.guidelineName, doc?.source].filter(Boolean).join(' ');
+      return !/\bBreast Cancer\b/i.test(identity);
+    }
+    return false;
+  }  window.NCCN_PARSER = {
     schemaVersion: SCHEMA_VERSION,
     KEYWORD_VOCABULARY,
     isNccnDocument,
+    isCurrentStructure,
     normalizeText,
     detectVersion,
     detectSectionCode,

@@ -36,7 +36,7 @@ async function main() {
     const fullPath = path.join(pdfRoot, file);
     assert.ok(fs.existsSync(fullPath), `Missing ${file}`);
     const result = await parser.extractAndParse(new Blob([fs.readFileSync(fullPath)]), { moduleUrl, workerUrl });
-    assert.equal(result.schemaVersion, 7, `${name}: schema`);
+    assert.equal(result.schemaVersion, parser.schemaVersion, `${name}: schema`);
     assert.ok(result.sections.length > 0, `${name}: sections`);
     assert.ok(result.treatmentPages.length > 0, `${name}: treatment pages`);
     assert.ok(result.treatmentPages.some(page => page.options.length > 0), `${name}: options`);

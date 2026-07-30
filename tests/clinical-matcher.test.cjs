@@ -99,3 +99,137 @@ test('routes MPN subtype values to their NCCN section family', () => {
   assert.equal(matches.length, 1);
   assert.equal(matches[0].page.sectionCode, 'MF-3');
 });
+const keyedField = (sourceTemplateKey, label, value) => ({ sourceTemplateKey, label, value });
+
+const completeBreastAdjuvantFields = () => [
+  keyedField('base-disease-setting', '病程情境', '初診局限'),
+  keyedField('base-treatment-setting', '治療階段／線別', '術後／鞏固'),
+  keyedField('breast-pathology-scope', '乳癌病理範圍', '浸潤性乳癌'),
+  keyedField('breast-surgery-path', '手術與術前治療情境', '先手術（未接受術前全身治療）'),
+  keyedField('breast-pt', '病理腫瘤分期（pT／ypT）', 'pT2'),
+  keyedField('breast-pn', '病理淋巴結分期（pN／ypN）', 'pN0'),
+  keyedField('breast-grade', '組織學分級', 'Grade 2'),
+  keyedField('breast-lvi', '淋巴血管侵犯（LVI）', '無'),
+  keyedField('breast-er', 'ER', '陽性'),
+  keyedField('breast-pr', 'PR', '陽性'),
+  keyedField('breast-her2', 'HER2 原始結果', 'IHC 0'),
+  keyedField('breast-subtype', '乳癌臨床亞型', 'HR+/HER2-'),
+  keyedField('breast-menopause', '停經狀態', '停經後'),
+  keyedField('breast-genomic-assay', '乳癌基因表現檢測', 'Oncotype DX'),
+  keyedField('breast-oncotype-rs', 'Oncotype DX Recurrence Score', '18'),
+];
+
+test('breast postoperative matching excludes metastatic and opposite-subtype pages', () => {
+  const pages = [
+    { page: 19, sectionCode: 'BINV-6', title: 'SYSTEMIC ADJUVANT TREATMENT: HR-POSITIVE – HER2-NEGATIVE DISEASE', role: 'pathway',
+      keywords: ['adjuvant', 'breast-hr-positive', 'breast-her2-negative'], options: [{ label: 'Systemic adjuvant treatment', modality: 'systemic' }] },
+    { page: 22, sectionCode: 'BINV-9', title: 'SYSTEMIC ADJUVANT TREATMENT: HR-NEGATIVE – HER2-POSITIVE DISEASE', role: 'pathway',
+      keywords: ['adjuvant', 'breast-hr-negative', 'breast-her2-positive'], options: [{ label: 'HER2-directed therapy', modality: 'systemic' }] },
+    { page: 93, sectionCode: 'BINV-Q', title: 'SYSTEMIC THERAPY FOR METASTATIC DISEASE', role: 'recommendation',
+      keywords: ['metastatic', 'HER2'], options: [{ label: 'Metastatic systemic therapy', modality: 'systemic' }] },
+  ];
+  const matches = matcher.matchTreatmentPages([{ title: 'Breast Cancer', nccnStructure: { treatmentPages: pages } }], completeBreastAdjuvantFields());
+  assert.ok(matches.some(match => match.page.sectionCode === 'BINV-6'));
+  assert.ok(!matches.some(match => ['BINV-9', 'BINV-Q'].includes(match.page.sectionCode)));
+});
+
+test('reports missing breast postoperative inputs instead of a silent no-match', () => {
+  const result = matcher.breastAdjuvantAssessment([], [
+    keyedField('base-treatment-setting', '治療階段／線別', '術後／鞏固'),
+    keyedField('breast-pathology-scope', '乳癌病理範圍', '浸潤性乳癌'),
+  ]);
+  assert.equal(result.active, true);
+  assert.equal(result.status, 'missing');
+  assert.ok(result.missing.includes('病理腫瘤分期（pT／ypT）'));
+  assert.ok(result.missing.includes('病理淋巴結分期（pN／ypN）'));
+  assert.match(result.message, /尚不能判斷/);
+});
+
+test('locates the HR-positive HER2-negative postoperative decision pages when core data are complete', () => {
+  const pages = [
+    { page: 17, sectionCode: 'BINV-4', title: 'ADJUVANT SYSTEMIC THERAPY CONSIDERATIONS', options: [] },
+    { page: 19, sectionCode: 'BINV-6', title: 'SYSTEMIC ADJUVANT TREATMENT: HR-POSITIVE – HER2-NEGATIVE DISEASE', options: [] },
+    { page: 20, sectionCode: 'BINV-7', title: 'SYSTEMIC ADJUVANT TREATMENT: HR-POSITIVE – HER2-NEGATIVE DISEASE', options: [] },
+  ];
+  const result = matcher.breastAdjuvantAssessment([
+    { title: 'Breast Cancer', nccnStructure: { treatmentPages: pages } },
+  ], completeBreastAdjuvantFields());
+  assert.equal(result.status, 'ready');
+  assert.match(result.branchLabel, /HR-positive／HER2-negative/);
+  assert.deepEqual(result.pages.map(item => item.page.sectionCode), ['BINV-4', 'BINV-6', 'BINV-7']);
+  assert.deepEqual(result.missing, []);
+});
+
+test('routes DCIS to DCIS pages without using the invasive chemotherapy pathway', () => {
+  const fields = [
+    keyedField('base-treatment-setting', '治療階段／線別', '術後／鞏固'),
+    keyedField('breast-pathology-scope', '乳癌病理範圍', 'DCIS／非浸潤性'),
+  ];
+  const pages = [
+    { page: 13, sectionCode: 'DCIS-2', title: 'DCIS POSTSURGICAL TREATMENT', options: [] },
+    { page: 19, sectionCode: 'BINV-6', title: 'INVASIVE BREAST CANCER', options: [] },
+  ];
+  const result = matcher.breastAdjuvantAssessment([{ title: 'Breast Cancer', nccnStructure: { treatmentPages: pages } }], fields);
+  assert.equal(result.status, 'ready');
+  assert.deepEqual(result.pages.map(item => item.page.sectionCode), ['DCIS-2']);
+  assert.match(result.message, /不套用浸潤性乳癌/);
+});
+test('turns a pT1cN0 triple-negative postoperative case into a category 1 chemotherapy branch', () => {
+  const fields = completeBreastAdjuvantFields().map(field => {
+    if (field.sourceTemplateKey === 'breast-pt') return { ...field, value: 'pT1c' };
+    if (field.sourceTemplateKey === 'breast-er' || field.sourceTemplateKey === 'breast-pr') return { ...field, value: '陰性' };
+    if (field.sourceTemplateKey === 'breast-subtype') return { ...field, value: '三陰性' };
+    return field;
+  });
+  const result = matcher.breastAdjuvantAssessment([], fields);
+  assert.equal(result.decision.level, 'recommended');
+  assert.match(result.decision.headline, /category 1/);
+  assert.match(result.decision.basis, /pT1c、pN0/);
+  assert.ok(result.decision.items.some(item => /olaparib/.test(item)));
+});
+
+test('keeps pT1aN0 triple-negative disease on the no-routine-adjuvant branch with a grade 3 exception', () => {
+  const makeFields = (grade) => completeBreastAdjuvantFields().map(field => {
+    if (field.sourceTemplateKey === 'breast-pt') return { ...field, value: 'pT1a' };
+    if (field.sourceTemplateKey === 'breast-grade') return { ...field, value: grade };
+    if (field.sourceTemplateKey === 'breast-er' || field.sourceTemplateKey === 'breast-pr') return { ...field, value: '陰性' };
+    if (field.sourceTemplateKey === 'breast-subtype') return { ...field, value: '三陰性' };
+    return field;
+  });
+  const standard = matcher.breastAdjuvantAssessment([], makeFields('Grade 2'));
+  assert.equal(standard.decision.level, 'omit');
+  assert.match(standard.decision.headline, /不給予術後全身治療/);
+  const highGrade = matcher.breastAdjuvantAssessment([], makeFields('Grade 3'));
+  assert.equal(highGrade.decision.level, 'consider');
+  assert.match(highGrade.decision.headline, /category 2B/);
+});
+test('connects a pT1bN0 triple-negative decision to stage I BINV-M regimen candidates', () => {
+  const fields = completeBreastAdjuvantFields().map(field => {
+    if (field.sourceTemplateKey === 'breast-pt') return { ...field, value: 'pT1b' };
+    if (field.sourceTemplateKey === 'breast-er' || field.sourceTemplateKey === 'breast-pr') return { ...field, value: '陰性' };
+    if (field.sourceTemplateKey === 'breast-subtype') return { ...field, value: '三陰性' };
+    return field;
+  });
+  const regimenOptions = [
+    { label: 'Dose-dense AC followed by Paclitaxel every 2 weeks' },
+    { label: 'Dose-dense AC followed by weekly Paclitaxel' },
+    { label: 'TC (Docetaxel/Cyclophosphamide)' },
+    { label: 'Carboplatin/Paclitaxel + Pembrolizumab (preoperative) followed by Pembrolizumab (adjuvant)' },
+    { label: 'Regimens listed as “Preferred” for stage I' },
+  ];
+  const documents = [{
+    title: 'Breast Cancer', storageKey: 'breast-pdf', nccnStructure: { treatmentPages: [
+      { page: 23, sectionCode: 'BINV-10', options: [] },
+      { page: 73, sectionCode: 'BINV-M', options: regimenOptions },
+    ] },
+  }];
+  const result = matcher.breastAdjuvantAssessment(documents, fields);
+  assert.equal(result.decision.level, 'consider');
+  assert.match(result.decision.regimenTitle, /Stage I/);
+  assert.deepEqual(result.decision.regimens.map(item => item.option.label), [
+    'Dose-dense AC followed by Paclitaxel every 2 weeks',
+    'Dose-dense AC followed by weekly Paclitaxel',
+    'TC (Docetaxel/Cyclophosphamide)',
+  ]);
+  assert.ok(result.decision.regimens.every(item => item.page.page === 73));
+});

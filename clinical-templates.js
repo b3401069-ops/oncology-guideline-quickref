@@ -322,12 +322,22 @@
         cl('breast-germline', '依年齡、家族史、亞型與病期評估胚系多基因檢測'),
         cl('breast-advanced-markers', '晚期乳癌依亞型／治療線別確認 PIK3CA、ESR1、AKT1／PTEN、BRCA1/2／PALB2'),
         cl('breast-tnbc-pdl1', '晚期三陰性乳癌：確認 PD-L1 檢測平台與 CPS（依治療情境）'),
+        cl('breast-adjuvant-decision', '術後治療前確認浸潤狀態、pT／pN、分級、ER／PR／HER2、術前治療反應與基因表現檢測適用性'),
       ],
       precisionFields: [
         pf('breast-er', 'ER', 'single_select', ['陽性','低度陽性（1–10%）','陰性','待檢']),
         pf('breast-pr', 'PR', 'single_select', ['陽性','陰性','待檢']),
         pf('breast-her2', 'HER2 原始結果', 'single_select', ['IHC 0','IHC 1+','IHC 2+／ISH 陰性','IHC 2+／ISH 陽性','IHC 3+','待檢']),
         pf('breast-subtype', '乳癌臨床亞型', 'single_select', ['HR+/HER2-','HER2+','三陰性','待確認']),
+        pf('breast-pathology-scope', '乳癌病理範圍', 'single_select', ['浸潤性乳癌','DCIS／非浸潤性','待確認'], 'cancer', { help: 'DCIS 與浸潤性乳癌使用不同的術後治療流程。' }),
+        pf('breast-surgery-path', '手術與術前治療情境', 'single_select', ['先手術（未接受術前全身治療）','術前全身治療後達 pCR','術前治療後有殘存浸潤癌','術前治療後殘存狀態待確認','尚未完成手術','待確認'], 'cancer', { help: '先手術與術前治療後的術後系統治療會進入不同 NCCN 路徑。' }),
+        pf('breast-pt', '病理腫瘤分期（pT／ypT）', 'single_select', ['pTis','pT1mi','pT1a','pT1b','pT1c','pT2','pT3','pT4','ypT0／ypTis','ypT1','ypT2','ypT3','ypT4','待確認']),
+        pf('breast-pn', '病理淋巴結分期（pN／ypN）', 'single_select', ['pN0','pN1mi','pN1（1–3 顆陽性）','pN2（4–9 顆陽性）','pN3（≥10 顆或特殊淋巴結範圍）','ypN0','ypN1','ypN2','ypN3','待確認']),
+        pf('breast-grade', '組織學分級', 'single_select', ['Grade 1','Grade 2','Grade 3','待確認']),
+        pf('breast-lvi', '淋巴血管侵犯（LVI）', 'single_select', ['無','有','待確認']),
+        pf('breast-menopause', '停經狀態', 'single_select', ['停經前／圍停經期','停經後','不適用／待確認']),
+        pf('breast-genomic-assay', '乳癌基因表現檢測', 'single_select', ['未評估','不適用','已送檢待結果','Oncotype DX','其他基因表現檢測'], 'cancer', { help: 'HR+/HER2- 術後化療決策常需依 pT／pN、停經狀態與基因表現結果判讀是否適用。' }),
+        pf('breast-oncotype-rs', 'Oncotype DX Recurrence Score', 'number'),
         pf('breast-pdl1-cps', 'PD-L1 CPS（晚期 TNBC）', 'number', [], 'cancer', { positiveAtLeast: 10, help: '晚期 TNBC 免疫治療常用門檻為 CPS ≥10；低於此值不視為陽性，仍請核對原文與健保規定。' }),
         pf('breast-advanced-alterations', '晚期乳癌相關分子變異', 'multi_select', ['PIK3CA','ESR1','AKT1','PTEN loss／alteration','BRCA1','BRCA2','PALB2','MSI-H／dMMR','TMB-High','NTRK fusion','無已知相關變異','待檢']),
         pf('breast-germline', '胚系遺傳檢測', 'single_select', ['未評估','不符合／暫不需','已送檢待報告','陽性','陰性','VUS']),
@@ -867,7 +877,7 @@
   };
 
   window.CLINICAL_TEMPLATES = Object.freeze({
-    version: 4,
+    version: 5,
     commonChecklists,
     commonPrecisionFields,
     toggleMultiValue,

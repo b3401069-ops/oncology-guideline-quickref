@@ -102,6 +102,6 @@ test('standard-case suite has unique IDs and multiple routes for each priority c
   assert.ok(counts.nsclc >= 2);
   assert.ok(counts.sclc >= 2);
   assert.ok(counts.colorectal_cancer >= 3);
-  assert.ok(counts.breast_cancer >= 3);
+  assert.ok(counts.breast_cancer >= 6);
   assert.ok(counts.neuroendocrine_tumor >= 2);
 });

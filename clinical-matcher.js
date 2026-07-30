@@ -27,6 +27,13 @@
     'well-differentiated net': '高分化 NET', 'limited-stage-sclc': '侷限期 SCLC',
     'extensive-stage-sclc': '廣泛期 SCLC',
     'mixed-hcc-cca': '混合型 HCC-CCA',
+    'breast-invasive': '浸潤性乳癌', 'breast-dcis': 'DCIS',
+    'breast-upfront-surgery': '先手術', 'breast-post-neoadjuvant': '術前治療後手術',
+    'breast-residual-disease': '殘存浸潤性病灶', 'breast-pcr': 'pCR',
+    'breast-hr-positive': 'HR-positive', 'breast-hr-negative': 'HR-negative',
+    'breast-her2-positive': 'HER2-positive', 'breast-her2-negative': 'HER2-negative',
+    'breast-node-positive': '淋巴結陽性', 'breast-node-negative': '淋巴結陰性',
+    'breast-genomic-assay': '乳癌基因表現檢測',
     'mpn-pv': 'PV', 'mpn-et': 'ET', 'mpn-mf': 'PMF/pre-PMF',
   };
 
@@ -43,6 +50,19 @@
     'poorly differentiated nec': /poorly differentiated|neuroendocrine carcinoma|\bNEC\b/i,
     'well-differentiated net': /well[- ]differentiated|neuroendocrine tumor|\bNET\b/i,
     'mixed-hcc-cca': /mixed\s+HCC[- ]CCA|combined hepatocellular[- ]cholangiocarcinoma/i,
+    'breast-invasive': /invasive breast/i,
+    'breast-dcis': /\bDCIS\b|ductal carcinoma in situ/i,
+    'breast-upfront-surgery': /after upfront surgery/i,
+    'breast-post-neoadjuvant': /after preoperative systemic (?:therapy|treatment)/i,
+    'breast-residual-disease': /residual (?:invasive )?disease/i,
+    'breast-pcr': /\bpCR\b|pathologic complete response/i,
+    'breast-hr-positive': /HR[- ]POSITIVE/i,
+    'breast-hr-negative': /HR[- ]NEGATIVE|triple[- ]negative/i,
+    'breast-her2-positive': /HER2[- ]POSITIVE/i,
+    'breast-her2-negative': /HER2[- ]NEGATIVE|triple[- ]negative/i,
+    'breast-node-positive': /node[- ]positive|\bpN[1-3]\b|ypN\+/i,
+    'breast-node-negative': /node[- ]negative|\bpN0\b|ypN0/i,
+    'breast-genomic-assay': /gene expression assay|21[- ]gene|Oncotype|recurrence score/i,
     'limited-stage-sclc': /limited[- ]stage/i,
     'extensive-stage-sclc': /extensive[- ]stage/i,
   };
@@ -164,6 +184,34 @@
         if (/previously treated|relapsed/.test(lower)) addFeature(output, 'second-line', 'positive', field, value);
         if (/術前|誘導|neoadjuvant|induction/.test(lower)) addFeature(output, 'neoadjuvant', 'positive', field, value);
         if (/術後|鞏固|adjuvant|consolidation/.test(lower)) addFeature(output, 'adjuvant', 'positive', field, value);
+        if (/乳癌病理範圍/.test(label)) {
+          if (/浸潤性乳癌/.test(raw)) addFeature(output, 'breast-invasive', 'positive', field, value);
+          if (/DCIS|非浸潤性/i.test(raw)) addFeature(output, 'breast-dcis', 'positive', field, value);
+        }
+        if (/手術與術前治療情境/.test(label)) {
+          if (/先手術/.test(raw)) addFeature(output, 'breast-upfront-surgery', 'positive', field, value);
+          if (/術前全身治療後/.test(raw)) addFeature(output, 'breast-post-neoadjuvant', 'positive', field, value);
+          if (/殘存浸潤癌/.test(raw)) addFeature(output, 'breast-residual-disease', 'positive', field, value);
+          if (/pCR/i.test(raw)) addFeature(output, 'breast-pcr', 'positive', field, value);
+        }
+        if (/乳癌臨床亞型/.test(label)) {
+          if (/HR\+/.test(raw)) addFeature(output, 'breast-hr-positive', 'positive', field, value);
+          if (/三陰性/.test(raw)) addFeature(output, 'breast-hr-negative', 'positive', field, value);
+          if (/HER2\+/.test(raw)) addFeature(output, 'breast-her2-positive', 'positive', field, value);
+          if (/HER2-/.test(raw)) addFeature(output, 'breast-her2-negative', 'positive', field, value);
+          if (/三陰性/.test(raw)) addFeature(output, 'breast-her2-negative', 'positive', field, value);
+        }
+        if (/HER2 原始結果/.test(label)) {
+          if (/IHC\s*3\+|IHC\s*2\+.*ISH\s*陽性/i.test(raw)) addFeature(output, 'breast-her2-positive', 'positive', field, value);
+          if (/IHC\s*[01]\+?|IHC\s*2\+.*ISH\s*陰性/i.test(raw)) addFeature(output, 'breast-her2-negative', 'positive', field, value);
+        }
+        if (/病理淋巴結分期/.test(label)) {
+          if (/^(?:pN0|ypN0)$/i.test(raw)) addFeature(output, 'breast-node-negative', 'positive', field, value);
+          if (/^(?:pN(?:1mi|[1-3])|ypN[1-3])/i.test(raw)) addFeature(output, 'breast-node-positive', 'positive', field, value);
+        }
+        if (/乳癌基因表現檢測/.test(label) && !/未評估|不適用|待結果/.test(raw)) {
+          addFeature(output, 'breast-genomic-assay', 'positive', field, value);
+        }
         if (/poorly differentiated nec/.test(lower)) addFeature(output, 'poorly differentiated nec', 'positive', field, value);
         if (/well[- ]differentiated net/.test(lower)) addFeature(output, 'well-differentiated net', 'positive', field, value);
         if (/mixed\s+hcc[- ]cca|combined hepatocellular[- ]cholangiocarcinoma/.test(lower)) addFeature(output, 'mixed-hcc-cca', 'positive', field, value);
@@ -363,6 +411,23 @@
   function isHccDocument(doc) {
     return /hepatocellular|\bHCC\b/i.test([doc?.title, doc?.fileName, doc?.source, doc?.guidelineName].filter(Boolean).join(' '));
   }
+  function isBreastDocument(doc) {
+    return /breast cancer|乳癌/i.test([doc?.title, doc?.fileName, doc?.source, doc?.guidelineName].filter(Boolean).join(' '));
+  }
+  function isBreastAdjuvantPage(page, features) {
+    const code = String(page.sectionCode || '').toUpperCase();
+    const selected = new Set((features || []).filter(feature => feature.polarity === 'positive').map(feature => feature.key));
+    if (selected.has('breast-dcis')) return /^DCIS-/.test(code);
+    if (!/^BINV-(?:[4-9]|1[0-7]|M)$/.test(code)) return false;
+    if (selected.has('breast-post-neoadjuvant') && !/^BINV-(?:1[4-6]|M)$/.test(code)) return false;
+    if (selected.has('breast-upfront-surgery') && !/^BINV-(?:[4-9]|1[01]|M)$/.test(code)) return false;
+    const title = String(page.title || '');
+    if (selected.has('breast-hr-positive') && /HR[- ]NEGATIVE/i.test(title)) return false;
+    if (selected.has('breast-hr-negative') && /HR[- ]POSITIVE/i.test(title)) return false;
+    if (selected.has('breast-her2-positive') && /HER2[- ]NEGATIVE/i.test(title)) return false;
+    if (selected.has('breast-her2-negative') && /HER2[- ]POSITIVE/i.test(title)) return false;
+    return true;
+  }
   function hccFeatureMatchesPage(feature, page, pageKeywords) {
     const options = page.options || [];
     const hasModality = modality => options.some(option => typeof option !== 'string' && option.modality === modality);
@@ -455,6 +520,7 @@
         const matched = positive.filter(feature => featureMatchesPage(doc, page, feature));
         const reasons = matched.map(feature => feature.key);
         if (!reasons.length) continue;
+        if (isBreastDocument(doc) && positive.some(feature => feature.key === 'adjuvant') && !isBreastAdjuvantPage(page, features)) continue;
         const selectedMetastatic = positive.some(feature => feature.key === 'metastatic');
         const localizedTitle = /\b(?:PREOPERATIVE|NEOADJUVANT|ADJUVANT)\b/i.test(page.title || '');
         const metastaticTitle = /\b(?:METASTATIC|RECURRENT|UNRESECTABLE)\b/i.test(page.title || '');
@@ -491,11 +557,190 @@
     return selected.slice(0, limit);
   }
 
+  function breastAdjuvantAssessment(documents, fields) {
+    const value = (key) => {
+      const field = (fields || []).find(item => item.sourceTemplateKey === key);
+      return Array.isArray(field?.value) ? normalize(field.value[0]) : normalize(field?.value);
+    };
+    const treatmentSetting = value('base-treatment-setting');
+    const surgeryPath = value('breast-surgery-path');
+    const active = treatmentSetting === '術後/鞏固' || /先手術|術前全身治療後/.test(surgeryPath);
+    if (!active) return { active: false, status: 'inactive', missing: [], reviewItems: [], pages: [] };
+
+    const pathologyScope = value('breast-pathology-scope');
+    const missing = [];
+    const addMissing = (key, label) => {
+      const current = value(key);
+      if (!current || /待確認|待檢|未評估/.test(current)) missing.push(label);
+      return current;
+    };
+    if (!pathologyScope || /待確認/.test(pathologyScope)) missing.push('乳癌病理範圍');
+
+    const pagePairs = (documents || []).flatMap(doc =>
+      (doc.nccnStructure?.treatmentPages || []).map(page => ({ doc, page }))
+    );
+    if (/DCIS|非浸潤性/i.test(pathologyScope)) {
+      return {
+        active: true,
+        status: 'ready',
+        branchLabel: 'DCIS 術後路徑',
+        message: '此個案應使用 DCIS 術後流程，不套用浸潤性乳癌的輔助化療決策路徑。',
+        missing,
+        reviewItems: ['仍需依切緣、手術方式、放射治療與荷爾蒙受體狀態核對原頁。'],
+        pages: pagePairs.filter(item => /^DCIS-2$/.test(String(item.page.sectionCode || ''))),
+      };
+    }
+
+    const path = addMissing('breast-surgery-path', '手術與術前治療情境');
+    addMissing('breast-pt', '病理腫瘤分期（pT／ypT）');
+    addMissing('breast-pn', '病理淋巴結分期（pN／ypN）');
+    addMissing('breast-grade', '組織學分級');
+    addMissing('breast-lvi', '淋巴血管侵犯（LVI）');
+    const er = addMissing('breast-er', 'ER');
+    const pr = addMissing('breast-pr', 'PR');
+    const her2 = addMissing('breast-her2', 'HER2 原始結果');
+    if (/尚未完成手術/.test(path)) missing.push('完成手術後病理');
+    if (/殘存狀態待確認/.test(path)) missing.push('術前治療後殘存病灶狀態');
+
+    const subtype = value('breast-subtype');
+    const hrPositive = subtype === 'HR+/HER2-' || /陽性|低度陽性/.test(er) || /陽性/.test(pr);
+    const hrNegative = subtype === '三陰性' || (/陰性/.test(er) && /陰性/.test(pr));
+    const her2Positive = subtype === 'HER2+' || /IHC\s*3\+|IHC\s*2\+.*ISH\s*陽性/i.test(her2);
+    const her2Negative = subtype === 'HR+/HER2-' || subtype === '三陰性' || /IHC\s*[01]\+?|IHC\s*2\+.*ISH\s*陰性/i.test(her2);
+    const codes = ['BINV-4'];
+    let branchLabel = '';
+    if (hrPositive && her2Positive) { branchLabel = 'HR-positive／HER2-positive 術後路徑'; codes.push('BINV-5'); }
+    else if (hrPositive && her2Negative) { branchLabel = 'HR-positive／HER2-negative 術後路徑'; codes.push('BINV-6', 'BINV-7', 'BINV-8'); }
+    else if (hrNegative && her2Positive) { branchLabel = 'HR-negative／HER2-positive 術後路徑'; codes.push('BINV-9'); }
+    else if (hrNegative && her2Negative) { branchLabel = '三陰性乳癌術後路徑'; codes.push('BINV-10'); }
+    else missing.push('可判讀的 ER／PR／HER2 臨床亞型');
+
+    if (/術前全身治療後/.test(path)) {
+      codes.splice(0, codes.length, 'BINV-14', 'BINV-15', 'BINV-16');
+      branchLabel = branchLabel ? branchLabel + '（術前治療後）' : '術前治療後的術後路徑';
+    }
+    const reviewItems = [];
+    if (hrPositive && her2Negative) {
+      const menopause = value('breast-menopause');
+      const assay = value('breast-genomic-assay');
+      const recurrenceScore = value('breast-oncotype-rs');
+      if (!menopause || /待確認|不適用/.test(menopause)) reviewItems.push('補充停經狀態；它會影響 HR+/HER2- 的術後系統治療判讀。');
+      if (!assay || assay === '未評估') reviewItems.push('依 pT／pN 與臨床風險確認是否適用基因表現檢測。');
+      if (assay === 'Oncotype DX' && recurrenceScore === '') reviewItems.push('已選 Oncotype DX，但尚未輸入 Recurrence Score。');
+      if (assay === '已送檢待結果') reviewItems.push('基因表現結果尚未完成，暫時不能完成化療效益判讀。');
+    }
+    const pt = value('breast-pt');
+    const pn = value('breast-pn');
+    const grade = value('breast-grade');
+    let decision = null;
+    if (/先手術/.test(path) && hrNegative && her2Negative && /^pT/i.test(pt) && /^pN/i.test(pn)) {
+      const nodeMicrometastatic = /^pN1mi/i.test(pn);
+      const nodeMacrometastatic = /^pN[1-3](?!mi)/i.test(pn);
+      const stageBasis = `${pt}、${pn}`;
+      if (nodeMacrometastatic || /^pT(?:1c|[23])\b/i.test(pt)) {
+        decision = {
+          level: 'recommended',
+          headline: '此分支支持術後輔助化療（category 1）',
+          basis: stageBasis,
+          items: [
+            '依 BINV-10 進入術後輔助化療路徑。',
+            '若有 germline BRCA1/2 pathogenic variant，需再依原頁高風險資格評估 adjuvant olaparib。',
+            '放射治療與全身治療的先後順序依 BINV-I 核對。',
+          ],
+          caveats: [],
+        };
+      } else if (/^pT1a\b/i.test(pt) && /^pN0\b/i.test(pn)) {
+        const highGrade = /^Grade 3$/i.test(grade);
+        decision = {
+          level: highGrade ? 'consider' : 'omit',
+          headline: highGrade
+            ? '主分支為不給予術後全身治療；但 Grade 3 觸發高風險例外，應討論化療（category 2B）'
+            : 'NCCN 主分支為不給予術後全身治療',
+          basis: stageBasis,
+          items: highGrade
+            ? ['BINV-10 的 footnote ss 允許特定高風險 pT1aN0 個案考慮輔助化療。']
+            : ['目前 pT1aN0 分支未直接支持常規術後輔助化療。'],
+          caveats: ['仍需核對年齡、病理高風險特徵及 BINV-10 footnote ss；App 尚未收錄所有可能影響個案討論的風險因素。'],
+        };
+      } else if ((/^pT1a\b/i.test(pt) && nodeMicrometastatic) || /^pT1b\b/i.test(pt)) {
+        decision = {
+          level: 'consider',
+          headline: '此分支為考慮術後輔助化療',
+          basis: stageBasis,
+          items: [
+            '化療不是 App 自動判定的絕對結論；應依效益、毒性與個案偏好共同決策。',
+            '同頁列有 germline BRCA1/2 pathogenic variant 的 olaparib 路徑，仍須核對原頁資格門檻。',
+          ],
+          caveats: [],
+        };
+      } else {
+        decision = {
+          level: 'review',
+          headline: '此 pT／pN 組合未落在 App 已結構化的 BINV-10 三個主要分支',
+          basis: stageBasis,
+          items: ['請直接開啟 BINV-10 核對流程箭頭；App 不會用鄰近分支推測治療。'],
+          caveats: [],
+        };
+      }
+    }    if (decision && /先手術/.test(path) && hrNegative && her2Negative) {
+      const regimenPage = pagePairs.find(({ page }) =>
+        String(page.sectionCode || '').toUpperCase() === 'BINV-M' &&
+        (page.options || []).some(option => /Pembrolizumab/i.test(optionText(option))) &&
+        (page.options || []).some(option => /Preferred.+stage I/i.test(optionText(option)))
+      ) || pagePairs.find(({ page }) =>
+        String(page.sectionCode || '').toUpperCase() === 'BINV-M' &&
+        (page.options || []).some(option => /^TC \(Docetaxel\/Cyclophosphamide\)/i.test(typeof option === 'string' ? option : option.label || ''))
+      );
+      if (regimenPage) {
+        const regimenPatterns = [
+          /^Dose[- ]Dense AC \(Doxorubicin\/Cyclophosphamide\) followed by Paclitaxel every 2 weeks/i,
+          /^Dose[- ]dense AC followed by Paclitaxel every 2 weeks/i,
+          /^Dose[- ]Dense AC followed by weekly Paclitaxel/i,
+          /^TC \(Docetaxel\/Cyclophosphamide\)/i,
+        ];
+        const seen = new Set();
+        decision.regimens = (regimenPage.page.options || []).filter(option => {
+          const label = typeof option === 'string' ? option : String(option.label || '');
+          if (!regimenPatterns.some(pattern => pattern.test(label))) return false;
+          const key = label.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        }).slice(0, 3).map(option => ({ ...regimenPage, option }));
+        const stageI = /^pT1(?:mi|[abc])\b/i.test(pt) && /^pN0\b/i.test(pn);
+        decision.regimenTitle = stageI
+          ? '若決定化療：BINV-M Stage I 優先處方候選'
+          : '若決定化療：BINV-M 可考慮處方候選';
+        decision.regimenNote = stageI
+          ? '以下是處方入口，不代表三者等效或已替個案選定；仍需依心臟功能、周邊神經病變風險、共病與偏好選擇。'
+          : '較高病期仍須核對是否原本應採術前全身治療及 pembrolizumab 路徑，App 不會把術前療程誤列為單純術後處方。';
+      }
+    }    const codeSet = new Set(codes);
+    const supportingPages = decision
+      ? pagePairs.filter(({ page }) => String(page.sectionCode || '').toUpperCase() === 'BINV-M' &&
+        (page.options || []).some(option => /Pembrolizumab|Carboplatin\/Paclitaxel|Dose[- ]Dense AC|TC \(Docetaxel/i.test(optionText(option))))
+      : [];
+    return {
+      active: true,
+      status: missing.length ? 'missing' : 'ready',
+      branchLabel: branchLabel || '乳癌術後輔助治療路徑',
+      message: missing.length
+        ? '目前資料不足，尚不能判斷是否需要術後輔助性化療。'
+        : '已定位術後決策路徑；請依原頁門檻、腳註與個案共病完成化療效益判讀。',
+      missing: [...new Set(missing)],
+      reviewItems,
+      decision,
+      pages: pagePairs.filter(item => codeSet.has(String(item.page.sectionCode || '').toUpperCase())),
+      supportingPages: supportingPages.slice(0, 2),
+    };
+  }
+
   window.CLINICAL_MATCHER = Object.freeze({
     extractClinicalFeatures,
     matchTreatmentPages,
     diagnoseTreatmentMatch,
     optionAssessment,
+    breastAdjuvantAssessment,
     featureLabel: (key) => FEATURE_LABELS[key] || String(key || '').toUpperCase(),
   });
 })();
