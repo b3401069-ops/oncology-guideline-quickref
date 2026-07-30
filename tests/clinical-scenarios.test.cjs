@@ -91,3 +91,17 @@ test('covers HCC, lung, colorectal, breast, and neuroendocrine cancers', () => {
     assert.ok(ids.has(expected), expected);
   }
 });
+test('standard-case suite has unique IDs and multiple routes for each priority cancer', () => {
+  const ids = scenarios.scenarios.map(item => item.id);
+  assert.equal(new Set(ids).size, ids.length);
+  const counts = scenarios.scenarios.reduce((output, item) => {
+    output[item.cancerId] = (output[item.cancerId] || 0) + 1;
+    return output;
+  }, {});
+  assert.ok(counts.hepatocellular_carcinoma >= 2);
+  assert.ok(counts.nsclc >= 2);
+  assert.ok(counts.sclc >= 2);
+  assert.ok(counts.colorectal_cancer >= 3);
+  assert.ok(counts.breast_cancer >= 3);
+  assert.ok(counts.neuroendocrine_tumor >= 2);
+});

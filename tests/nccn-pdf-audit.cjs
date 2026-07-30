@@ -10,8 +10,10 @@ if (!Uint8Array.prototype.toHex) Uint8Array.prototype.toHex = function toHex() {
 global.window = {};
 require('../nccn-parser.js');
 require('../clinical-matcher.js');
+require('../clinical-scenarios.js');
 const parser = window.NCCN_PARSER;
 const matcher = window.CLINICAL_MATCHER;
+const scenarios = global.CLINICAL_SCENARIOS;
 
 const pdfRoot = process.env.NCCN_PDF_DIR;
 if (!pdfRoot) throw new Error('Set NCCN_PDF_DIR to the folder containing the NCCN PDFs.');
@@ -92,6 +94,25 @@ async function main() {
   assert.ok(sclcMatches.length > 0, 'SCLC: no clinical matches');
   assert.ok(sclcMatches.some(match => match.reasons.includes('extensive-stage-sclc')), 'SCLC: extensive-stage clinical route');
   assert.ok(sclcMatches.some(match => ['systemic', 'radiation'].includes(match.modality)), 'SCLC: no systemic or radiation route');
+
+  const scenarioDocuments = [
+    { title: 'Hepatocellular Carcinoma', cancerIds: ['hepatocellular_carcinoma'], nccnStructure: results.get('HCC') },
+    { title: 'Non-Small Cell Lung Cancer', cancerIds: ['nsclc'], nccnStructure: results.get('NSCLC') },
+    { title: 'Small Cell Lung Cancer', cancerIds: ['sclc'], nccnStructure: results.get('SCLC') },
+    { title: 'Breast Cancer', cancerIds: ['breast_cancer'], nccnStructure: results.get('Breast') },
+    { title: 'Rectal Cancer', cancerIds: ['colorectal_cancer'], nccnStructure: results.get('Rectal') },
+    { title: 'Neuroendocrine and Adrenal Tumors', cancerIds: ['neuroendocrine_tumor'], nccnStructure: results.get('NET') },
+  ];
+  const scenarioSummary = scenarios.summarize(scenarioDocuments, matcher);
+  for (const result of scenarioSummary.results) {
+    console.log(JSON.stringify({
+      scenario: result.scenario.id,
+      status: result.status,
+      missing: result.missing,
+      violations: result.violations,
+    }));
+  }
+  assert.equal(scenarioSummary.attention.length, 0, 'Standard clinical scenarios require review: ' + scenarioSummary.attention.map(result => result.scenario.id + ' [' + result.missing.join(', ') + ']').join('; '));
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });

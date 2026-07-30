@@ -32,11 +32,26 @@
       fields: [
         field('病程情境', '轉移／全身性'),
         field('治療階段／線別', '第一線'),
-        field('分子／生物標記摘要', 'ROS1 fusion'),
+        field('NSCLC 驅動基因／可標靶變異', 'ROS1 fusion'),
       ],
       required: ['systemic'],
       expectations: [expect('systemic', 'ROS1 標靶治療', /^NSCL-/, [/crizotinib|entrectinib|repotrectinib|ROS1/i])],
       forbiddenOptions: [/osimertinib(?![\s\S]*ROS1)/i],
+    },
+    {
+      id: 'nsclc-egfr-first-line',
+      cancerId: 'nsclc',
+      label: 'NSCLC EGFR 轉移第一線',
+      fields: [
+        field('病程情境', '轉移／全身性'),
+        field('治療階段／線別', '第一線'),
+        field('NSCLC 驅動基因／可標靶變異', 'EGFR sensitizing'),
+      ],
+      required: ['systemic'],
+      expectations: [expect('systemic', 'EGFR 標靶治療', /^NSCL-/, [
+        /osimertinib|erlotinib|gefitinib|afatinib|dacomitinib|amivantamab|lazertinib/i,
+      ])],
+      forbiddenOptions: [/alectinib|brigatinib|lorlatinib/i],
     },
     {
       id: 'sclc-limited-rt',
@@ -48,6 +63,20 @@
         expect('radiation', 'SCLC 胸腔放射治療頁', /^SCL-/),
         expect('systemic', 'SCLC 含 platinum／etoposide 療程', /^SCL-/, [/cisplatin|carboplatin|etoposide/i]),
       ],
+    },
+    {
+      id: 'sclc-extensive-systemic',
+      cancerId: 'sclc',
+      label: 'SCLC 廣泛期第一線',
+      fields: [
+        field('病程情境', '轉移／全身性'),
+        field('治療階段／線別', '第一線'),
+        field('SCLC 分期', '廣泛期'),
+      ],
+      required: ['systemic'],
+      expectations: [expect('systemic', 'SCLC 廣泛期第一線藥物', /^SCL-/, [
+        /atezolizumab|durvalumab|cisplatin|carboplatin|etoposide/i,
+      ])],
     },
     {
       id: 'crc-resectable-surgery',
@@ -73,12 +102,55 @@
       forbiddenOptions: [/pembrolizumab[\s\S]*(?:MSI-H|dMMR)|(?:MSI-H|dMMR)[\s\S]*pembrolizumab/i],
     },
     {
+      id: 'crc-msih-systemic',
+      cancerId: 'colorectal_cancer',
+      label: '大腸直腸癌 MSI-H／dMMR 全身治療',
+      fields: [
+        field('病程情境', '轉移／全身性'),
+        field('治療階段／線別', '第一線'),
+        field('MMR／MSI', 'dMMR／MSI-H'),
+      ],
+      required: ['systemic'],
+      expectations: [expect('systemic', 'MSI-H／dMMR 免疫治療', /^(COL|REC)-/, [
+        /pembrolizumab|nivolumab|ipilimumab|dostarlimab/i,
+      ])],
+    },
+    {
       id: 'breast-followup',
       cancerId: 'breast_cancer',
       label: '乳癌治療後追蹤',
       fields: [field('病程情境', '治療後追蹤')],
       required: ['followup'],
       expectations: [expect('followup', '乳癌追蹤頁', /^(BINV|DCIS)-/, [/surveillance|follow-up|monitor|mammog|observation/i])],
+    },
+    {
+      id: 'breast-her2-positive-systemic',
+      cancerId: 'breast_cancer',
+      label: '乳癌 HER2-positive 轉移第一線',
+      fields: [
+        field('病程情境', '轉移／全身性'),
+        field('治療階段／線別', '第一線'),
+        field('HER2 原始結果', 'IHC 3+'),
+      ],
+      required: ['systemic'],
+      expectations: [expect('systemic', 'HER2-positive 全身治療', /^BINV-/, [
+        /trastuzumab|pertuzumab|tucatinib|margetuximab|zanidatamab/i,
+      ])],
+    },
+    {
+      id: 'breast-her2-low-subsequent',
+      cancerId: 'breast_cancer',
+      label: '乳癌 HER2-low 轉移後線',
+      fields: [
+        field('病程情境', '轉移／全身性'),
+        field('治療階段／線別', '第二線'),
+        field('HER2 原始結果', 'IHC 1+'),
+      ],
+      required: ['systemic'],
+      expectations: [expect('systemic', 'HER2-low trastuzumab deruxtecan', /^BINV-/, [
+        /trastuzumab deruxtecan|fam-trastuzumab deruxtecan|T-DXd/i,
+      ])],
+      forbiddenOptions: [/trastuzumab\s*\+\s*pertuzumab/i],
     },
     {
       id: 'net-metastatic-systemic',
@@ -92,6 +164,20 @@
       required: ['systemic'],
       expectations: [expect('systemic', 'NET 全身治療頁', /^(NET|NE)-/, [
         /everolimus|sunitinib|cabozantinib|lutetium|octreotide|lanreotide|temozolomide|capecitabine/i,
+      ])],
+    },
+    {
+      id: 'net-sstr-positive-prrt',
+      cancerId: 'neuroendocrine_tumor',
+      label: '神經內分泌腫瘤 SSTR-positive 治療',
+      fields: [
+        field('病程情境', '轉移／全身性'),
+        field('分化／分類', 'well-differentiated NET'),
+        field('SSTR 狀態', '陽性'),
+      ],
+      required: ['systemic'],
+      expectations: [expect('systemic', 'SSTR-positive SSA／PRRT', /^(NET|NE)-/, [
+        /lutetium|dotatate|octreotide|lanreotide/i,
       ])],
     },
   ];

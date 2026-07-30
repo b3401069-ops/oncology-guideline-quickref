@@ -118,3 +118,56 @@ test('標記只出現在頁面關鍵字、無選項佐證時證據力較弱', ()
   ]);
   assert.equal(matches[0].page.sectionCode, 'NSCL-28');
 });
+test('藥物條件判讀包含 sourceText，pMMR/MSS 要擋下 dMMR/MSI-H 長句', () => {
+  const features = matcher.extractClinicalFeatures([{ label: 'MMR／MSI', value: 'pMMR／MSS' }]);
+  const option = {
+    label: 'Pembrolizumab',
+    sourceText: 'Pembrolizumab (dMMR/MSI-H or POLE/POLD1 mutation)',
+    modality: 'systemic',
+  };
+  assert.equal(matcher.optionAssessment(option, features).blocked, true);
+});
+
+test('已知陽性驅動基因要擋下需要其他互斥驅動基因的藥物', () => {
+  const ros1 = matcher.extractClinicalFeatures([
+    { label: 'NSCLC 驅動基因／可標靶變異', value: 'ROS1 fusion' },
+  ]);
+  const egfr = matcher.extractClinicalFeatures([
+    { label: 'NSCLC 驅動基因／可標靶變異', value: 'EGFR sensitizing' },
+  ]);
+  assert.equal(matcher.optionAssessment({ label: 'Osimertinib', modality: 'systemic' }, ros1).blocked, true);
+  assert.equal(matcher.optionAssessment({ label: 'Alectinib', modality: 'systemic' }, egfr).blocked, true);
+});
+
+test('轉移情境不混入標題明確為術前或術後的頁面', () => {
+  const pages = [
+    { page: 74, sectionCode: 'BINV-M', title: 'PREOPERATIVE/ADJUVANT THERAPY', role: 'pathway',
+      types: ['systemic'], keywords: ['adjuvant', 'HER2'],
+      options: [{ label: 'Trastuzumab + Pertuzumab', modality: 'systemic' }] },
+    { page: 93, sectionCode: 'BINV-Q', title: 'SYSTEMIC THERAPY FOR METASTATIC DISEASE', role: 'recommendation',
+      types: ['systemic'], keywords: ['metastatic', 'second-line', 'HER2'],
+      options: [{ label: 'Fam-trastuzumab deruxtecan-nxki', modality: 'systemic' }] },
+  ];
+  const matches = matcher.matchTreatmentPages([{ nccnStructure: { treatmentPages: pages } }], [
+    { label: '病程情境', value: '轉移／全身性' },
+    { label: '治療階段／線別', value: '第二線' },
+    { label: 'HER2 原始結果', value: 'IHC 1+' },
+  ]);
+  assert.ok(matches.length > 0);
+  assert.ok(!matches.some(match => match.page.page === 74));
+});
+
+test('追蹤條件命中且頁面有追蹤選項時，卡片歸類為追蹤', () => {
+  const pages = [{
+    page: 30, sectionCode: 'BINV-17', title: 'POST-TREATMENT MONITORING', role: 'pathway',
+    types: ['surgery', 'followup'], keywords: ['followup'],
+    options: [
+      { label: 'Routine imaging is not indicated after mastectomy', modality: 'surgery' },
+      { label: 'Post-treatment monitoring', modality: 'followup' },
+    ],
+  }];
+  const matches = matcher.matchTreatmentPages([{ nccnStructure: { treatmentPages: pages } }], [
+    { label: '病程情境', value: '治療後追蹤' },
+  ]);
+  assert.equal(matches[0].modality, 'followup');
+});

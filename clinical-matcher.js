@@ -211,7 +211,7 @@
 
   function optionText(option) {
     if (typeof option === 'string') return option.toLowerCase();
-    return [option?.label, option?.group, option?.context, ...(option?.conditions || [])].filter(Boolean).join(' ').toLowerCase();
+    return [option?.label, option?.sourceText, option?.group, option?.context, ...(option?.conditions || [])].filter(Boolean).join(' ').toLowerCase();
   }
 
   // NCCN 表格內的藥名多半不會重複標記名稱（標記寫在欄位標題或上游情境），
@@ -296,6 +296,13 @@
       const accepted = requirement.acceptedPolarities || ['positive'];
       const relevant = (features || []).filter(feature => requirement.anyOf.includes(feature.key));
       const satisfied = relevant.some(feature => accepted.includes(feature.polarity));
+      const requiresExclusiveDriver = requirement.anyOf.every(key => EXCLUSIVE_DRIVERS.includes(key));
+      const differentPositiveDriver = (features || []).find(feature =>
+        feature.polarity === 'positive' && EXCLUSIVE_DRIVERS.includes(feature.key) && !requirement.anyOf.includes(feature.key)
+      );
+      if (!satisfied && requiresExclusiveDriver && differentPositiveDriver) {
+        conflicts.push(differentPositiveDriver.label + '陽性，但此療程需要 ' + requirementLabel(requirement));
+      }
       if (satisfied) {
         score += 2;
       } else if (relevant.length) {
@@ -448,7 +455,14 @@
         const matched = positive.filter(feature => featureMatchesPage(doc, page, feature));
         const reasons = matched.map(feature => feature.key);
         if (!reasons.length) continue;
-        const modality = pageModality(page);
+        const selectedMetastatic = positive.some(feature => feature.key === 'metastatic');
+        const localizedTitle = /\b(?:PREOPERATIVE|NEOADJUVANT|ADJUVANT)\b/i.test(page.title || '');
+        const metastaticTitle = /\b(?:METASTATIC|RECURRENT|UNRESECTABLE)\b/i.test(page.title || '');
+        if (selectedMetastatic && localizedTitle && !metastaticTitle) continue;
+        const hasFollowupOption = (page.options || []).some(option => typeof option !== 'string' && option.modality === 'followup');
+        const modality = matched.some(feature => feature.key === 'followup') && hasFollowupOption
+          ? 'followup'
+          : pageModality(page);
         // 生物標記若只出現在頁面關鍵字、卻沒有任何選項或其情境提到它，
         // 代表這頁只是「順帶提及」（例如整頁列出各驅動基因處方的附錄），
         // 證據力遠低於真正針對該標記的頁面。

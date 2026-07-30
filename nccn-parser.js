@@ -74,6 +74,10 @@
       .filter(Boolean);
   }
   function isNavigationIndexPage(text) {
+    const recommendationHeadings = (text.match(/(?:^|\n)\s*(?:Preferred|Other Recommended|Useful in Certain Circumstances)\s*(?:\n|$)/gim) || []).length;
+    const recommendationBullets = (text.match(/(?:^|\n)\s*[\u0017•◊◦▪●■◆\uf0b7]/gu) || []).length;
+    // 原則頁可能同時列出多個「下一頁」連結；只要頁內已有實際推薦清單，就不是目錄頁。
+    if (recommendationHeadings && recommendationBullets >= 2) return false;
     return /NCCN Guidelines Index[\s\S]{0,200}Table of Contents/i.test(text) &&
       (text.match(/\([A-Z][A-Z0-9-]+\s+\d+\s+of\s+\d+\)/gi) || []).length >= 3;
   }

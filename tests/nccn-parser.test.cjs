@@ -65,3 +65,17 @@ test('extracts review-labeled drug candidates from long narrative options', () =
   }
   assert.ok(derived.every(option => option.sourceNeedsReview && !option.needsReview));
 });
+test('does not classify a recommendation page with cross references as navigation', () => {
+  const text = [
+    'NCCN Guidelines Index',
+    'Table of Contents',
+    'PRINCIPLES OF SYSTEMIC THERAPY',
+    'Preferred',
+    '• Cisplatin and Etoposide',
+    '• Carboplatin and Etoposide',
+    'Footnotes (SCL-E 2 of 6)',
+    'Subsequent Systemic Therapy (SCL-E 3 of 6)',
+    'References (SCL-E 5 of 6)',
+  ].join('\n');
+  assert.equal(parser.isNavigationIndexPage(text), false);
+});
