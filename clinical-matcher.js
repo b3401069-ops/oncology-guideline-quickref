@@ -770,6 +770,27 @@
     });
   };
 
+  function postoperativeStageConflict(cancerId, stage, pt, pn) {
+    if ([stage, pt, pn].some(postoperativeUnknown)) return '';
+    const t = String(pt).replace(/^(?:y?p)T/i, 'T');
+    const n = String(pn).replace(/^(?:y?p)N/i, 'N');
+    let consistent = true;
+    if (cancerId === 'nsclc' && /^pT/i.test(pt) && /^pN/i.test(pn)) {
+      if (stage === 'IA1') consistent = /^T(?:mi|1a)$/.test(t) && n === 'N0';
+      else if (stage === 'IA2') consistent = t === 'T1b' && n === 'N0';
+      else if (stage === 'IA3') consistent = t === 'T1c' && n === 'N0';
+      else if (stage === 'IB') consistent = t === 'T2a' && n === 'N0';
+      else if (stage === 'IIA') consistent = (t === 'T2b' && n === 'N0') || (/^T1[a-c]?$/.test(t) && n === 'N1');
+      else if (stage === 'IIB') consistent = (/^T1[a-c]?$/.test(t) && n === 'N2a') || (/^T2[ab]?$/.test(t) && n === 'N1') || (t === 'T3' && n === 'N0');
+    } else if (['colon_cancer', 'rectal_cancer'].includes(cancerId)) {
+      if (stage === '0') consistent = t === 'Tis' && n === 'N0';
+      else if (stage === 'I') consistent = /^T[12]$/.test(t) && n === 'N0';
+      else if (/^II[ABC]$/.test(stage)) consistent = /^T(?:3|4[ab]?)$/.test(t) && n === 'N0';
+      else if (/^III[ABC]$/.test(stage)) consistent = /^N[12]/.test(n);
+    }
+    return consistent ? '' : '病理分期與 pT／pN 組合不一致，請回病理報告重新確認';
+  }
+
   function nsclcAdjuvantAssessment(documents, fields) {
     const value = key => postoperativeFieldValue(fields, key);
     const values = key => postoperativeFieldValues(fields, key);
@@ -789,6 +810,8 @@
     const pn = required('nsclc-pn', 'NSCLC 病理 N 分期');
     const margin = required('nsclc-margin', 'NSCLC 手術切緣');
     if (postoperativeUnknown(path)) missing.push('NSCLC 手術／術前治療情境');
+    const stageConflict = postoperativeStageConflict('nsclc', stage, pt, pn);
+    if (stageConflict) missing.push(stageConflict);
     const highRiskValues = values('nsclc-high-risk');
     const highRiskKnown = highRiskValues.length && !highRiskValues.some(item => /待確認/.test(item));
     const hasHighRisk = highRiskValues.some(item => !/無上述特徵|待確認/.test(item));
@@ -837,15 +860,17 @@
         };
       } else if (/^(?:IB|IIA)$/.test(stage)) {
         decision = {
-          level: hasHighRisk ? 'recommended' : 'omit',
+          level: hasHighRisk ? 'consider' : 'omit',
           headline: hasHighRisk
-            ? '此分支建議術後輔助化療（具高風險特徵）'
+            ? '具高風險特徵：應個別評估並考慮術後輔助化療'
             : '未辨識到高風險特徵，主分支不支持常規術後輔助化療',
           basis: basis + (highRiskValues.length ? '；高風險：' + highRiskValues.join('、') : ''),
           items: hasHighRisk
             ? ['NSCL-E 對 Stage IB／IIA 且具高風險特徵者建議 adjuvant chemotherapy。']
             : ['腫瘤大小增加仍是重要變項；請核對 NSCL-4A 與完整病理。'],
-          caveats: [],
+          caveats: hasHighRisk
+            ? ['NCCN 腳註指出：單一高風險特徵本身未必足以構成化療適應症，仍須整合腫瘤大小、切除方式、病理與共病。']
+            : [],
         };
       } else if (/^(?:IIB|IIIA|IIIB)/.test(stage)) {
         decision = {
@@ -909,10 +934,10 @@
       const noEgfrAlk = !/EGFR|ALK/.test(driverText) && drivers.length && !drivers.some(item => /待檢/.test(item));
       const pdl1 = Number(value('nsclc-pdl1-tps'));
       if (chemoEligible && largeOrNodePositive && noEgfrAlk && Number.isFinite(pdl1) && pdl1 >= 1) {
-        targeted.push(regimenEntry(otherPage, 'Atezolizumab（PD-L1 ≥1%，且無 EGFR／ALK）', /^Atezolizumab/i));
+        targeted.push(regimenEntry(otherPage, 'Atezolizumab（完成術後含鉑化療後；PD-L1 ≥1%，且無 EGFR／ALK）', /^Atezolizumab/i));
       }
       if (chemoEligible && largeOrNodePositive && noEgfrAlk) {
-        targeted.push(regimenEntry(otherPage, 'Pembrolizumab（無 EGFR／ALK；PD-L1 <1% 效益不明確）', /^Pembrolizumab/i));
+        targeted.push(regimenEntry(otherPage, 'Pembrolizumab（完成術後含鉑化療後；無 EGFR／ALK；PD-L1 <1% 效益不明確）', /^Pembrolizumab/i));
       }
       decision.regimens = uniqueRegimens([...chemo, ...targeted]);
       if (targeted.length && !chemoEligible) {
@@ -950,6 +975,7 @@
     const values = key => postoperativeFieldValues(fields, key);
     const treatmentSetting = value('base-treatment-setting');
     const path = value('colon-surgery-path');
+    const preoperativeChemo = /術前 FOLFOX\/CAPEOX 後手術/.test(path);
     const active = treatmentSetting === '術後/鞏固' || /手術/.test(path);
     if (!active) return { active: false, status: 'inactive', missing: [], reviewItems: [], pages: [] };
 
@@ -965,6 +991,17 @@
     const pn = required('colon-pn', '結腸癌病理 N 分期');
     const margin = required('colon-margin', '結腸癌手術切緣');
     const mmr = required('crc-mmr-msi', 'MMR／MSI');
+    const neoadjuvantRegimen = value('colon-neoadjuvant-regimen');
+    const neoadjuvantCyclesRaw = value('colon-neoadjuvant-cycles');
+    const neoadjuvantCycles = Number(neoadjuvantCyclesRaw);
+    if (preoperativeChemo && (postoperativeUnknown(neoadjuvantRegimen) || /未接受術前化療/.test(neoadjuvantRegimen))) {
+      missing.push('結腸癌術前實際化療方案');
+    }
+    if (preoperativeChemo && (postoperativeUnknown(neoadjuvantCyclesRaw) || !Number.isFinite(neoadjuvantCycles) || neoadjuvantCycles <= 0)) {
+      missing.push('結腸癌術前已完成化療週期數');
+    }
+    const stageConflict = postoperativeStageConflict('colon_cancer', stage, pt, pn);
+    if (stageConflict) missing.push(stageConflict);
     const highRiskValues = values('colon-high-risk');
     const stageII = /^II[ABC]$/.test(stage);
     if (stageII && (!highRiskValues.length || highRiskValues.some(item => /待確認/.test(item)))) {
@@ -975,9 +1012,18 @@
     const dmmr = /dMMR|MSI-H/i.test(mmr);
     const decisionPage = pagePair(pairs, dmmr ? 'COL-13' : 'COL-4');
     const reviewItems = [];
-    const basis = [stage, pt, pn, mmr, margin].filter(Boolean).join('、');
-    const nodeCount = Number(value('colon-nodes-examined'));
-    if (stageII && !Number.isFinite(nodeCount)) reviewItems.push('補充檢查淋巴結數；少於 12 顆屬 Stage II 高風險特徵。');
+    const basis = [stage, pt, pn, mmr, margin,
+      preoperativeChemo && neoadjuvantRegimen ? '術前 ' + neoadjuvantRegimen + ' ' + neoadjuvantCyclesRaw + ' 週期' : '',
+    ].filter(Boolean).join('、');
+    if (preoperativeChemo) {
+      reviewItems.push('已接受術前 FOLFOX／CAPEOX：術後應依已完成週期補足總療程，不可重新開始一套完整 3–6 個月療程。');
+    }
+    const nodeCountRaw = value('colon-nodes-examined');
+    const nodeCount = nodeCountRaw === '' ? Number.NaN : Number(nodeCountRaw);
+    const lowNodeCountAlreadyRecorded = highRiskValues.some(item => /少於 12 顆淋巴結/.test(item));
+    if (stageII && !Number.isFinite(nodeCount) && !lowNodeCountAlreadyRecorded) {
+      missing.push('結腸癌檢查淋巴結數（或明確標記少於 12 顆）');
+    }
     const hasHighRisk = /pT4/i.test(pt) ||
       highRiskValues.some(item => !/無上述特徵|待確認/.test(item)) ||
       (Number.isFinite(nodeCount) && nodeCount < 12) ||
@@ -1046,23 +1092,33 @@
       }
     }
 
+    if (decision && preoperativeChemo && ['recommended', 'consider'].includes(decision.level)) {
+      decision.headline = '已有術前化療：依已完成週期補足總療程，不重新開始完整術後療程';
+      decision.items.unshift('術後處方與剩餘週期須依術前實際方案、週期及毒性紀錄計算。');
+    }
+
     if (decision && ['recommended', 'consider'].includes(decision.level)) {
       const labels = [];
+      const continuation = preoperativeChemo ? '（依術前已完成 ' + neoadjuvantCyclesRaw + ' 週期補足全程）' : '';
+      const permits = regimen => !preoperativeChemo || neoadjuvantRegimen === '其他' || neoadjuvantRegimen === regimen;
       if (dmmr && (stage === 'IIC' || /^III/.test(stage))) {
-        labels.push('FOLFOX + Atezolizumab', 'CAPEOX + Atezolizumab');
+        if (permits('FOLFOX')) labels.push('FOLFOX + Atezolizumab' + continuation);
+        if (permits('CAPEOX')) labels.push('CAPEOX + Atezolizumab' + continuation);
       }
       if (/^III/.test(stage) || (stageII && hasHighRisk) || (dmmr && stage === 'IIC')) {
-        labels.push(highRiskIII ? 'CAPEOX（3–6 個月）' : 'CAPEOX（3 個月）');
-        labels.push(highRiskIII ? 'FOLFOX（6 個月）' : 'FOLFOX（3–6 個月）');
+        if (permits('CAPEOX')) labels.push(preoperativeChemo ? 'CAPEOX' + continuation : highRiskIII ? 'CAPEOX（3–6 個月）' : 'CAPEOX（3 個月）');
+        if (permits('FOLFOX')) labels.push(preoperativeChemo ? 'FOLFOX' + continuation : highRiskIII ? 'FOLFOX（6 個月）' : 'FOLFOX（3–6 個月）');
       }
-      if (!dmmr && stageII) labels.push('Capecitabine（6 個月）', 'Fluorouracil/Leucovorin（6 個月）');
+      if (!dmmr && stageII && !preoperativeChemo) labels.push('Capecitabine（6 個月）', 'Fluorouracil/Leucovorin（6 個月）');
       decision.regimens = uniqueRegimens(labels.map(label => regimenEntry(
         decisionPage,
         label,
         new RegExp(label.split('（')[0].replace(/[+]/g, '\\+'), 'i')
       )));
       decision.regimenTitle = '依 COL-' + (dmmr ? '13' : '4') + ' 分支對接的術後療程候選';
-      decision.regimenNote = '療程長度依 T／N 風險、術前已接受週期、神經毒性、年齡與共病調整；全程 perioperative treatment 通常不超過原頁規範。';
+      decision.regimenNote = preoperativeChemo
+        ? '這裡顯示的是接續方案，不是重新開始完整療程；剩餘週期須由術前給藥紀錄計算。'
+        : '療程長度依 T／N 風險、神經毒性、年齡與共病調整；實際處方仍須核對原頁。';
     }
 
     const pi3k = values('crc-extended-markers').some(item => /PIK3CA|PIK3R1|PTEN/i.test(item));
@@ -1097,6 +1153,7 @@
     if (postoperativeUnknown(path)) missing.push('直腸癌手術／術前治療情境');
     const nonoperative = /完全臨床反應／未手術/.test(path);
     const notOperated = /尚未完成手術/.test(path);
+    const localExcision = /經肛門局部切除/.test(path);
     const mmr = value('crc-mmr-msi');
     if (postoperativeUnknown(mmr)) missing.push('MMR／MSI');
     const required = (key, label) => {
@@ -1108,15 +1165,23 @@
     const pt = required('rectal-pt', '直腸癌病理 T 分期');
     const pn = required('rectal-pn', '直腸癌病理 N 分期');
     const margin = required('rectal-margin', '直腸癌切緣');
-    const crm = required('rectal-crm', '直腸癌環周切緣（CRM）');
+    const crm = localExcision ? value('rectal-crm') : required('rectal-crm', '直腸癌環周切緣（CRM）');
+    const stageConflict = localExcision ? '' : postoperativeStageConflict('rectal_cancer', stage, pt, pn);
+    if (stageConflict) missing.push(stageConflict);
     const dmmr = /dMMR|MSI-H/i.test(mmr);
     const highRiskValues = values('rectal-high-risk');
     const highRisk = highRiskValues.some(item => !/無上述特徵|待確認/.test(item));
     const nodePositive = /(?:p|yp)N[12]/i.test(pn);
-    const localRtRisk = /陽性|受威脅|close/i.test(margin + ' ' + crm) ||
-      /incomplete/i.test(value('rectal-mesorectal-grade'));
+    const marginRtRisk = /陽性|close/i.test(margin) && !/陰性/.test(margin);
+    const crmRtRisk = /陽性|受威脅|close/i.test(crm) && !/陰性|未受威脅/.test(crm);
+    const localRtRisk = marginRtRisk || crmRtRisk || /incomplete/i.test(value('rectal-mesorectal-grade'));
     const positiveLocalRisk = localRtRisk || highRisk;
-    const basis = [path, stage, pt, pn, mmr, margin, crm].filter(Boolean).join('、');
+    const differentiation = value('rectal-differentiation');
+    const mesorectalInvasionRaw = value('rectal-mesorectal-invasion-mm');
+    const mesorectalInvasion = Number(mesorectalInvasionRaw);
+    const basis = [path, stage, pt, pn, mmr, margin, crm,
+      differentiation, mesorectalInvasionRaw ? '進入直腸系膜 ' + mesorectalInvasionRaw + ' mm' : '',
+    ].filter(Boolean).join('、');
     const reviewItems = [];
     let decision = null;
 
@@ -1140,10 +1205,10 @@
       } else if (dmmr) {
         decision = {
           level: 'review',
-          headline: 'dMMR／MSI-H 應回到專屬免疫治療流程，不能直接套用 pMMR／MSS 的 REC-5',
+          headline: '已先手術的 dMMR／MSI-H 個案需多專科重審，不能把術前免疫治療路徑直接當成術後處方',
           basis,
-          items: ['請核對 REC-14 起的 dMMR／MSI-H 路徑及既往是否已接受 checkpoint inhibitor。'],
-          caveats: [],
+          items: ['REC-14 的 checkpoint inhibitor 是術前／根治性路徑；手術已完成時，應同時核對既往治療、REC-5 與 dMMR 專屬流程。'],
+          caveats: ['App 不會在缺乏直接術後路徑證據時，自動建議補做 checkpoint inhibitor。'],
         };
       } else if (/經肛門局部切除/.test(path)) {
         const adverseLocal = highRisk || /pT2/i.test(pt);
@@ -1168,17 +1233,30 @@
             caveats: [],
           };
         } else if (/pT3/i.test(pt) && /pN0/i.test(pn)) {
-          const selectObservation = value('rectal-location') === '上段直腸' && !positiveLocalRisk;
+          const upperRectum = value('rectal-location') === '上段直腸';
+          const observationDataComplete = !postoperativeUnknown(differentiation) &&
+            mesorectalInvasionRaw !== '' && Number.isFinite(mesorectalInvasion) && mesorectalInvasion >= 0;
+          const favorableDifferentiation = /高分化|中分化/.test(differentiation);
+          const selectObservation = upperRectum && observationDataComplete && favorableDifferentiation &&
+            mesorectalInvasion < 2 && !positiveLocalRisk;
+          const possibleButIncomplete = upperRectum && !positiveLocalRisk && !observationDataComplete;
+          if (possibleButIncomplete) {
+            reviewItems.push('若要考慮 pT3N0 上段直腸 observation，必須補齊分化程度與進入直腸系膜深度（須 <2 mm）。');
+          }
           decision = {
-            level: selectObservation ? 'consider' : 'recommended',
+            level: selectObservation ? 'consider' : possibleButIncomplete ? 'review' : 'recommended',
             headline: selectObservation
-              ? 'pT3 N0 上段直腸且目前未見高風險：可討論 observation，但尚需原頁條件'
-              : 'pT3 N0：應討論 FOLFOX／CAPEOX 與選擇性 long-course chemo/RT',
+              ? '符合 REC-5 的高度選擇性條件：可討論 observation'
+              : possibleButIncomplete
+                ? '可能接近 pT3 N0 上段直腸 observation 分支，但必要病理條件尚未齊全'
+                : 'pT3 N0：應討論 FOLFOX／CAPEOX 與選擇性 long-course chemo/RT',
             basis,
             items: selectObservation
-              ? ['REC-5 僅允許非常選擇性的上段直腸 pT3N0 觀察：需 well/moderately differentiated、進入 mesorectum <2 mm、且無淋巴／靜脈侵犯。']
-              : ['REC-5 列出 chemo/RT 與 FOLFOX／CAPEOX 的不同先後順序，也列 FOLFOX／CAPEOX alone。'],
-            caveats: selectObservation ? ['App 尚無法由目前欄位確認 mesorectal invasion <2 mm，必須開原頁與病理報告核對。'] : [],
+              ? ['已記錄上段直腸、高／中分化、進入 mesorectum <2 mm，且未辨識淋巴／靜脈侵犯或局部高風險。']
+              : possibleButIncomplete
+                ? ['未完成必要條件前，App 不會把 observation 顯示為可採用結論。']
+                : ['REC-5 列出 chemo/RT 與 FOLFOX／CAPEOX 的不同先後順序，也列 FOLFOX／CAPEOX alone。'],
+            caveats: selectObservation ? ['仍須由病理報告與多專科會議確認所有 REC-5 footnote x 條件。'] : [],
           };
         } else if (/pT4/i.test(pt) || nodePositive) {
           decision = {
@@ -1213,6 +1291,10 @@
     }
     if (localRtRisk && decision && !nonoperative) {
       reviewItems.push('切緣／CRM／直腸系膜品質提示局部復發風險：術後 RT 僅應高度選擇性使用，需多專科核對 REC-5 footnote w。');
+    }
+    const pi3k = values('crc-extended-markers').some(item => /PIK3CA|PIK3R1|PTEN/i.test(item));
+    if (pi3k && /^(?:II|III)/.test(stage)) {
+      reviewItems.push('已記錄 PI3K pathway alteration：REC-5／REC-14 建議術後恢復後評估 aspirin 100–162 mg/day、共 3 年（無禁忌時）；須核對出血風險與原頁。');
     }
 
     if (decision && ['recommended', 'consider'].includes(decision.level) && !dmmr) {

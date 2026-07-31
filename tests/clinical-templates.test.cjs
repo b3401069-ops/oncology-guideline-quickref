@@ -104,8 +104,8 @@ test('breast template includes structured postoperative decision fields', () => 
 test('lung, colon and rectal templates include postoperative decision fields', () => {
   const expected = {
     nsclc: ['nsclc-surgery-path', 'nsclc-path-stage', 'nsclc-pt', 'nsclc-pn', 'nsclc-margin', 'nsclc-high-risk', 'nsclc-cisplatin'],
-    colon_cancer: ['colon-surgery-path', 'colon-path-stage', 'colon-pt', 'colon-pn', 'colon-margin', 'colon-high-risk'],
-    rectal_cancer: ['rectal-surgery-path', 'rectal-path-stage', 'rectal-pt', 'rectal-pn', 'rectal-margin', 'rectal-crm'],
+    colon_cancer: ['colon-surgery-path', 'colon-neoadjuvant-regimen', 'colon-neoadjuvant-cycles', 'colon-path-stage', 'colon-pt', 'colon-pn', 'colon-margin', 'colon-high-risk'],
+    rectal_cancer: ['rectal-surgery-path', 'rectal-path-stage', 'rectal-pt', 'rectal-pn', 'rectal-margin', 'rectal-crm', 'rectal-differentiation', 'rectal-mesorectal-invasion-mm'],
   };
   for (const [cancerId, keys] of Object.entries(expected)) {
     const actual = new Set(templates.precisionForCancer(cancerId).map(field => field.key));

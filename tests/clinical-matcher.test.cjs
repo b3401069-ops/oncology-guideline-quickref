@@ -285,6 +285,7 @@ test('colon assessment distinguishes dMMR stage II observation from low-risk sta
     keyedField('base-treatment-setting', '治療階段／線別', '術後／鞏固'),
     keyedField('colon-surgery-path', '結腸癌手術／術前治療情境', '先手術'),
     keyedField('colon-margin', '結腸癌手術切緣', '陰性'),
+    keyedField('colon-nodes-examined', '結腸癌檢查淋巴結數', '15'),
     keyedField('colon-high-risk', '結腸癌 Stage II 高風險特徵', ['無上述特徵']),
   ];
   const dmmr = matcher.colonAdjuvantAssessment([], [
@@ -296,6 +297,16 @@ test('colon assessment distinguishes dMMR stage II observation from low-risk sta
   ]);
   assert.equal(dmmr.decision.level, 'omit');
   assert.match(dmmr.decision.headline, /觀察/);
+
+  const missingNodes = matcher.colonAdjuvantAssessment([], [
+    ...common.filter(item => item.sourceTemplateKey !== 'colon-nodes-examined'),
+    keyedField('colon-path-stage', '結腸癌術後病理分期', 'IIA'),
+    keyedField('colon-pt', '結腸癌病理 T 分期', 'pT3'),
+    keyedField('colon-pn', '結腸癌病理 N 分期', 'pN0'),
+    keyedField('crc-mmr-msi', 'MMR／MSI', 'pMMR／MSS'),
+  ]);
+  assert.equal(missingNodes.status, 'missing');
+  assert.ok(missingNodes.missing.some(item => /檢查淋巴結數/.test(item)));
 
   const document = fakeNccnDocument('Colon Cancer', [
     { page: 13, sectionCode: 'COL-4', title: 'ADJUVANT TREATMENT', options: [
@@ -319,7 +330,7 @@ test('rectal assessment avoids extra chemotherapy after completed TNT and maps u
   const base = [
     keyedField('base-treatment-setting', '治療階段／線別', '術後／鞏固'),
     keyedField('crc-mmr-msi', 'MMR／MSI', 'pMMR／MSS'),
-    keyedField('rectal-path-stage', '直腸癌術後病理分期', 'IIB'),
+    keyedField('rectal-path-stage', '直腸癌術後病理分期', 'IIA'),
     keyedField('rectal-pt', '直腸癌病理 T 分期', 'ypT3'),
     keyedField('rectal-pn', '直腸癌病理 N 分期', 'ypN0'),
     keyedField('rectal-margin', '直腸癌切緣', '陰性'),
@@ -338,7 +349,8 @@ test('rectal assessment avoids extra chemotherapy after completed TNT and maps u
     ] },
   ]);
   const upfront = matcher.rectalAdjuvantAssessment([document], [
-    ...base.map(item => item.sourceTemplateKey === 'rectal-pt' ? { ...item, value: 'pT4a' } : item)
+    ...base.map(item => item.sourceTemplateKey === 'rectal-path-stage' ? { ...item, value: 'IIB' } : item)
+      .map(item => item.sourceTemplateKey === 'rectal-pt' ? { ...item, value: 'pT4a' } : item)
       .map(item => item.sourceTemplateKey === 'rectal-pn' ? { ...item, value: 'pN0' } : item),
     keyedField('rectal-surgery-path', '直腸癌手術／術前治療情境', '先做經腹切除'),
     keyedField('rectal-high-risk', '直腸癌術後高風險特徵', ['無上述特徵']),
@@ -346,6 +358,104 @@ test('rectal assessment avoids extra chemotherapy after completed TNT and maps u
   assert.equal(upfront.decision.level, 'recommended');
   assert.ok(upfront.decision.regimens.some(item => item.option.label === 'FOLFOX'));
   assert.ok(upfront.decision.regimens.some(item => item.option.label === 'CAPEOX'));
+});
+
+test('NSCLC early-stage risk is a consider decision and inconsistent pathology blocks advice', () => {
+  const base = [
+    keyedField('base-treatment-setting', '治療階段／線別', '術後／鞏固'),
+    keyedField('nsclc-surgery-path', 'NSCLC 手術／術前治療情境', '先手術（未接受術前全身治療）'),
+    keyedField('nsclc-pt', 'NSCLC 病理 T 分期', 'pT2a'),
+    keyedField('nsclc-pn', 'NSCLC 病理 N 分期', 'pN0'),
+    keyedField('nsclc-margin', 'NSCLC 手術切緣', 'R0（陰性）'),
+  ];
+  const early = matcher.nsclcAdjuvantAssessment([], [
+    ...base,
+    keyedField('nsclc-path-stage', 'NSCLC 術後病理分期', 'IB'),
+    keyedField('nsclc-high-risk', 'NSCLC 術後高風險特徵', ['楔狀切除']),
+  ]);
+  assert.equal(early.decision.level, 'consider');
+  assert.match(early.decision.caveats.join(' '), /單一高風險特徵/);
+
+  const inconsistent = matcher.nsclcAdjuvantAssessment([], [
+    ...base,
+    keyedField('nsclc-path-stage', 'NSCLC 術後病理分期', 'IIB'),
+  ]);
+  assert.equal(inconsistent.status, 'missing');
+  assert.equal(inconsistent.decision, null);
+  assert.ok(inconsistent.missing.some(item => /pT／pN 組合不一致/.test(item)));
+});
+
+test('colon neoadjuvant chemotherapy requires cycle records and only offers continuation', () => {
+  const document = fakeNccnDocument('Colon Cancer', [
+    { page: 13, sectionCode: 'COL-4', title: 'ADJUVANT TREATMENT', options: [
+      { label: 'CAPEOX (3 mo)', modality: 'systemic' },
+      { label: 'FOLFOX (3–6 mo)', modality: 'systemic' },
+    ] },
+  ]);
+  const base = [
+    keyedField('base-treatment-setting', '治療階段／線別', '術後／鞏固'),
+    keyedField('colon-surgery-path', '結腸癌手術／術前治療情境', '術前 FOLFOX／CAPEOX 後手術'),
+    keyedField('colon-path-stage', '結腸癌術後病理分期', 'IIIB'),
+    keyedField('colon-pt', '結腸癌病理 T 分期', 'ypT3'),
+    keyedField('colon-pn', '結腸癌病理 N 分期', 'ypN1'),
+    keyedField('colon-margin', '結腸癌手術切緣', '陰性'),
+    keyedField('crc-mmr-msi', 'MMR／MSI', 'pMMR／MSS'),
+  ];
+  const incomplete = matcher.colonAdjuvantAssessment([document], base);
+  assert.equal(incomplete.status, 'missing');
+  assert.ok(incomplete.missing.some(item => /術前實際化療方案/.test(item)));
+  assert.ok(incomplete.missing.some(item => /週期數/.test(item)));
+
+  const complete = matcher.colonAdjuvantAssessment([document], [
+    ...base,
+    keyedField('colon-neoadjuvant-regimen', '結腸癌術前化療方案', 'FOLFOX'),
+    keyedField('colon-neoadjuvant-cycles', '結腸癌術前化療已完成週期數', '4'),
+  ]);
+  assert.equal(complete.status, 'ready');
+  assert.match(complete.decision.headline, /不重新開始完整術後療程/);
+  assert.ok(complete.decision.regimens.some(item => /FOLFOX.*補足全程/.test(item.option.label)));
+  assert.ok(!complete.decision.regimens.some(item => /^CAPEOX/.test(item.option.label)));
+});
+
+test('rectal local excision accepts pNX and pT3N0 observation requires complete pathology criteria', () => {
+  const local = matcher.rectalAdjuvantAssessment([], [
+    keyedField('base-treatment-setting', '治療階段／線別', '術後／鞏固'),
+    keyedField('rectal-surgery-path', '直腸癌手術／術前治療情境', '經肛門局部切除'),
+    keyedField('rectal-path-stage', '直腸癌術後病理分期', 'I'),
+    keyedField('rectal-pt', '直腸癌病理 T 分期', 'pT1'),
+    keyedField('rectal-pn', '直腸癌病理 N 分期', 'pNX'),
+    keyedField('rectal-margin', '直腸癌切緣', '陰性'),
+    keyedField('crc-mmr-msi', 'MMR／MSI', 'pMMR／MSS'),
+    keyedField('rectal-high-risk', '直腸癌術後高風險特徵', ['無上述特徵']),
+  ]);
+  assert.equal(local.status, 'ready');
+  assert.equal(local.decision.level, 'omit');
+
+  const pt3 = [
+    keyedField('base-treatment-setting', '治療階段／線別', '術後／鞏固'),
+    keyedField('rectal-surgery-path', '直腸癌手術／術前治療情境', '先做經腹切除'),
+    keyedField('rectal-path-stage', '直腸癌術後病理分期', 'IIA'),
+    keyedField('rectal-pt', '直腸癌病理 T 分期', 'pT3'),
+    keyedField('rectal-pn', '直腸癌病理 N 分期', 'pN0'),
+    keyedField('rectal-margin', '直腸癌切緣', '陰性'),
+    keyedField('rectal-crm', '直腸癌環周切緣（CRM）', '陰性／未受威脅'),
+    keyedField('crc-mmr-msi', 'MMR／MSI', 'pMMR／MSS'),
+    keyedField('rectal-location', '直腸腫瘤位置', '上段直腸'),
+    keyedField('rectal-high-risk', '直腸癌術後高風險特徵', ['無上述特徵']),
+  ];
+  const incomplete = matcher.rectalAdjuvantAssessment([], pt3);
+  assert.equal(incomplete.decision.level, 'review');
+  assert.match(incomplete.decision.headline, /必要病理條件尚未齊全/);
+
+  const eligible = matcher.rectalAdjuvantAssessment([], [
+    ...pt3,
+    keyedField('rectal-differentiation', '直腸癌分化程度', '中分化'),
+    keyedField('rectal-mesorectal-invasion-mm', 'pT3 進入直腸系膜深度（mm）', '1.5'),
+    keyedField('crc-extended-markers', 'CRC 其他可作用標記', ['PIK3CA exon 9／20 mutation']),
+  ]);
+  assert.equal(eligible.decision.level, 'consider');
+  assert.match(eligible.decision.headline, /高度選擇性條件/);
+  assert.ok(eligible.reviewItems.some(item => item.includes('aspirin 100–162 mg/day')));
 });
 
 test('generic adjuvant dispatcher activates supported cancers only', () => {
@@ -375,7 +485,7 @@ test('NSCLC cisplatin-ineligible branch excludes cisplatin and stage IB EGFR bra
     keyedField('nsclc-histology', 'NSCLC 組織型', '腺癌'),
   ];
   const chemotherapy = matcher.nsclcAdjuvantAssessment([document], [
-    ...common,
+    ...common.map(item => item.sourceTemplateKey === 'nsclc-pt' ? { ...item, value: 'pT3' } : item),
     keyedField('nsclc-path-stage', 'NSCLC 術後病理分期', 'IIB'),
     keyedField('nsclc-cisplatin', 'Cisplatin 適用性', '不適合 cisplatin'),
   ]);
