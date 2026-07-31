@@ -233,3 +233,183 @@ test('connects a pT1bN0 triple-negative decision to stage I BINV-M regimen candi
   ]);
   assert.ok(result.decision.regimens.every(item => item.page.page === 73));
 });
+
+const fakeNccnDocument = (title, pages) => ({ title, storageKey: title + '-pdf', nccnStructure: { treatmentPages: pages } });
+
+test('NSCLC postoperative assessment recommends stage IIB platinum doublet and ALK adjuvant therapy', () => {
+  const fields = [
+    keyedField('base-treatment-setting', '治療階段／線別', '術後／鞏固'),
+    keyedField('nsclc-surgery-path', 'NSCLC 手術／術前治療情境', '先手術（未接受術前全身治療）'),
+    keyedField('nsclc-path-stage', 'NSCLC 術後病理分期', 'IIB'),
+    keyedField('nsclc-pt', 'NSCLC 病理 T 分期', 'pT3'),
+    keyedField('nsclc-pn', 'NSCLC 病理 N 分期', 'pN0'),
+    keyedField('nsclc-margin', 'NSCLC 手術切緣', 'R0（陰性）'),
+    keyedField('nsclc-histology', 'NSCLC 組織型', '腺癌'),
+    keyedField('nsclc-cisplatin', 'Cisplatin 適用性', '適合 cisplatin'),
+    keyedField('nsclc-tumor-size-cm', 'NSCLC 病理腫瘤最大徑（cm）', '4.2'),
+    keyedField('nsclc-drivers', 'NSCLC 驅動基因／可標靶變異', ['ALK fusion']),
+  ];
+  const document = fakeNccnDocument('Non-Small Cell Lung Cancer', [
+    { page: 92, sectionCode: 'NSCL-E', title: 'Adjuvant Chemotherapy', options: [
+      { label: 'Cisplatin/Pemetrexed Preferred (squamous)', modality: 'systemic' },
+      { label: 'Cisplatin/Vinorelbine', modality: 'systemic' },
+    ] },
+    { page: 93, sectionCode: 'NSCL-E', title: 'Other Adjuvant Systemic Therapy', options: [
+      { label: 'Alectinib (category 1)', modality: 'systemic' },
+    ] },
+  ]);
+  const result = matcher.nsclcAdjuvantAssessment([document], fields);
+  assert.equal(result.decision.level, 'recommended');
+  assert.match(result.decision.headline, /含鉑雙藥/);
+  assert.ok(result.decision.regimens.some(item => /Cisplatin\/Pemetrexed/.test(item.option.label)));
+  assert.ok(result.decision.regimens.some(item => /Alectinib/.test(item.option.label)));
+});
+
+test('NSCLC assessment does not repeat adjuvant chemotherapy after neoadjuvant chemotherapy', () => {
+  const fields = [
+    keyedField('base-treatment-setting', '治療階段／線別', '術後／鞏固'),
+    keyedField('nsclc-surgery-path', 'NSCLC 手術／術前治療情境', '術前化療後手術'),
+    keyedField('nsclc-path-stage', 'NSCLC 術後病理分期', 'IIIA'),
+    keyedField('nsclc-pt', 'NSCLC 病理 T 分期', 'ypT2'),
+    keyedField('nsclc-pn', 'NSCLC 病理 N 分期', 'ypN1'),
+    keyedField('nsclc-margin', 'NSCLC 手術切緣', 'R0（陰性）'),
+  ];
+  const result = matcher.nsclcAdjuvantAssessment([], fields);
+  assert.equal(result.decision.level, 'omit');
+  assert.match(result.decision.headline, /不應再另加/);
+  assert.equal(result.decision.regimens, undefined);
+});
+
+test('colon assessment distinguishes dMMR stage II observation from low-risk stage III chemotherapy', () => {
+  const common = [
+    keyedField('base-treatment-setting', '治療階段／線別', '術後／鞏固'),
+    keyedField('colon-surgery-path', '結腸癌手術／術前治療情境', '先手術'),
+    keyedField('colon-margin', '結腸癌手術切緣', '陰性'),
+    keyedField('colon-high-risk', '結腸癌 Stage II 高風險特徵', ['無上述特徵']),
+  ];
+  const dmmr = matcher.colonAdjuvantAssessment([], [
+    ...common,
+    keyedField('colon-path-stage', '結腸癌術後病理分期', 'IIA'),
+    keyedField('colon-pt', '結腸癌病理 T 分期', 'pT3'),
+    keyedField('colon-pn', '結腸癌病理 N 分期', 'pN0'),
+    keyedField('crc-mmr-msi', 'MMR／MSI', 'dMMR／MSI-H'),
+  ]);
+  assert.equal(dmmr.decision.level, 'omit');
+  assert.match(dmmr.decision.headline, /觀察/);
+
+  const document = fakeNccnDocument('Colon Cancer', [
+    { page: 13, sectionCode: 'COL-4', title: 'ADJUVANT TREATMENT', options: [
+      { label: 'CAPEOX (3 mo)', modality: 'systemic' },
+      { label: 'FOLFOX (3–6 mo)', modality: 'systemic' },
+    ] },
+  ]);
+  const stageIII = matcher.colonAdjuvantAssessment([document], [
+    ...common,
+    keyedField('colon-path-stage', '結腸癌術後病理分期', 'IIIB'),
+    keyedField('colon-pt', '結腸癌病理 T 分期', 'pT3'),
+    keyedField('colon-pn', '結腸癌病理 N 分期', 'pN1b'),
+    keyedField('crc-mmr-msi', 'MMR／MSI', 'pMMR／MSS'),
+  ]);
+  assert.equal(stageIII.decision.level, 'recommended');
+  assert.match(stageIII.decision.headline, /低風險 Stage III/);
+  assert.ok(stageIII.decision.regimens.some(item => /CAPEOX（3 個月）/.test(item.option.label)));
+});
+
+test('rectal assessment avoids extra chemotherapy after completed TNT and maps upfront pT4 to REC-5 regimens', () => {
+  const base = [
+    keyedField('base-treatment-setting', '治療階段／線別', '術後／鞏固'),
+    keyedField('crc-mmr-msi', 'MMR／MSI', 'pMMR／MSS'),
+    keyedField('rectal-path-stage', '直腸癌術後病理分期', 'IIB'),
+    keyedField('rectal-pt', '直腸癌病理 T 分期', 'ypT3'),
+    keyedField('rectal-pn', '直腸癌病理 N 分期', 'ypN0'),
+    keyedField('rectal-margin', '直腸癌切緣', '陰性'),
+    keyedField('rectal-crm', '直腸癌環周切緣（CRM）', '陰性／未受威脅'),
+  ];
+  const tnt = matcher.rectalAdjuvantAssessment([], [
+    ...base,
+    keyedField('rectal-surgery-path', '直腸癌手術／術前治療情境', '完成 TNT 後手術'),
+  ]);
+  assert.equal(tnt.decision.level, 'omit');
+  assert.match(tnt.decision.headline, /不應自動再加/);
+
+  const document = fakeNccnDocument('Rectal Cancer', [
+    { page: 16, sectionCode: 'REC-5', title: 'ADJUVANT TREATMENT', options: [
+      { label: 'FOLFOX or CAPEOX', modality: 'systemic' },
+    ] },
+  ]);
+  const upfront = matcher.rectalAdjuvantAssessment([document], [
+    ...base.map(item => item.sourceTemplateKey === 'rectal-pt' ? { ...item, value: 'pT4a' } : item)
+      .map(item => item.sourceTemplateKey === 'rectal-pn' ? { ...item, value: 'pN0' } : item),
+    keyedField('rectal-surgery-path', '直腸癌手術／術前治療情境', '先做經腹切除'),
+    keyedField('rectal-high-risk', '直腸癌術後高風險特徵', ['無上述特徵']),
+  ]);
+  assert.equal(upfront.decision.level, 'recommended');
+  assert.ok(upfront.decision.regimens.some(item => item.option.label === 'FOLFOX'));
+  assert.ok(upfront.decision.regimens.some(item => item.option.label === 'CAPEOX'));
+});
+
+test('generic adjuvant dispatcher activates supported cancers only', () => {
+  const fields = [keyedField('base-treatment-setting', '治療階段／線別', '術後／鞏固')];
+  assert.equal(matcher.adjuvantAssessment('pancreatic_cancer', [], fields).active, false);
+  assert.equal(matcher.adjuvantAssessment('nsclc', [], fields).active, true);
+});
+
+
+test('NSCLC cisplatin-ineligible branch excludes cisplatin and stage IB EGFR branch still offers osimertinib', () => {
+  const document = fakeNccnDocument('Non-Small Cell Lung Cancer', [
+    { page: 92, sectionCode: 'NSCL-E', title: 'Adjuvant Chemotherapy', options: [
+      { label: 'Cisplatin/Pemetrexed Preferred (squamous)', modality: 'systemic' },
+      { label: 'Carboplatin/Pemetrexed (nonsquamous)', modality: 'systemic' },
+      { label: 'Carboplatin/Paclitaxel', modality: 'systemic' },
+    ] },
+    { page: 93, sectionCode: 'NSCL-E', title: 'Other Adjuvant Systemic Therapy', options: [
+      { label: 'Osimertinib', modality: 'systemic' },
+    ] },
+  ]);
+  const common = [
+    keyedField('base-treatment-setting', '治療階段／線別', '術後／鞏固'),
+    keyedField('nsclc-surgery-path', 'NSCLC 手術／術前治療情境', '先手術（未接受術前全身治療）'),
+    keyedField('nsclc-pt', 'NSCLC 病理 T 分期', 'pT2a'),
+    keyedField('nsclc-pn', 'NSCLC 病理 N 分期', 'pN0'),
+    keyedField('nsclc-margin', 'NSCLC 手術切緣', 'R0（陰性）'),
+    keyedField('nsclc-histology', 'NSCLC 組織型', '腺癌'),
+  ];
+  const chemotherapy = matcher.nsclcAdjuvantAssessment([document], [
+    ...common,
+    keyedField('nsclc-path-stage', 'NSCLC 術後病理分期', 'IIB'),
+    keyedField('nsclc-cisplatin', 'Cisplatin 適用性', '不適合 cisplatin'),
+  ]);
+  assert.ok(chemotherapy.decision.regimens.some(item => /Carboplatin/.test(item.option.label)));
+  assert.ok(!chemotherapy.decision.regimens.some(item => /^Cisplatin/.test(item.option.label)));
+
+  const targeted = matcher.nsclcAdjuvantAssessment([document], [
+    ...common,
+    keyedField('nsclc-path-stage', 'NSCLC 術後病理分期', 'IB'),
+    keyedField('nsclc-high-risk', 'NSCLC 術後高風險特徵', ['無上述特徵']),
+    keyedField('nsclc-drivers', 'NSCLC 驅動基因／可標靶變異', ['EGFR exon 19 deletion']),
+  ]);
+  assert.equal(targeted.decision.level, 'recommended');
+  assert.match(targeted.decision.headline, /標靶治療資格/);
+  assert.ok(targeted.decision.regimens.some(item => /Osimertinib/.test(item.option.label)));
+});
+
+
+test('postoperative source pages exclude the opposite molecular branch', () => {
+  const pages = [
+    { page: 13, sectionCode: 'COL-4', title: 'ADJUVANT TREATMENT', options: [] },
+    { page: 17, sectionCode: 'COL-8', title: 'SURVEILLANCE', options: [] },
+    { page: 22, sectionCode: 'COL-13', title: 'ADJUVANT TREATMENT', options: [] },
+  ];
+  const fields = [
+    keyedField('base-treatment-setting', '治療階段／線別', '術後／鞏固'),
+    keyedField('colon-surgery-path', '結腸癌手術／術前治療情境', '先手術'),
+    keyedField('colon-path-stage', '結腸癌術後病理分期', 'IIA'),
+    keyedField('colon-pt', '結腸癌病理 T 分期', 'pT3'),
+    keyedField('colon-pn', '結腸癌病理 N 分期', 'pN0'),
+    keyedField('colon-margin', '結腸癌手術切緣', '陰性'),
+    keyedField('colon-high-risk', '結腸癌 Stage II 高風險特徵', ['無上述特徵']),
+    keyedField('crc-mmr-msi', 'MMR／MSI', 'pMMR／MSS'),
+  ];
+  const result = matcher.colonAdjuvantAssessment([fakeNccnDocument('Colon Cancer', pages)], fields);
+  assert.deepEqual(result.pages.map(item => item.page.sectionCode), ['COL-4', 'COL-8']);
+});

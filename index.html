@@ -2137,9 +2137,7 @@
       const parsedNccnDocs = currentDocs.filter(isUsableNccnStructure);
       const nccnMatches = nccnTreatmentMatches(parsedNccnDocs, queryPrecisionFields);
       const nccnDiagnosis = nccnTreatmentDiagnosis(parsedNccnDocs, queryPrecisionFields);
-      const breastAdjuvant = card.id === 'breast_cancer'
-        ? window.CLINICAL_MATCHER.breastAdjuvantAssessment(parsedNccnDocs, queryPrecisionFields)
-        : { active: false, status: 'inactive', missing: [], reviewItems: [], pages: [] };
+      const adjuvant = window.CLINICAL_MATCHER.adjuvantAssessment(card.id, parsedNccnDocs, queryPrecisionFields);
       const nccnDiagnosticFields = nccnDiagnosis.suggestedFields || [];
       const nccnDiagnosisFeatureLabels = nccnDiagnosis.positiveFeatures.map(item => window.CLINICAL_MATCHER.featureLabel(item.key));
       const nccnDiagnosisUnmatchedLabels = nccnDiagnosis.unmatchedFeatures.map(item => window.CLINICAL_MATCHER.featureLabel(item.key));
@@ -2155,7 +2153,13 @@
       const nhiAll = [...nhiNotes].map(n => ({ n, st: nhiConditionState(n.condition, pfMap) }));
       const nhiVisible = nhiAll.sort((a, b) => nhiConditionRank(a.st) - nhiConditionRank(b.st));
       const generalNhiEntries = nhiVisible.filter(window.NHI_SELECTOR.isGeneralNote);
-      const treatmentGroups = mergeNccnTreatmentGroups(groupNhiTreatments(nhiVisible), nccnMatches);
+      const adjuvantNccnMatches = (adjuvant.decision?.regimens || []).map(({ doc, page, option }) => ({
+        doc,
+        page: { ...page, options: [option] },
+        reasons: ['adjuvant'],
+        features: window.CLINICAL_MATCHER.extractClinicalFeatures(queryPrecisionFields),
+      }));
+      const treatmentGroups = mergeNccnTreatmentGroups(groupNhiTreatments(nhiVisible), [...nccnMatches, ...adjuvantNccnMatches]);
       const selectedTreatmentKey = sessionStorage.getItem(nhiTreatmentSessionKey(card.id));
       const selectedTreatment = treatmentGroups.find(group => group.key === selectedTreatmentKey);
       if (selectedTreatmentKey && !selectedTreatment) sessionStorage.removeItem(nhiTreatmentSessionKey(card.id));
@@ -2256,31 +2260,31 @@
             </div>
           ` : ''}
 
-          ${breastAdjuvant.active ? `
-            <div class="card section" style="border-color:${breastAdjuvant.status === 'missing' ? 'var(--orange-200)' : 'var(--primary-200)'};background:${breastAdjuvant.status === 'missing' ? 'var(--orange-50)' : 'var(--primary-50)'}">
-              <h2 class="section-title" style="color:${breastAdjuvant.status === 'missing' ? 'var(--orange-700)' : 'var(--primary-800)'}">乳癌術後輔助治療評估</h2>
-              <p class="font-semibold" style="color:${breastAdjuvant.status === 'missing' ? 'var(--orange-700)' : 'var(--primary-800)'}">${esc(breastAdjuvant.message)}</p>
-              ${breastAdjuvant.branchLabel ? `<p class="text-sm text-gray-700 mt-2">目前路徑：${esc(breastAdjuvant.branchLabel)}</p>` : ''}
-              ${breastAdjuvant.decision ? `<div class="mt-3" style="background:#fff;border:1px solid ${breastAdjuvant.decision.level === 'recommended' ? '#86efac' : breastAdjuvant.decision.level === 'omit' ? '#cbd5e1' : '#fcd34d'};border-radius:8px;padding:12px">
-                <p class="text-xs font-semibold text-gray-500">依本次 pT／pN 命中的個案分支</p>
-                <p class="font-semibold mt-1" style="color:${breastAdjuvant.decision.level === 'recommended' ? '#166534' : breastAdjuvant.decision.level === 'omit' ? '#334155' : '#92400e'}">${esc(breastAdjuvant.decision.headline)}</p>
-                <p class="text-sm text-gray-700 mt-1">判讀依據：${esc(breastAdjuvant.decision.basis)}</p>
-                ${breastAdjuvant.decision.items.length ? `<ul class="text-sm mt-2 space-y-1">${breastAdjuvant.decision.items.map(item => `<li>• ${esc(item)}</li>`).join('')}</ul>` : ''}
-                ${breastAdjuvant.decision.regimens?.length ? `<div class="mt-3" style="border-top:1px solid #e2e8f0;padding-top:10px">
-                  <p class="text-sm font-semibold text-gray-800">${esc(breastAdjuvant.decision.regimenTitle)}</p>
-                  <div class="mt-2" style="display:grid;gap:7px">${breastAdjuvant.decision.regimens.map(({ doc, page, option }) => {
+          ${adjuvant.active ? `
+            <div class="card section" style="border-color:${adjuvant.status === 'missing' ? 'var(--orange-200)' : 'var(--primary-200)'};background:${adjuvant.status === 'missing' ? 'var(--orange-50)' : 'var(--primary-50)'}">
+              <h2 class="section-title" style="color:${adjuvant.status === 'missing' ? 'var(--orange-700)' : 'var(--primary-800)'}">${esc(adjuvant.title || '術後輔助治療評估')}</h2>
+              <p class="font-semibold" style="color:${adjuvant.status === 'missing' ? 'var(--orange-700)' : 'var(--primary-800)'}">${esc(adjuvant.message)}</p>
+              ${adjuvant.branchLabel ? `<p class="text-sm text-gray-700 mt-2">目前路徑：${esc(adjuvant.branchLabel)}</p>` : ''}
+              ${adjuvant.decision ? `<div class="mt-3" style="background:#fff;border:1px solid ${adjuvant.decision.level === 'recommended' ? '#86efac' : adjuvant.decision.level === 'omit' ? '#cbd5e1' : '#fcd34d'};border-radius:8px;padding:12px">
+                <p class="text-xs font-semibold text-gray-500">${esc(adjuvant.decisionLabel || '依本次資料命中的個案分支')}</p>
+                <p class="font-semibold mt-1" style="color:${adjuvant.decision.level === 'recommended' ? '#166534' : adjuvant.decision.level === 'omit' ? '#334155' : '#92400e'}">${esc(adjuvant.decision.headline)}</p>
+                <p class="text-sm text-gray-700 mt-1">判讀依據：${esc(adjuvant.decision.basis)}</p>
+                ${adjuvant.decision.items.length ? `<ul class="text-sm mt-2 space-y-1">${adjuvant.decision.items.map(item => `<li>• ${esc(item)}</li>`).join('')}</ul>` : ''}
+                ${adjuvant.decision.regimens?.length ? `<div class="mt-3" style="border-top:1px solid #e2e8f0;padding-top:10px">
+                  <p class="text-sm font-semibold text-gray-800">${esc(adjuvant.decision.regimenTitle)}</p>
+                  <div class="mt-2" style="display:grid;gap:7px">${adjuvant.decision.regimens.map(({ doc, page, option }) => {
                     const label = typeof option === 'string' ? option : option.label;
-                    return doc.storageKey ? `<button type="button" class="btn btn-ghost btn-sm" style="width:100%;text-align:left;white-space:normal" onclick="openPdf('${jsStr(doc.storageKey)}', ${safePdfPage(page.page)})">${esc(label)} <span class="text-xs text-blue-700">· BINV-M p.${safePdfPage(page.page)}</span></button>` : `<div class="text-sm">${esc(label)}</div>`;
+                    return doc.storageKey ? `<button type="button" class="btn btn-ghost btn-sm" style="width:100%;text-align:left;white-space:normal" onclick="openPdf('${jsStr(doc.storageKey)}', ${safePdfPage(page.page)})">${esc(label)} <span class="text-xs text-blue-700">· ${esc(page.sectionCode || 'NCCN')} p.${safePdfPage(page.page)}</span></button>` : `<div class="text-sm">${esc(label)}</div>`;
                   }).join('')}</div>
-                  <p class="text-xs text-gray-500 mt-2">${esc(breastAdjuvant.decision.regimenNote)}</p>
+                  <p class="text-xs text-gray-500 mt-2">${esc(adjuvant.decision.regimenNote)}</p>
                 </div>` : ''}
-                ${breastAdjuvant.decision.caveats.length ? `<div class="text-xs mt-2" style="color:#92400e">${breastAdjuvant.decision.caveats.map(item => `<p>⚠ ${esc(item)}</p>`).join('')}</div>` : ''}
+                ${adjuvant.decision.caveats.length ? `<div class="text-xs mt-2" style="color:#92400e">${adjuvant.decision.caveats.map(item => `<p>⚠ ${esc(item)}</p>`).join('')}</div>` : ''}
               </div>` : ''}
-              ${breastAdjuvant.missing.length ? `<div class="mt-3"><p class="text-sm font-semibold text-gray-700">需要補充</p><ul class="text-sm mt-1 space-y-1">${breastAdjuvant.missing.map(label => `<li>• ${esc(label)}</li>`).join('')}</ul></div>` : ''}
-              ${breastAdjuvant.reviewItems.length ? `<div class="mt-3"><p class="text-sm font-semibold text-gray-700">仍需核對</p><ul class="text-sm mt-1 space-y-1">${breastAdjuvant.reviewItems.map(item => `<li>• ${esc(item)}</li>`).join('')}</ul></div>` : ''}
-              ${breastAdjuvant.pages.length ? `<div class="mt-3"><p class="text-sm font-semibold text-gray-700">對應 NCCN 決策頁</p><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${breastAdjuvant.pages.map(({ doc, page }) => doc.storageKey ? `<button type="button" class="btn btn-ghost btn-sm" style="width:auto" onclick="openPdf('${jsStr(doc.storageKey)}', ${safePdfPage(page.page)})">${esc(page.sectionCode)} · PDF p.${safePdfPage(page.page)}</button>` : `<span class="tag">${esc(page.sectionCode)} · PDF p.${safePdfPage(page.page)}</span>`).join('')}</div></div>` : ''}
-              ${breastAdjuvant.supportingPages?.length ? `<div class="mt-3"><p class="text-sm font-semibold text-gray-700">相關術前／術後療程表</p><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${breastAdjuvant.supportingPages.map(({ doc, page }) => doc.storageKey ? `<button type="button" class="btn btn-ghost btn-sm" style="width:auto" onclick="openPdf('${jsStr(doc.storageKey)}', ${safePdfPage(page.page)})">BINV-M · PDF p.${safePdfPage(page.page)}</button>` : `<span class="tag">BINV-M · PDF p.${safePdfPage(page.page)}</span>`).join('')}</div></div>` : ''}
-              ${breastAdjuvant.status === 'missing' ? `<button type="button" class="btn btn-secondary btn-sm mt-3" onclick="navigate('/cancer/${jsStr(card.id)}')">補填術後資料</button>` : ''}
+              ${adjuvant.missing.length ? `<div class="mt-3"><p class="text-sm font-semibold text-gray-700">需要補充</p><ul class="text-sm mt-1 space-y-1">${adjuvant.missing.map(label => `<li>• ${esc(label)}</li>`).join('')}</ul></div>` : ''}
+              ${adjuvant.reviewItems.length ? `<div class="mt-3"><p class="text-sm font-semibold text-gray-700">仍需核對</p><ul class="text-sm mt-1 space-y-1">${adjuvant.reviewItems.map(item => `<li>• ${esc(item)}</li>`).join('')}</ul></div>` : ''}
+              ${adjuvant.pages.length ? `<div class="mt-3"><p class="text-sm font-semibold text-gray-700">對應 NCCN 決策頁</p><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${adjuvant.pages.map(({ doc, page }) => doc.storageKey ? `<button type="button" class="btn btn-ghost btn-sm" style="width:auto" onclick="openPdf('${jsStr(doc.storageKey)}', ${safePdfPage(page.page)})">${esc(page.sectionCode)} · PDF p.${safePdfPage(page.page)}</button>` : `<span class="tag">${esc(page.sectionCode)} · PDF p.${safePdfPage(page.page)}</span>`).join('')}</div></div>` : ''}
+              ${adjuvant.supportingPages?.length ? `<div class="mt-3"><p class="text-sm font-semibold text-gray-700">相關術前／術後療程表</p><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${adjuvant.supportingPages.map(({ doc, page }) => doc.storageKey ? `<button type="button" class="btn btn-ghost btn-sm" style="width:auto" onclick="openPdf('${jsStr(doc.storageKey)}', ${safePdfPage(page.page)})">${esc(page.sectionCode || 'NCCN')} · PDF p.${safePdfPage(page.page)}</button>` : `<span class="tag">${esc(page.sectionCode || 'NCCN')} · PDF p.${safePdfPage(page.page)}</span>`).join('')}</div></div>` : ''}
+              ${adjuvant.status === 'missing' ? `<button type="button" class="btn btn-secondary btn-sm mt-3" onclick="navigate('/cancer/${jsStr(card.id)}')">補填術後資料</button>` : ''}
               <p class="text-xs text-gray-500 mt-3">此區用來定位決策路徑與缺少資料，不取代原始指引、病理報告與醫病共同決策。</p>
             </div>
           ` : ''}
@@ -2459,22 +2463,22 @@
           lines.push('', '精準化資訊：');
           filledPf.forEach(f => lines.push('- ' + f.label + '：' + pfValueText(f)));
         }
-        if (breastAdjuvant.active) {
-          lines.push('', '乳癌術後輔助治療評估：');
-          lines.push('- ' + breastAdjuvant.message);
-          if (breastAdjuvant.branchLabel) lines.push('- 目前路徑：' + breastAdjuvant.branchLabel);
-          if (breastAdjuvant.decision) {
-            lines.push('- 個案分支：' + breastAdjuvant.decision.headline);
-            lines.push('- 判讀依據：' + breastAdjuvant.decision.basis);
-            breastAdjuvant.decision.items.forEach(item => lines.push('- 治療判讀：' + item));
-            (breastAdjuvant.decision.regimens || []).forEach(({ page, option }) => lines.push('- 處方候選：' + (typeof option === 'string' ? option : option.label) + '（BINV-M PDF p.' + page.page + '）'));
-            if (breastAdjuvant.decision.regimenNote) lines.push('- 處方說明：' + breastAdjuvant.decision.regimenNote);
-            breastAdjuvant.decision.caveats.forEach(item => lines.push('- 注意：' + item));
+        if (adjuvant.active) {
+          lines.push('', (adjuvant.title || '術後輔助治療評估') + '：');
+          lines.push('- ' + adjuvant.message);
+          if (adjuvant.branchLabel) lines.push('- 目前路徑：' + adjuvant.branchLabel);
+          if (adjuvant.decision) {
+            lines.push('- 個案分支：' + adjuvant.decision.headline);
+            lines.push('- 判讀依據：' + adjuvant.decision.basis);
+            adjuvant.decision.items.forEach(item => lines.push('- 治療判讀：' + item));
+            (adjuvant.decision.regimens || []).forEach(({ page, option }) => lines.push('- 處方候選：' + (typeof option === 'string' ? option : option.label) + '（' + (page.sectionCode || 'NCCN') + ' PDF p.' + page.page + '）'));
+            if (adjuvant.decision.regimenNote) lines.push('- 處方說明：' + adjuvant.decision.regimenNote);
+            adjuvant.decision.caveats.forEach(item => lines.push('- 注意：' + item));
           }
-          breastAdjuvant.missing.forEach(item => lines.push('- 需要補充：' + item));
-          breastAdjuvant.reviewItems.forEach(item => lines.push('- 仍需核對：' + item));
-          breastAdjuvant.pages.forEach(({ page }) => lines.push('- 對應頁：' + page.sectionCode + '（PDF p.' + page.page + '）'));
-          (breastAdjuvant.supportingPages || []).forEach(({ page }) => lines.push('- 療程表：BINV-M（PDF p.' + page.page + '）'));
+          adjuvant.missing.forEach(item => lines.push('- 需要補充：' + item));
+          adjuvant.reviewItems.forEach(item => lines.push('- 仍需核對：' + item));
+          adjuvant.pages.forEach(({ page }) => lines.push('- 對應頁：' + page.sectionCode + '（PDF p.' + page.page + '）'));
+          (adjuvant.supportingPages || []).forEach(({ page }) => lines.push('- 療程表：' + (page.sectionCode || 'NCCN') + '（PDF p.' + page.page + '）'));
         }
         lines.push('', '健保給付：');
         if (selectedTreatment) {

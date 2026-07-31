@@ -111,15 +111,24 @@ test('extracts unbulleted breast adjuvant decision branches instead of histology
   assert.ok(options.some(option => /^Adjuvant chemotherapy/i.test(option.label) && /category 1/i.test(option.label)));
   assert.ok(!options.some(option => option.label === 'Ductal/NST'));
 });
-test('limits schema 8 reparse to breast guidelines while preserving schema 7 indexes elsewhere', () => {
-  assert.equal(parser.isCurrentStructure({ title: 'Breast Cancer', nccnStructure: { schemaVersion: 7 } }), false);
-  assert.equal(parser.isCurrentStructure({ title: 'Hepatocellular Carcinoma', nccnStructure: { schemaVersion: 7 } }), true);
+test('limits schema 9 reparse to lung, colon and rectal guidelines while preserving other indexes', () => {
+  assert.equal(parser.isCurrentStructure({ title: 'Non-Small Cell Lung Cancer', nccnStructure: { schemaVersion: 8 } }), false);
+  assert.equal(parser.isCurrentStructure({ title: 'Colon Cancer', nccnStructure: { schemaVersion: 8 } }), false);
+  assert.equal(parser.isCurrentStructure({ title: 'Rectal Cancer', nccnStructure: { schemaVersion: 8 } }), false);
   assert.equal(parser.isCurrentStructure({ title: 'Breast Cancer', nccnStructure: { schemaVersion: 8 } }), true);
-  assert.equal(parser.isCurrentStructure({ title: 'Breast Cancer', nccnStructure: { schemaVersion: 6 } }), false);
+  assert.equal(parser.isCurrentStructure({ title: 'Hepatocellular Carcinoma', nccnStructure: { schemaVersion: 7 } }), true);
+  assert.equal(parser.isCurrentStructure({ title: 'Breast Cancer', nccnStructure: { schemaVersion: 7 } }), false);
+  assert.equal(parser.isCurrentStructure({ title: 'Colon Cancer', nccnStructure: { schemaVersion: 9 } }), true);
 });
 test('does not classify preoperative systemic regimens as surgery', () => {
   assert.equal(
     parser.classifyModality('Preoperative or adjuvant setting: TC (Docetaxel/Cyclophosphamide)', ['systemic']),
     'systemic'
   );
+});
+
+test('classifies common colorectal regimen acronyms as systemic therapy', () => {
+  assert.equal(parser.classifyModality('FOLFOX (6 mo)'), 'systemic');
+  assert.equal(parser.classifyModality('CAPEOX (3 mo)'), 'systemic');
+  assert.equal(parser.classifyModality('Consider FOLFIRINOX'), 'systemic');
 });

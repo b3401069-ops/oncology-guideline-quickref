@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const SCHEMA_VERSION = 8;
+  const SCHEMA_VERSION = 9;
   let pdfJsPromise;
   const PAGE_TYPES = [
     ['systemic', /PRINCIPLES OF (?:SYSTEMIC|ANTI-TUMOR)|SYSTEMIC (?:ANTI-TUMOR )?THERAPY/i],
@@ -247,7 +247,7 @@
     if (/surg|resect|excision|dissection|ectomy|transplant|\boperative\b/i.test(text)) return 'surgery';
     if (/radiation|radiotherapy|\bRT\b|SBRT|SRS|EBRT|IMRT|brachy/i.test(text)) return 'radiation';
     if (/surveillance|follow-up|monitoring|observation|restaging/i.test(text)) return 'followup';
-    if (/systemic|chemotherapy|immunotherapy|targeted|endocrine|\bADT\b|\bARPI\b|\bSSA\b|mab|nib|zomib|fusp|parib|ciclib|toclax|platin|taxel|rubicin|citabine|lutamide|cycline|asone|amide|azine|mustine|phalan|cristine|blastine/i.test(text)) return 'systemic';
+    if (/systemic|chemotherapy|immunotherapy|targeted|endocrine|\bADT\b|\bARPI\b|\bSSA\b|\b(?:FOLFOX|FOLFIRI|FOLFIRINOX|CAPOX|CAPEOX|GEMOX|CHOP|ABVD)\b|mab|nib|zomib|fusp|parib|ciclib|toclax|platin|taxel|rubicin|citabine|lutamide|cycline|asone|amide|azine|mustine|phalan|cristine|blastine/i.test(text)) return 'systemic';
     // 明顯是檢查步驟就標成 workup，之後會被排除在治療候選之外
     if (DIAGNOSTIC_SIGNAL.test(text)) return 'workup';
     // 沒有任何治療訊號時不再沿用頁面型別，避免把敘述文字誤標成治療
@@ -685,10 +685,10 @@
   function isCurrentStructure(doc) {
     const version = Number(doc?.nccnStructure?.schemaVersion || 0);
     if (version === SCHEMA_VERSION) return true;
-    if (SCHEMA_VERSION === 8 && version === 7) {
-      const identity = [doc?.title, doc?.fileName, doc?.guidelineName, doc?.source].filter(Boolean).join(' ');
-      return !/\bBreast Cancer\b/i.test(identity);
-    }
+    const identity = [doc?.title, doc?.fileName, doc?.guidelineName, doc?.source].filter(Boolean).join(' ');
+    const needsAdjuvantReparse = /\b(?:Breast Cancer|Non-Small Cell Lung Cancer|Colon Cancer|Rectal Cancer)\b/i.test(identity);
+    if (SCHEMA_VERSION === 9 && version === 8) return !/\b(?:Non-Small Cell Lung Cancer|Colon Cancer|Rectal Cancer)\b/i.test(identity);
+    if (SCHEMA_VERSION === 9 && version === 7) return !needsAdjuvantReparse;
     return false;
   }  window.NCCN_PARSER = {
     schemaVersion: SCHEMA_VERSION,

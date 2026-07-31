@@ -735,12 +735,547 @@
     };
   }
 
+
+  const postoperativeFieldValues = (fields, key) => {
+    const field = (fields || []).find(item => item.sourceTemplateKey === key);
+    const values = Array.isArray(field?.value) ? field.value : [field?.value];
+    return values.map(normalize).filter(Boolean);
+  };
+  const postoperativeFieldValue = (fields, key) => postoperativeFieldValues(fields, key)[0] || '';
+  const postoperativeUnknown = (value) => !value || /待確認|待檢|未評估|尚未完成|不適用/.test(value);
+  const postoperativePages = (documents) => (documents || []).flatMap(doc =>
+    (doc.nccnStructure?.treatmentPages || []).map(page => ({ doc, page }))
+  );
+  const pagePair = (pairs, code, titlePattern) => pairs.find(({ page }) =>
+    String(page.sectionCode || '').toUpperCase() === code &&
+    (!titlePattern || titlePattern.test(String(page.title || '')))
+  );
+  const regimenEntry = (pair, label, pattern = null, overrides = {}) => {
+    if (!pair) return null;
+    const existing = pattern
+      ? (pair.page.options || []).find(option => pattern.test(typeof option === 'string' ? option : String(option.label || '')))
+      : null;
+    const option = typeof existing === 'string'
+      ? { label: existing, modality: 'systemic', recommendation: 'other' }
+      : existing ? { ...existing } : { label, modality: 'systemic', recommendation: 'other' };
+    return { ...pair, option: { ...option, label, modality: 'systemic', ...overrides } };
+  };
+  const uniqueRegimens = (items) => {
+    const seen = new Set();
+    return items.filter(Boolean).filter(item => {
+      const key = normalize(item.option?.label).toLowerCase();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+
+  function nsclcAdjuvantAssessment(documents, fields) {
+    const value = key => postoperativeFieldValue(fields, key);
+    const values = key => postoperativeFieldValues(fields, key);
+    const treatmentSetting = value('base-treatment-setting');
+    const path = value('nsclc-surgery-path');
+    const active = treatmentSetting === '術後/鞏固' || /手術/.test(path);
+    if (!active) return { active: false, status: 'inactive', missing: [], reviewItems: [], pages: [] };
+
+    const missing = [];
+    const required = (key, label) => {
+      const current = value(key);
+      if (postoperativeUnknown(current)) missing.push(label);
+      return current;
+    };
+    const stage = required('nsclc-path-stage', 'NSCLC 術後病理分期');
+    const pt = required('nsclc-pt', 'NSCLC 病理 T 分期');
+    const pn = required('nsclc-pn', 'NSCLC 病理 N 分期');
+    const margin = required('nsclc-margin', 'NSCLC 手術切緣');
+    if (postoperativeUnknown(path)) missing.push('NSCLC 手術／術前治療情境');
+    const highRiskValues = values('nsclc-high-risk');
+    const highRiskKnown = highRiskValues.length && !highRiskValues.some(item => /待確認/.test(item));
+    const hasHighRisk = highRiskValues.some(item => !/無上述特徵|待確認/.test(item));
+    if (/^(?:IB|IIA)$/.test(stage) && !highRiskKnown) missing.push('NSCLC 術後高風險特徵');
+
+    const pairs = postoperativePages(documents);
+    const chemoPage = pagePair(pairs, 'NSCL-E', /^Adjuvant Chemotherapy$/i);
+    const otherPage = pagePair(pairs, 'NSCL-E', /^Other Adjuvant Systemic Therapy$/i);
+    const histology = value('nsclc-histology');
+    const cisplatin = value('nsclc-cisplatin');
+    const reviewItems = [];
+    let decision = null;
+    const basis = [stage, pt, pn, margin].filter(Boolean).join('、');
+    const neoadjuvantChemo = /術前(?:免疫治療[+＋])?化療後手術/.test(path);
+    const positiveMargin = /^R[12]/.test(margin);
+
+    if (!missing.length) {
+      if (neoadjuvantChemo) {
+        decision = {
+          level: 'omit',
+          headline: '不應再另加一套術後輔助化療',
+          basis,
+          items: [
+            'NSCL-E 明載：術前治療已含化療時，不再重複給予術後化療。',
+            /免疫治療/.test(path)
+              ? '若採 perioperative 免疫治療方案，應依原方案核對術後免疫治療的延續週期。'
+              : '仍需確認術前實際週期數、病理反應及是否另有標靶治療資格。',
+          ],
+          caveats: [],
+        };
+      } else if (positiveMargin) {
+        decision = {
+          level: 'review',
+          headline: '切緣陽性，需先處理局部殘存風險，不能只套用一般 R0 輔助化療分支',
+          basis,
+          items: ['依 NSCL-4 討論再次切除（preferred）、放射治療及全身治療的組合與順序。'],
+          caveats: ['R1 與 R2 的處置不同，應由胸腔外科、放射腫瘤科與腫瘤內科共同判讀原流程。'],
+        };
+      } else if (/^IA/.test(stage)) {
+        decision = {
+          level: 'omit',
+          headline: '此分支不支持常規術後輔助化療',
+          basis,
+          items: ['R0 切除的 Stage IA 以術後監測路徑為主。'],
+          caveats: [],
+        };
+      } else if (/^(?:IB|IIA)$/.test(stage)) {
+        decision = {
+          level: hasHighRisk ? 'recommended' : 'omit',
+          headline: hasHighRisk
+            ? '此分支建議術後輔助化療（具高風險特徵）'
+            : '未辨識到高風險特徵，主分支不支持常規術後輔助化療',
+          basis: basis + (highRiskValues.length ? '；高風險：' + highRiskValues.join('、') : ''),
+          items: hasHighRisk
+            ? ['NSCL-E 對 Stage IB／IIA 且具高風險特徵者建議 adjuvant chemotherapy。']
+            : ['腫瘤大小增加仍是重要變項；請核對 NSCL-4A 與完整病理。'],
+          caveats: [],
+        };
+      } else if (/^(?:IIB|IIIA|IIIB)/.test(stage)) {
+        decision = {
+          level: 'recommended',
+          headline: '此分支建議術後含鉑雙藥輔助化療',
+          basis,
+          items: ['NSCL-E 對已切除 Stage IIB、IIIA 及所列 IIIB 分支建議 adjuvant chemotherapy。'],
+          caveats: [],
+        };
+      } else {
+        decision = {
+          level: 'review',
+          headline: '目前分期未落在 App 已結構化的 NSCL-E 術後分支',
+          basis,
+          items: ['請直接開啟 NSCL-4 與 NSCL-E 核對流程。'],
+          caveats: [],
+        };
+      }
+    }
+
+    if (decision && !neoadjuvantChemo && !positiveMargin) {
+      const chemoEligible = ['recommended', 'consider'].includes(decision.level);
+      if (chemoEligible && postoperativeUnknown(histology)) reviewItems.push('補充 NSCLC 組織型，才能排除不適合的 pemetrexed／gemcitabine 組合。');
+      if (chemoEligible && postoperativeUnknown(cisplatin)) reviewItems.push('補充 cisplatin 適用性，才能在 cisplatin 與 carboplatin 候選間縮小範圍。');
+      const nonsquamous = /腺癌|非鱗/i.test(histology);
+      const squamous = /鱗狀/.test(histology);
+      const useCarboplatin = /^不適合 cisplatin/.test(cisplatin);
+      const useCisplatin = /^適合 cisplatin/.test(cisplatin) && !useCarboplatin;
+      const chemo = [];
+      if (chemoEligible && (useCisplatin || !useCarboplatin)) {
+        if (nonsquamous) chemo.push(regimenEntry(chemoPage, 'Cisplatin/Pemetrexed（非鱗狀）', new RegExp('^Cisplatin/Pemetrexed', 'i')));
+        if (squamous) chemo.push(regimenEntry(chemoPage, 'Cisplatin/Gemcitabine（鱗狀）', new RegExp('^Cisplatin/Gemcitabine', 'i')));
+        chemo.push(regimenEntry(chemoPage, 'Cisplatin/Vinorelbine', new RegExp('^Cisplatin/Vinorelbine', 'i')));
+        if (!nonsquamous && !squamous) chemo.push(regimenEntry(chemoPage, 'Cisplatin/Docetaxel', new RegExp('^Cisplatin/Docetaxel', 'i')));
+      }
+      if (chemoEligible && (useCarboplatin || !useCisplatin)) {
+        if (nonsquamous) chemo.push(regimenEntry(chemoPage, 'Carboplatin/Pemetrexed（非鱗狀）', new RegExp('^Carboplatin/Pemetrexed', 'i')));
+        if (squamous) chemo.push(regimenEntry(chemoPage, 'Carboplatin/Gemcitabine（鱗狀）', new RegExp('^Carboplatin/Gemcitabine', 'i')));
+        chemo.push(regimenEntry(chemoPage, 'Carboplatin/Paclitaxel', new RegExp('^Carboplatin/Paclitaxel', 'i')));
+      }
+
+      const drivers = values('nsclc-drivers');
+      const driverText = drivers.join(' ');
+      const nodePositive = /(?:p|yp)N[1-3]/i.test(pn);
+      const size = Number(value('nsclc-tumor-size-cm'));
+      const largeOrNodePositive = (Number.isFinite(size) && size >= 4) || nodePositive;
+      const targeted = [];
+      const eligibleTargetStage = /^(?:IB|IIA|IIB|IIIA|IIIB)/.test(stage);
+      if (eligibleTargetStage && /EGFR exon 19 deletion|EGFR L858R/i.test(driverText)) {
+        targeted.push(regimenEntry(otherPage, 'Osimertinib（EGFR exon 19 deletion／L858R）', /^Osimertinib/i));
+      } else if (eligibleTargetStage && /EGFR sensitizing/.test(driverText)) {
+        targeted.push(regimenEntry(otherPage, 'Osimertinib（須先確認為 EGFR exon 19 deletion 或 L858R）', /^Osimertinib/i, { needsReview: true }));
+        reviewItems.push('目前只記錄 EGFR sensitizing，需補回 exon 19 deletion 或 L858R 原始型別。');
+      }
+      if (eligibleTargetStage && /ALK fusion/i.test(driverText) && largeOrNodePositive) {
+        targeted.push(regimenEntry(otherPage, 'Alectinib（ALK fusion；腫瘤 ≥4 cm 或淋巴結陽性）', /^Alectinib/i));
+      }
+      if (/RET fusion/i.test(driverText) && /^(?:IB|IIA|IIB|IIIA)$/.test(stage)) {
+        targeted.push(regimenEntry(otherPage, 'Selpercatinib（RET fusion）', /^Selpercatinib/i));
+      }
+      const noEgfrAlk = !/EGFR|ALK/.test(driverText) && drivers.length && !drivers.some(item => /待檢/.test(item));
+      const pdl1 = Number(value('nsclc-pdl1-tps'));
+      if (chemoEligible && largeOrNodePositive && noEgfrAlk && Number.isFinite(pdl1) && pdl1 >= 1) {
+        targeted.push(regimenEntry(otherPage, 'Atezolizumab（PD-L1 ≥1%，且無 EGFR／ALK）', /^Atezolizumab/i));
+      }
+      if (chemoEligible && largeOrNodePositive && noEgfrAlk) {
+        targeted.push(regimenEntry(otherPage, 'Pembrolizumab（無 EGFR／ALK；PD-L1 <1% 效益不明確）', /^Pembrolizumab/i));
+      }
+      decision.regimens = uniqueRegimens([...chemo, ...targeted]);
+      if (targeted.length && !chemoEligible) {
+        decision.level = targeted.some(item => item.option?.needsReview) ? 'consider' : 'recommended';
+        decision.headline = '不建議常規輔助化療，但需評估術後標靶治療資格';
+        decision.items.push('NSCL-E 的術後標靶治療資格與化療適應性需分開判讀。');
+      }
+      decision.regimenTitle = chemo.length && targeted.length
+        ? '術後含鉑化療與後續標靶／免疫治療資格候選'
+        : targeted.length ? 'NSCL-E 術後標靶治療資格候選' : 'NSCL-E 術後含鉑雙藥候選';
+      decision.regimenNote = '各候選不是彼此等效；需依組織型、腎功能、聽力、周邊神經病變、驅動基因、PD-L1 與既往術前治療逐一縮小。';
+    }
+
+    return {
+      active: true,
+      title: '非小細胞肺癌術後輔助治療評估',
+      decisionLabel: '依本次手術、切緣與病理分期命中的個案分支',
+      status: missing.length ? 'missing' : 'ready',
+      branchLabel: neoadjuvantChemo ? '術前治療後手術路徑' : '先手術後的輔助治療路徑',
+      message: missing.length ? '目前資料不足，尚不能完成 NSCLC 術後治療判讀。' : '已定位 NSCLC 術後決策分支與處方入口。',
+      missing: [...new Set(missing)],
+      reviewItems: [...new Set(reviewItems)],
+      decision,
+      pages: pairs.filter(({ page }) => {
+        const code = String(page.sectionCode || '').toUpperCase();
+        return /^NSCL-4A?$/.test(code) ||
+          (code === 'NSCL-E' && /^(?:Adjuvant Chemotherapy|Other Adjuvant Systemic Therapy)$/i.test(String(page.title || '')));
+      }),
+      supportingPages: [],
+    };
+  }
+
+  function colonAdjuvantAssessment(documents, fields) {
+    const value = key => postoperativeFieldValue(fields, key);
+    const values = key => postoperativeFieldValues(fields, key);
+    const treatmentSetting = value('base-treatment-setting');
+    const path = value('colon-surgery-path');
+    const active = treatmentSetting === '術後/鞏固' || /手術/.test(path);
+    if (!active) return { active: false, status: 'inactive', missing: [], reviewItems: [], pages: [] };
+
+    const missing = [];
+    const required = (key, label) => {
+      const current = value(key);
+      if (postoperativeUnknown(current)) missing.push(label);
+      return current;
+    };
+    if (postoperativeUnknown(path)) missing.push('結腸癌手術／術前治療情境');
+    const stage = required('colon-path-stage', '結腸癌術後病理分期');
+    const pt = required('colon-pt', '結腸癌病理 T 分期');
+    const pn = required('colon-pn', '結腸癌病理 N 分期');
+    const margin = required('colon-margin', '結腸癌手術切緣');
+    const mmr = required('crc-mmr-msi', 'MMR／MSI');
+    const highRiskValues = values('colon-high-risk');
+    const stageII = /^II[ABC]$/.test(stage);
+    if (stageII && (!highRiskValues.length || highRiskValues.some(item => /待確認/.test(item)))) {
+      missing.push('結腸癌 Stage II 高風險特徵');
+    }
+
+    const pairs = postoperativePages(documents);
+    const dmmr = /dMMR|MSI-H/i.test(mmr);
+    const decisionPage = pagePair(pairs, dmmr ? 'COL-13' : 'COL-4');
+    const reviewItems = [];
+    const basis = [stage, pt, pn, mmr, margin].filter(Boolean).join('、');
+    const nodeCount = Number(value('colon-nodes-examined'));
+    if (stageII && !Number.isFinite(nodeCount)) reviewItems.push('補充檢查淋巴結數；少於 12 顆屬 Stage II 高風險特徵。');
+    const hasHighRisk = /pT4/i.test(pt) ||
+      highRiskValues.some(item => !/無上述特徵|待確認/.test(item)) ||
+      (Number.isFinite(nodeCount) && nodeCount < 12) ||
+      /close|陽性/i.test(margin);
+    const lowRiskIII = /pT[1-3]/i.test(pt) && /pN1/i.test(pn);
+    const highRiskIII = /pT4/i.test(pt) || /pN2/i.test(pn);
+    let decision = null;
+
+    if (!missing.length) {
+      if (/^(?:0|I)$/.test(stage)) {
+        decision = {
+          level: 'omit',
+          headline: '此分支以觀察／術後監測為主，不給予常規輔助化療',
+          basis,
+          items: ['COL-4／COL-13 的 Stage 0–I 分支為 observation。'],
+          caveats: [],
+        };
+      } else if (dmmr && /^(?:IIA|IIB)$/.test(stage)) {
+        decision = {
+          level: 'omit',
+          headline: 'dMMR／MSI-H Stage IIA–IIB 以觀察為主',
+          basis,
+          items: ['COL-13 對 Tis–T4a N0（Stage 0–IIB）列為 observation。'],
+          caveats: ['Stage II MSI-H 癌症不從 fluorouracil 單藥輔助治療獲益；若病理實為 T4b／Stage IIC，應改走下一分支。'],
+        };
+      } else if (dmmr && stage === 'IIC') {
+        decision = {
+          level: 'consider',
+          headline: '可觀察，或依低風險 Stage III 方案考慮輔助全身治療',
+          basis,
+          items: ['COL-13 對 T4b N0（Stage IIC）列出 observation 或低風險 Stage III 的 adjuvant systemic therapy。'],
+          caveats: [],
+        };
+      } else if (stageII) {
+        decision = {
+          level: hasHighRisk ? 'consider' : 'omit',
+          headline: hasHighRisk
+            ? 'Stage II 具高風險特徵：可考慮輔助化療，也保留觀察選項'
+            : 'Stage II 未辨識高風險特徵：observation 為 preferred',
+          basis: basis + (highRiskValues.length ? '；高風險：' + highRiskValues.join('、') : ''),
+          items: hasHighRisk
+            ? ['COL-4 列出 capecitabine／5-FU-LV、FOLFOX、CAPEOX 或 observation；選擇需依風險與毒性討論。']
+            : ['COL-4 對 T3N0、無高風險特徵列 observation（preferred），亦可考慮 fluoropyrimidine 單藥。'],
+          caveats: ['Stage II 使用 oxaliplatin 的存活效益未被證實，App 不會自動把雙藥列為必選。'],
+        };
+      } else if (/^III/.test(stage)) {
+        decision = {
+          level: 'recommended',
+          headline: highRiskIII
+            ? '高風險 Stage III：建議術後輔助化療'
+            : lowRiskIII ? '低風險 Stage III：建議術後輔助化療' : 'Stage III：建議術後輔助化療，需由 pT／pN 確認療程長度',
+          basis,
+          items: [highRiskIII
+            ? 'T4 N1–2 或任何 T、N2：CAPEOX 3–6 個月或 FOLFOX 6 個月。'
+            : 'T1–3 N1：CAPEOX 3 個月或 FOLFOX 3–6 個月。'],
+          caveats: [],
+        };
+      } else {
+        decision = {
+          level: 'review',
+          headline: '目前病理分期未落在 App 已結構化的 COL-4／COL-13 分支',
+          basis,
+          items: ['請直接開啟原頁核對。'],
+          caveats: [],
+        };
+      }
+    }
+
+    if (decision && ['recommended', 'consider'].includes(decision.level)) {
+      const labels = [];
+      if (dmmr && (stage === 'IIC' || /^III/.test(stage))) {
+        labels.push('FOLFOX + Atezolizumab', 'CAPEOX + Atezolizumab');
+      }
+      if (/^III/.test(stage) || (stageII && hasHighRisk) || (dmmr && stage === 'IIC')) {
+        labels.push(highRiskIII ? 'CAPEOX（3–6 個月）' : 'CAPEOX（3 個月）');
+        labels.push(highRiskIII ? 'FOLFOX（6 個月）' : 'FOLFOX（3–6 個月）');
+      }
+      if (!dmmr && stageII) labels.push('Capecitabine（6 個月）', 'Fluorouracil/Leucovorin（6 個月）');
+      decision.regimens = uniqueRegimens(labels.map(label => regimenEntry(
+        decisionPage,
+        label,
+        new RegExp(label.split('（')[0].replace(/[+]/g, '\\+'), 'i')
+      )));
+      decision.regimenTitle = '依 COL-' + (dmmr ? '13' : '4') + ' 分支對接的術後療程候選';
+      decision.regimenNote = '療程長度依 T／N 風險、術前已接受週期、神經毒性、年齡與共病調整；全程 perioperative treatment 通常不超過原頁規範。';
+    }
+
+    const pi3k = values('crc-extended-markers').some(item => /PIK3CA|PIK3R1|PTEN/i.test(item));
+    if (pi3k && /^(?:II|III)/.test(stage)) {
+      reviewItems.push('已記錄 PI3K pathway alteration：COL-4／COL-13 建議術後恢復後評估 aspirin 100–162 mg/day、共 3 年（無禁忌時）；須核對出血風險與原頁。');
+    }
+    return {
+      active: true,
+      title: '結腸癌術後輔助治療評估',
+      decisionLabel: '依本次 pT／pN、MMR／MSI 與高風險特徵命中的個案分支',
+      status: missing.length ? 'missing' : 'ready',
+      branchLabel: dmmr ? 'dMMR／MSI-H（COL-13）術後路徑' : 'pMMR／MSS（COL-4）術後路徑',
+      message: missing.length ? '目前資料不足，尚不能完成結腸癌術後治療判讀。' : '已定位結腸癌術後分支、風險層級與療程長度入口。',
+      missing: [...new Set(missing)],
+      reviewItems: [...new Set(reviewItems)],
+      decision,
+      pages: pairs.filter(({ page }) => [dmmr ? 'COL-13' : 'COL-4', 'COL-8'].includes(String(page.sectionCode || '').toUpperCase())),
+      supportingPages: [],
+    };
+  }
+
+  function rectalAdjuvantAssessment(documents, fields) {
+    const value = key => postoperativeFieldValue(fields, key);
+    const values = key => postoperativeFieldValues(fields, key);
+    const treatmentSetting = value('base-treatment-setting');
+    const path = value('rectal-surgery-path');
+    const active = treatmentSetting === '術後/鞏固' || /手術|切除|完全臨床反應/.test(path);
+    if (!active) return { active: false, status: 'inactive', missing: [], reviewItems: [], pages: [] };
+
+    const pairs = postoperativePages(documents);
+    const missing = [];
+    if (postoperativeUnknown(path)) missing.push('直腸癌手術／術前治療情境');
+    const nonoperative = /完全臨床反應／未手術/.test(path);
+    const notOperated = /尚未完成手術/.test(path);
+    const mmr = value('crc-mmr-msi');
+    if (postoperativeUnknown(mmr)) missing.push('MMR／MSI');
+    const required = (key, label) => {
+      const current = value(key);
+      if (!nonoperative && !notOperated && postoperativeUnknown(current)) missing.push(label);
+      return current;
+    };
+    const stage = required('rectal-path-stage', '直腸癌術後病理分期');
+    const pt = required('rectal-pt', '直腸癌病理 T 分期');
+    const pn = required('rectal-pn', '直腸癌病理 N 分期');
+    const margin = required('rectal-margin', '直腸癌切緣');
+    const crm = required('rectal-crm', '直腸癌環周切緣（CRM）');
+    const dmmr = /dMMR|MSI-H/i.test(mmr);
+    const highRiskValues = values('rectal-high-risk');
+    const highRisk = highRiskValues.some(item => !/無上述特徵|待確認/.test(item));
+    const nodePositive = /(?:p|yp)N[12]/i.test(pn);
+    const localRtRisk = /陽性|受威脅|close/i.test(margin + ' ' + crm) ||
+      /incomplete/i.test(value('rectal-mesorectal-grade'));
+    const positiveLocalRisk = localRtRisk || highRisk;
+    const basis = [path, stage, pt, pn, mmr, margin, crm].filter(Boolean).join('、');
+    const reviewItems = [];
+    let decision = null;
+
+    if (!missing.length) {
+      if (nonoperative) {
+        decision = {
+          level: 'review',
+          headline: '這是非手術管理／免疫治療反應路徑，不套用一般術後輔助化療',
+          basis,
+          items: ['依 dMMR／MSI-H 專屬流程持續反應評估與密集 surveillance。'],
+          caveats: ['應由有經驗的多專科團隊執行 watch-and-wait，App 不以術後 pT／pN 推測。'],
+        };
+      } else if (/完成 TNT 後手術/.test(path)) {
+        decision = {
+          level: 'omit',
+          headline: '已完成 TNT：不應自動再加一套術後化療',
+          basis,
+          items: ['先核對 TNT 已完成的化療週期與放療內容；手術後通常轉入 surveillance。'],
+          caveats: ['若 TNT 未完成、術前治療中斷或有特殊高風險病理，需個別討論剩餘療程，不能只看 ypStage。'],
+        };
+      } else if (dmmr) {
+        decision = {
+          level: 'review',
+          headline: 'dMMR／MSI-H 應回到專屬免疫治療流程，不能直接套用 pMMR／MSS 的 REC-5',
+          basis,
+          items: ['請核對 REC-14 起的 dMMR／MSI-H 路徑及既往是否已接受 checkpoint inhibitor。'],
+          caveats: [],
+        };
+      } else if (/經肛門局部切除/.test(path)) {
+        const adverseLocal = highRisk || /pT2/i.test(pt);
+        decision = {
+          level: adverseLocal ? 'recommended' : 'omit',
+          headline: adverseLocal
+            ? '局部切除後有高風險／pT2：優先評估追加經腹切除；不適合時討論放化療'
+            : 'pT1 局部切除且無高風險特徵：以 observation 為主',
+          basis,
+          items: adverseLocal
+            ? ['REC-4 的 preferred 分支是 transabdominal resection；另列 long-course chemo/RT 或 short-course RT 搭配 FOLFOX／CAPEOX 的選項。']
+            : ['REC-4 對 pT1、無高風險特徵列為 observe／surveillance。'],
+          caveats: [],
+        };
+      } else if (/先做經腹切除/.test(path)) {
+        if (/pT[12]/i.test(pt) && /pN0/i.test(pn) && !positiveLocalRisk) {
+          decision = {
+            level: 'omit',
+            headline: 'pT1–2 N0 且切緣無高風險：以 observation 為主',
+            basis,
+            items: ['REC-5 對 pT1–2 N0 M0 列為 observe。'],
+            caveats: [],
+          };
+        } else if (/pT3/i.test(pt) && /pN0/i.test(pn)) {
+          const selectObservation = value('rectal-location') === '上段直腸' && !positiveLocalRisk;
+          decision = {
+            level: selectObservation ? 'consider' : 'recommended',
+            headline: selectObservation
+              ? 'pT3 N0 上段直腸且目前未見高風險：可討論 observation，但尚需原頁條件'
+              : 'pT3 N0：應討論 FOLFOX／CAPEOX 與選擇性 long-course chemo/RT',
+            basis,
+            items: selectObservation
+              ? ['REC-5 僅允許非常選擇性的上段直腸 pT3N0 觀察：需 well/moderately differentiated、進入 mesorectum <2 mm、且無淋巴／靜脈侵犯。']
+              : ['REC-5 列出 chemo/RT 與 FOLFOX／CAPEOX 的不同先後順序，也列 FOLFOX／CAPEOX alone。'],
+            caveats: selectObservation ? ['App 尚無法由目前欄位確認 mesorectal invasion <2 mm，必須開原頁與病理報告核對。'] : [],
+          };
+        } else if (/pT4/i.test(pt) || nodePositive) {
+          decision = {
+            level: 'recommended',
+            headline: 'pT4 或 N1–2：建議術後全身治療，並評估 long-course chemo/RT',
+            basis,
+            items: [
+              'REC-5 列出 FOLFOX／CAPEOX 與 long-course chemo/RT 的不同順序。',
+              /pT[1-3]/i.test(pt) && /pN1/i.test(pn) ? 'pT1–3 N1 可考慮 FOLFOX／CAPEOX alone。' : '較高局部／淋巴結風險不應只由 App 省略放療評估。',
+            ],
+            caveats: [],
+          };
+        }
+      } else if (/術前化放療後手術/.test(path)) {
+        decision = {
+          level: 'consider',
+          headline: '術前化放療後手術：依已完成療程補足 perioperative systemic therapy',
+          basis,
+          items: ['核對術前是否已完成 FOLFOX／CAPEOX；REC-D 的全程治療上限與術後病理共同決定是否還需補足。'],
+          caveats: ['不能只因 ypStage 降期就假設已完成全部 TNT。'],
+        };
+      }
+    }
+    if (!decision && !missing.length) {
+      decision = {
+        level: 'review',
+        headline: '目前資料未落在 App 已結構化的 REC-4／REC-5 術後分支',
+        basis,
+        items: ['請直接開啟原頁核對流程箭頭。'],
+        caveats: [],
+      };
+    }
+    if (localRtRisk && decision && !nonoperative) {
+      reviewItems.push('切緣／CRM／直腸系膜品質提示局部復發風險：術後 RT 僅應高度選擇性使用，需多專科核對 REC-5 footnote w。');
+    }
+
+    if (decision && ['recommended', 'consider'].includes(decision.level) && !dmmr) {
+      const rec5 = pagePair(pairs, 'REC-5');
+      const regimens = [];
+      if (!/經肛門局部切除/.test(path) || /pT2/i.test(pt) || highRisk) {
+        regimens.push(regimenEntry(rec5, 'FOLFOX', /FOLFOX/i));
+        regimens.push(regimenEntry(rec5, 'CAPEOX', /CAPEOX/i));
+      }
+      if (/先做經腹切除|經肛門局部切除/.test(path) && (positiveLocalRisk || /pT[34]/i.test(pt) || nodePositive)) {
+        regimens.push(regimenEntry(rec5, 'Long-course chemo/RT：Capecitabine', /capecitabine/i));
+        regimens.push(regimenEntry(rec5, 'Long-course chemo/RT：Infusional fluorouracil', /infusional fluorouracil/i));
+      }
+      decision.regimens = uniqueRegimens(regimens);
+      decision.regimenTitle = 'REC-4／REC-5 對接的全身治療與放化療候選';
+      decision.regimenNote = '此處列的是方案組件與入口；先後順序、總療程長度及是否可省略放療，需依術前已完成治療與局部風險決定。';
+    }
+
+    const rectalPageCodes = dmmr || nonoperative
+      ? ['REC-14', 'REC-10A']
+      : /完成 TNT/.test(path) ? ['REC-6', 'REC-10A']
+        : /經肛門局部切除/.test(path) ? ['REC-4', 'REC-5', 'REC-10A']
+          : ['REC-5', 'REC-10A'];
+    return {
+      active: true,
+      title: '直腸癌術後輔助治療評估',
+      decisionLabel: '依本次術前治療、手術方式、pT／pN 與切緣命中的個案分支',
+      status: missing.length ? 'missing' : 'ready',
+      branchLabel: dmmr ? 'dMMR／MSI-H 專屬路徑' : /完成 TNT/.test(path) ? 'TNT 完成後手術路徑' : 'REC-4／REC-5 術後路徑',
+      message: missing.length ? '目前資料不足，尚不能完成直腸癌術後治療判讀。' : '已定位直腸癌術後分支與全程治療入口。',
+      missing: [...new Set(missing)],
+      reviewItems: [...new Set(reviewItems)],
+      decision,
+      pages: pairs.filter(({ page }) => rectalPageCodes.includes(String(page.sectionCode || '').toUpperCase())),
+      supportingPages: [],
+    };
+  }
+
+  function adjuvantAssessment(cancerId, documents, fields) {
+    if (cancerId === 'breast_cancer') {
+      const result = breastAdjuvantAssessment(documents, fields);
+      return {
+        title: '乳癌術後輔助治療評估',
+        decisionLabel: '依本次 pT／pN 命中的個案分支',
+        ...result,
+      };
+    }
+    if (cancerId === 'nsclc') return nsclcAdjuvantAssessment(documents, fields);
+    if (cancerId === 'colon_cancer') return colonAdjuvantAssessment(documents, fields);
+    if (cancerId === 'rectal_cancer') return rectalAdjuvantAssessment(documents, fields);
+    return { active: false, status: 'inactive', missing: [], reviewItems: [], pages: [] };
+  }
+
   window.CLINICAL_MATCHER = Object.freeze({
     extractClinicalFeatures,
     matchTreatmentPages,
     diagnoseTreatmentMatch,
     optionAssessment,
     breastAdjuvantAssessment,
+    nsclcAdjuvantAssessment,
+    colonAdjuvantAssessment,
+    rectalAdjuvantAssessment,
+    adjuvantAssessment,
     featureLabel: (key) => FEATURE_LABELS[key] || String(key || '').toUpperCase(),
   });
 })();

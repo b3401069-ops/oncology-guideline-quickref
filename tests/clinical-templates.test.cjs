@@ -16,7 +16,7 @@ test('seeds disease-specific fields for hematology guidelines that do not use so
     const fields = templates.precisionForCancer(cancerId);
     assert.ok(fields.some(field => field.key === fieldKey), `${cancerId}: ${fieldKey}`);
   }
-  assert.equal(templates.version, 5);
+  assert.equal(templates.version, 6);
 });
 
 // Windows checkouts may use CRLF; structural regexes below assume LF.
@@ -99,4 +99,16 @@ test('breast template includes structured postoperative decision fields', () => 
     'breast-pathology-scope', 'breast-surgery-path', 'breast-pt', 'breast-pn',
     'breast-grade', 'breast-lvi', 'breast-menopause', 'breast-genomic-assay', 'breast-oncotype-rs',
   ]) assert.ok(keys.has(key), key);
+});
+
+test('lung, colon and rectal templates include postoperative decision fields', () => {
+  const expected = {
+    nsclc: ['nsclc-surgery-path', 'nsclc-path-stage', 'nsclc-pt', 'nsclc-pn', 'nsclc-margin', 'nsclc-high-risk', 'nsclc-cisplatin'],
+    colon_cancer: ['colon-surgery-path', 'colon-path-stage', 'colon-pt', 'colon-pn', 'colon-margin', 'colon-high-risk'],
+    rectal_cancer: ['rectal-surgery-path', 'rectal-path-stage', 'rectal-pt', 'rectal-pn', 'rectal-margin', 'rectal-crm'],
+  };
+  for (const [cancerId, keys] of Object.entries(expected)) {
+    const actual = new Set(templates.precisionForCancer(cancerId).map(field => field.key));
+    for (const key of keys) assert.ok(actual.has(key), cancerId + ': ' + key);
+  }
 });
