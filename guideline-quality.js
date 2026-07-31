@@ -3,6 +3,14 @@
 
   const MODALITIES = ['surgery', 'radiation', 'systemic', 'followup'];
 
+  function versionCheck(doc, now = new Date(), staleAfterDays = 180) {
+    const checkedAt = doc?.versionCheckedAt || doc?.updatedAt || doc?.importedAt || '';
+    const timestamp = checkedAt ? new Date(checkedAt).getTime() : Number.NaN;
+    if (!Number.isFinite(timestamp)) return { status: 'undated', checkedAt: '', ageDays: null };
+    const ageDays = Math.max(0, Math.floor((new Date(now).getTime() - timestamp) / 86400000));
+    return { status: ageDays > staleAfterDays ? 'stale' : 'current', checkedAt, ageDays };
+  }
+
   function evaluateDocument(doc, minimumSchemaVersion = 5) {
     const structure = doc?.nccnStructure;
     const emptyCounts = Object.fromEntries(MODALITIES.map(key => [key, 0]));
@@ -37,22 +45,27 @@
     };
   }
 
-  function summarize(documents, minimumSchemaVersion = 5) {
+  function summarize(documents, minimumSchemaVersion = 5, now = new Date()) {
     const summary = {
       total: 0, ready: 0, review: 0, pending: 0, failed: 0, redirect: 0,
+      stale: 0, undated: 0,
       modalities: Object.fromEntries(MODALITIES.map(key => [key, 0])),
-      attention: [],
+      attention: [], freshnessAttention: [],
     };
     for (const doc of documents || []) {
       const quality = evaluateDocument(doc, minimumSchemaVersion);
+      const freshness = versionCheck(doc, now);
       summary.total += 1;
       summary[quality.status] += 1;
+      if (freshness.status === 'stale') summary.stale += 1;
+      if (freshness.status === 'undated') summary.undated += 1;
       for (const modality of MODALITIES) summary.modalities[modality] += quality.counts[modality];
       if (['review', 'pending', 'failed'].includes(quality.status)) summary.attention.push({ doc, ...quality });
+      if (freshness.status !== 'current') summary.freshnessAttention.push({ doc, ...freshness });
     }
     summary.parsed = summary.ready + summary.review;
     return summary;
   }
 
-  window.GUIDELINE_QUALITY = Object.freeze({ modalities: MODALITIES, evaluateDocument, summarize });
+  window.GUIDELINE_QUALITY = Object.freeze({ modalities: MODALITIES, evaluateDocument, versionCheck, summarize });
 })();

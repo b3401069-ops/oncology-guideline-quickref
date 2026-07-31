@@ -8,6 +8,6 @@ test('production scripts and inline module parse as JavaScript', () => {
   new Function(scripts.at(-1)[1]);
   for (const file of [
     'app-version.js', 'case-state.js', 'backup-format.js', 'clinical-templates.js', 'clinical-scenarios.js', 'nhi-versioning.js',
-    'nhi-parser.js', 'nhi-selector.js', 'sw.js',
+    'nhi-parser.js', 'nhi-selector.js', 'tfda-registry.js', 'sw.js',
   ]) new Function(fs.readFileSync(file, 'utf8'));
 });

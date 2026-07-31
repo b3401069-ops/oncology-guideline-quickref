@@ -115,6 +115,12 @@ const completeBreastAdjuvantFields = () => [
   keyedField('breast-her2', 'HER2 原始結果', 'IHC 0'),
   keyedField('breast-subtype', '乳癌臨床亞型', 'HR+/HER2-'),
   keyedField('breast-menopause', '停經狀態', '停經後'),
+  keyedField('breast-chemotherapy-candidate', '術後化療適用性', '適合接受化療'),
+  keyedField('breast-tumor-size-cm', '病理浸潤腫瘤最大徑（cm）', '2.2'),
+  keyedField('breast-ki67', 'Ki-67（%）', '15'),
+  keyedField('breast-initial-clinical-risk', '術前治療前臨床風險', '未接受術前全身治療'),
+  keyedField('breast-initial-nodal-status', '術前治療前臨床淋巴結', 'cN0'),
+  keyedField('breast-germline-result', '胚系 BRCA1/2 結果', '陰性'),
   keyedField('breast-genomic-assay', '乳癌基因表現檢測', 'Oncotype DX'),
   keyedField('breast-oncotype-rs', 'Oncotype DX Recurrence Score', '18'),
 ];
@@ -522,4 +528,212 @@ test('postoperative source pages exclude the opposite molecular branch', () => {
   ];
   const result = matcher.colonAdjuvantAssessment([fakeNccnDocument('Colon Cancer', pages)], fields);
   assert.deepEqual(result.pages.map(item => item.page.sectionCode), ['COL-4', 'COL-8']);
+});
+
+test('HR-positive HER2-negative postoperative assessment uses menopause and Oncotype thresholds', () => {
+  const pages = [
+    { page: 19, sectionCode: 'BINV-6', title: 'SYSTEMIC ADJUVANT TREATMENT: HR-POSITIVE – HER2-NEGATIVE DISEASE', options: [] },
+    { page: 67, sectionCode: 'BINV-K', title: 'ADJUVANT ENDOCRINE THERAPY', options: [
+      { label: 'Aromatase inhibitor for 5 years' },
+      { label: 'Tamoxifen for 5 years' },
+      { label: 'Consider adjuvant abemaciclib' },
+      { label: 'Consider adjuvant ribociclib' },
+    ] },
+    { page: 72, sectionCode: 'BINV-M', title: 'PREOPERATIVE/ADJUVANT THERAPY', options: [
+      { label: 'Dose-Dense AC followed by Paclitaxel every 2 weeks' },
+      { label: 'Dose-Dense AC followed by weekly Paclitaxel' },
+      { label: 'TC (Docetaxel/Cyclophosphamide)' },
+    ] },
+  ];
+  const document = fakeNccnDocument('Breast Cancer', pages);
+  const low = matcher.breastAdjuvantAssessment([document], completeBreastAdjuvantFields());
+  assert.equal(low.decision.level, 'omit');
+  assert.match(low.decision.headline, /Recurrence Score <26/);
+  assert.ok(low.decision.regimens.some(item => /Aromatase inhibitor/.test(item.option.label)));
+  assert.ok(!low.decision.regimens.some(item => /Dose-dense AC/i.test(item.option.label)));
+
+  const highFields = completeBreastAdjuvantFields().map(field =>
+    field.sourceTemplateKey === 'breast-oncotype-rs' ? { ...field, value: '30' } : field
+  );
+  const high = matcher.breastAdjuvantAssessment([document], highFields);
+  assert.equal(high.decision.level, 'recommended');
+  assert.match(high.decision.headline, /≥26/);
+  assert.ok(high.decision.regimens.some(item => /Dose-dense AC/i.test(item.option.label)));
+});
+
+test('HER2-positive upfront surgery maps stage I and higher-risk adjuvant regimens', () => {
+  const pages = [
+    { page: 18, sectionCode: 'BINV-5', title: 'SYSTEMIC ADJUVANT TREATMENT: HER2-POSITIVE', options: [] },
+    { page: 74, sectionCode: 'BINV-M', title: 'HER2-POSITIVE PREOPERATIVE/ADJUVANT THERAPY', options: [
+      { label: 'Paclitaxel + Trastuzumab' },
+      { label: 'TCH (Docetaxel/Carboplatin + Trastuzumab)' },
+      { label: 'TCHP (Docetaxel/Carboplatin + Trastuzumab + Pertuzumab)' },
+    ] },
+  ];
+  const fields = completeBreastAdjuvantFields().map(field => {
+    if (field.sourceTemplateKey === 'breast-pt') return { ...field, value: 'pT1c' };
+    if (field.sourceTemplateKey === 'breast-her2') return { ...field, value: 'IHC 3+' };
+    if (field.sourceTemplateKey === 'breast-subtype') return { ...field, value: 'HER2+' };
+    return field;
+  });
+  const result = matcher.breastAdjuvantAssessment([fakeNccnDocument('Breast Cancer', pages)], fields);
+  assert.equal(result.decision.level, 'recommended');
+  assert.ok(result.decision.regimens.some(item => /Paclitaxel \+ Trastuzumab/.test(item.option.label)));
+  assert.ok(result.decision.regimens.some(item => /^TCH /.test(item.option.label)));
+});
+
+test('post-neoadjuvant TNBC continues pembrolizumab only when it was used preoperatively', () => {
+  const document = fakeNccnDocument('Breast Cancer', [
+    { page: 29, sectionCode: 'BINV-16', title: 'ADJUVANT SYSTEMIC THERAPY AFTER PREOPERATIVE SYSTEMIC THERAPY', options: [] },
+    { page: 73, sectionCode: 'BINV-M', title: 'TNBC PREOPERATIVE/ADJUVANT THERAPY', options: [
+      { label: 'Carboplatin/Paclitaxel + Pembrolizumab followed by Pembrolizumab (adjuvant)' },
+      { label: 'Capecitabine' },
+      { label: 'Olaparib' },
+    ] },
+  ]);
+  const fields = completeBreastAdjuvantFields().map(field => {
+    if (field.sourceTemplateKey === 'breast-surgery-path') return { ...field, value: '術前全身治療後達 pCR' };
+    if (field.sourceTemplateKey === 'breast-pt') return { ...field, value: 'ypT0／ypTis' };
+    if (field.sourceTemplateKey === 'breast-pn') return { ...field, value: 'ypN0' };
+    if (field.sourceTemplateKey === 'breast-er' || field.sourceTemplateKey === 'breast-pr') return { ...field, value: '陰性' };
+    if (field.sourceTemplateKey === 'breast-subtype') return { ...field, value: '三陰性' };
+    if (field.sourceTemplateKey === 'breast-initial-clinical-risk') return { ...field, value: 'cT1–3、cN0–1' };
+    return field;
+  });
+  const noHistory = matcher.breastAdjuvantAssessment([document], fields, []);
+  assert.equal(noHistory.decision.level, 'review');
+  assert.match(noHistory.decision.headline, /尚缺術前實際用藥紀錄/);
+  assert.ok(!noHistory.decision.regimens?.some(item => /Pembrolizumab/i.test(item.option.label)));
+
+  const withoutPembrolizumab = matcher.breastAdjuvantAssessment([document], fields, [
+    { id: 'tx-chemo', phase: '術前／新輔助', treatment: 'Carboplatin/Paclitaxel', status: '已完成' },
+  ]);
+  assert.equal(withoutPembrolizumab.decision.level, 'omit');
+
+  const withHistory = matcher.breastAdjuvantAssessment([document], fields, [
+    { id: 'tx', phase: '術前／新輔助', treatment: 'Carboplatin/Paclitaxel + Pembrolizumab', status: '已完成' },
+  ]);
+  assert.equal(withHistory.decision.level, 'recommended');
+  assert.ok(withHistory.decision.regimens.some(item => /Pembrolizumab/i.test(item.option.label)));
+});
+
+test('HR-positive HER2-negative pT1bN0 grade 1 without LVI stays on endocrine therapy', () => {
+  const fields = completeBreastAdjuvantFields().map(field => {
+    if (field.sourceTemplateKey === 'breast-pt') return { ...field, value: 'pT1b' };
+    if (field.sourceTemplateKey === 'breast-grade') return { ...field, value: 'Grade 1' };
+    return field;
+  });
+  const result = matcher.breastAdjuvantAssessment([], fields);
+  assert.equal(result.decision.level, 'omit');
+  assert.match(result.decision.headline, /Grade 1 且無 LVI/);
+});
+
+test('post-neoadjuvant HER2-positive pCR requires the preoperative nodal status before choosing pertuzumab', () => {
+  const fields = completeBreastAdjuvantFields().map(field => {
+    if (field.sourceTemplateKey === 'breast-surgery-path') return { ...field, value: '術前全身治療後達 pCR' };
+    if (field.sourceTemplateKey === 'breast-pt') return { ...field, value: 'ypT0／ypTis' };
+    if (field.sourceTemplateKey === 'breast-pn') return { ...field, value: 'ypN0' };
+    if (field.sourceTemplateKey === 'breast-her2') return { ...field, value: 'IHC 3+' };
+    if (field.sourceTemplateKey === 'breast-subtype') return { ...field, value: 'HER2+' };
+    if (field.sourceTemplateKey === 'breast-initial-nodal-status') return { ...field, value: '待確認' };
+    return field;
+  });
+  const result = matcher.breastAdjuvantAssessment([], fields, [
+    { id: 'tx', phase: '術前／新輔助', treatment: 'TCH', status: '已完成' },
+  ]);
+  assert.equal(result.status, 'missing');
+  assert.ok(result.missing.some(item => /術前治療前臨床淋巴結/.test(item)));
+  assert.equal(result.decision.regimens?.length || 0, 0);
+});
+test('post-neoadjuvant HER2-positive residual disease offers high-risk T-DXd and T-DM1 without restarting TCHP', () => {
+  const document = fakeNccnDocument('Breast Cancer', [
+    { page: 29, sectionCode: 'BINV-16', title: 'ADJUVANT SYSTEMIC THERAPY AFTER PREOPERATIVE SYSTEMIC THERAPY', options: [] },
+    { page: 74, sectionCode: 'BINV-M', title: 'HER2-POSITIVE PREOPERATIVE/ADJUVANT THERAPY', options: [
+      { label: 'Fam-trastuzumab deruxtecan-nxki for those with high risk of recurrence' },
+      { label: 'Ado-trastuzumab emtansine (T-DM1)' },
+      { label: 'TCHP (Docetaxel/Carboplatin + Trastuzumab + Pertuzumab)' },
+    ] },
+  ]);
+  const fields = completeBreastAdjuvantFields().map(field => {
+    if (field.sourceTemplateKey === 'breast-surgery-path') return { ...field, value: '術前治療後有殘存浸潤癌' };
+    if (field.sourceTemplateKey === 'breast-pt') return { ...field, value: 'ypT1' };
+    if (field.sourceTemplateKey === 'breast-pn') return { ...field, value: 'ypN1' };
+    if (field.sourceTemplateKey === 'breast-her2') return { ...field, value: 'IHC 3+' };
+    if (field.sourceTemplateKey === 'breast-subtype') return { ...field, value: 'HER2+' };
+    if (field.sourceTemplateKey === 'breast-initial-clinical-risk') return { ...field, value: 'cT1–3、cN0–1' };
+    if (field.sourceTemplateKey === 'breast-initial-nodal-status') return { ...field, value: 'cN1' };
+    return field;
+  });
+  const history = [{ id: 'tx', phase: '術前／新輔助', treatment: 'TCHP', status: '已完成', completedCycles: '6', plannedCycles: '6' }];
+  const result = matcher.breastAdjuvantAssessment([document], fields, history);
+  const labels = result.decision.regimens.map(item => item.option.label);
+  assert.ok(labels.some(label => /deruxtecan/i.test(label)));
+  assert.ok(labels.some(label => /emtansine/i.test(label)));
+  assert.ok(!labels.some(label => /^TCHP/.test(label)));
+  assert.ok(result.decision.items.some(item => /術前 HER2 導向治療/.test(item)));
+});
+test('treatment history prevents duplicate postoperative platinum chemotherapy in NSCLC', () => {
+  const fields = [
+    keyedField('base-treatment-setting', '治療階段／線別', '術後／鞏固'),
+    keyedField('nsclc-surgery-path', 'NSCLC 手術／術前治療情境', '先手術（未接受術前全身治療）'),
+    keyedField('nsclc-path-stage', 'NSCLC 術後病理分期', 'IIB'),
+    keyedField('nsclc-pt', 'NSCLC 病理 T 分期', 'pT3'),
+    keyedField('nsclc-pn', 'NSCLC 病理 N 分期', 'pN0'),
+    keyedField('nsclc-margin', 'NSCLC 手術切緣', 'R0（陰性）'),
+    keyedField('nsclc-histology', 'NSCLC 組織型', '腺癌'),
+    keyedField('nsclc-cisplatin', 'Cisplatin 適用性', '適合 cisplatin'),
+  ];
+  const history = [{ phase: '術後／輔助', treatment: 'Cisplatin/Pemetrexed', status: '已完成', completedCycles: '4', plannedCycles: '4' }];
+  const result = matcher.nsclcAdjuvantAssessment([], fields, history);
+  assert.equal(result.decision.level, 'omit');
+  assert.match(result.decision.headline, /已完成術後含鉑化療/);
+  assert.equal(result.treatmentHistoryUsed, true);
+});
+
+test('colon history supplies a preoperative regimen and blocks a completed postoperative duplicate', () => {
+  const fields = [
+    keyedField('base-treatment-setting', '治療階段／線別', '術後／鞏固'),
+    keyedField('colon-surgery-path', '結腸癌手術／術前治療情境', '先手術'),
+    keyedField('colon-path-stage', '結腸癌術後病理分期', 'IIIB'),
+    keyedField('colon-pt', '結腸癌病理 T 分期', 'pT3'),
+    keyedField('colon-pn', '結腸癌病理 N 分期', 'pN1'),
+    keyedField('colon-margin', '結腸癌手術切緣', '陰性'),
+    keyedField('crc-mmr-msi', 'MMR／MSI', 'pMMR／MSS'),
+  ];
+  const preoperative = matcher.colonAdjuvantAssessment([], fields, [
+    { phase: '術前／新輔助', treatment: 'FOLFOX', status: '未完成／待續', completedCycles: '4', plannedCycles: '8' },
+  ]);
+  assert.equal(preoperative.status, 'ready');
+  assert.match(preoperative.decision.headline, /補足總療程/);
+
+  const completed = matcher.colonAdjuvantAssessment([], fields, [
+    { phase: '術後／輔助', treatment: 'FOLFOX', status: '已完成', completedCycles: '12', plannedCycles: '12' },
+  ]);
+  assert.equal(completed.decision.level, 'omit');
+  assert.match(completed.decision.headline, /不再重複建議/);
+});
+
+test('rectal history recognizes completed TNT and completed postoperative CAPEOX', () => {
+  const fields = [
+    keyedField('base-treatment-setting', '治療階段／線別', '術後／鞏固'),
+    keyedField('rectal-surgery-path', '直腸癌手術／術前治療情境', '術前化放療後手術'),
+    keyedField('rectal-path-stage', '直腸癌術後病理分期', 'IIIB'),
+    keyedField('rectal-pt', '直腸癌病理 T 分期', 'ypT3'),
+    keyedField('rectal-pn', '直腸癌病理 N 分期', 'ypN1'),
+    keyedField('rectal-margin', '直腸癌切緣', '陰性'),
+    keyedField('rectal-crm', '直腸癌環周切緣（CRM）', '陰性／未受威脅'),
+    keyedField('crc-mmr-msi', 'MMR／MSI', 'pMMR／MSS'),
+  ];
+  const tnt = matcher.rectalAdjuvantAssessment([], fields, [
+    { phase: '術前／新輔助', treatment: 'FOLFOX', status: '已完成', completedCycles: '8', plannedCycles: '8' },
+    { phase: '放射治療', treatment: 'Long-course chemo/RT', status: '已完成' },
+  ]);
+  assert.equal(tnt.decision.level, 'omit');
+  assert.match(tnt.decision.headline, /已完成 TNT/);
+
+  const completed = matcher.rectalAdjuvantAssessment([], fields.map(item =>
+    item.sourceTemplateKey === 'rectal-surgery-path' ? { ...item, value: '先做經腹切除' } : item
+  ), [{ phase: '術後／輔助', treatment: 'CAPEOX', status: '已完成', completedCycles: '8', plannedCycles: '8' }]);
+  assert.equal(completed.decision.level, 'omit');
+  assert.match(completed.decision.headline, /不再重複建議/);
 });

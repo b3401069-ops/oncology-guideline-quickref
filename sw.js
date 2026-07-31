@@ -14,6 +14,7 @@ const ASSETS = [
   './nhi-parser.js',
   './nhi-versioning.js',
   './nhi-selector.js',
+  './tfda-registry.js',
   './nccn-parser.js',
   './vendor/pdf.min.mjs',
   './vendor/pdf.worker.min.mjs',

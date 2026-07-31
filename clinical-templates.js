@@ -345,11 +345,17 @@
         pf('breast-grade', '組織學分級', 'single_select', ['Grade 1','Grade 2','Grade 3','待確認']),
         pf('breast-lvi', '淋巴血管侵犯（LVI）', 'single_select', ['無','有','待確認']),
         pf('breast-menopause', '停經狀態', 'single_select', ['停經前／圍停經期','停經後','不適用／待確認']),
+        pf('breast-chemotherapy-candidate', '術後化療適用性', 'single_select', ['適合接受化療','不適合接受化療','待確認'], 'cancer', { help: 'HR+/HER2- 分支需先確認整體健康、共病與偏好是否允許化療，再解讀基因表現結果。' }),
+        pf('breast-tumor-size-cm', '病理浸潤腫瘤最大徑（cm）', 'number'),
+        pf('breast-ki67', 'Ki-67（%）', 'number', [], 'cancer', { markerPolarity: 'descriptive', help: '僅用於核對部分高風險術後 CDK4/6 路徑，不單獨決定治療。' }),
+        pf('breast-initial-clinical-risk', '術前治療前臨床風險', 'single_select', ['未接受術前全身治療','cT1–3、cN0–1','cT4 或 cN2–3／不可手術','待確認'], 'cancer', { help: '用於 HER2+ 術前治療後殘存病灶的高復發風險路徑。' }),
+        pf('breast-initial-nodal-status', '術前治療前臨床淋巴結', 'single_select', ['cN0','cN1','cN2–3','待確認'], 'cancer', { help: '用於判斷術後是否延續 pertuzumab 等 HER2 導向治療。' }),
         pf('breast-genomic-assay', '乳癌基因表現檢測', 'single_select', ['未評估','不適用','已送檢待結果','Oncotype DX','其他基因表現檢測'], 'cancer', { help: 'HR+/HER2- 術後化療決策常需依 pT／pN、停經狀態與基因表現結果判讀是否適用。' }),
         pf('breast-oncotype-rs', 'Oncotype DX Recurrence Score', 'number'),
         pf('breast-pdl1-cps', 'PD-L1 CPS（晚期 TNBC）', 'number', [], 'cancer', { positiveAtLeast: 10, help: '晚期 TNBC 免疫治療常用門檻為 CPS ≥10；低於此值不視為陽性，仍請核對原文與健保規定。' }),
         pf('breast-advanced-alterations', '晚期乳癌相關分子變異', 'multi_select', ['PIK3CA','ESR1','AKT1','PTEN loss／alteration','BRCA1','BRCA2','PALB2','MSI-H／dMMR','TMB-High','NTRK fusion','無已知相關變異','待檢']),
         pf('breast-germline', '胚系遺傳檢測', 'single_select', ['未評估','不符合／暫不需','已送檢待報告','陽性','陰性','VUS']),
+        pf('breast-germline-result', '胚系 BRCA1/2 結果', 'single_select', ['BRCA1/2 pathogenic variant','其他 pathogenic variant','陰性','VUS','未檢／待確認']),
       ],
     },
     {
@@ -918,7 +924,7 @@
   };
 
   window.CLINICAL_TEMPLATES = Object.freeze({
-    version: 6,
+    version: 7,
     commonChecklists,
     commonPrecisionFields,
     toggleMultiValue,

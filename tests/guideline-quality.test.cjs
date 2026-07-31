@@ -46,3 +46,22 @@ test('classifies review, pending, failed, and redirect documents separately', ()
   assert.equal(result.parsed, 2);
   assert.deepEqual(result.attention.map(item => item.doc.title), ['Review', 'Pending', 'Failed']);
 });
+test('tracks guideline version checks without calling an old file current', () => {
+  assert.deepEqual(quality.versionCheck({ importedAt: '2026-07-01' }, new Date('2026-07-31')), {
+    status: 'current', checkedAt: '2026-07-01', ageDays: 30,
+  });
+  assert.equal(quality.versionCheck({ versionCheckedAt: '2025-01-01' }, new Date('2026-07-31')).status, 'stale');
+  assert.equal(quality.versionCheck({}, new Date('2026-07-31')).status, 'undated');
+});
+
+test('summarizes stale and undated NCCN documents separately from parser quality', () => {
+  const documents = [
+    { importedAt: '2025-01-01', nccnStructure: structure() },
+    { nccnStructure: structure() },
+  ];
+  const result = quality.summarize(documents, 5, new Date('2026-07-31'));
+  assert.equal(result.ready, 2);
+  assert.equal(result.stale, 1);
+  assert.equal(result.undated, 1);
+  assert.equal(result.freshnessAttention.length, 2);
+});

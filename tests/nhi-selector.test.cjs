@@ -57,6 +57,8 @@ test('NCCN review candidates preserve ingredient-level NHI evidence without call
   assert.equal(suggested.nhiMatchLevel, 'component');
   assert.deepEqual(suggested.entries.map(item => item.n.id).sort(), ['bevacizumab', 'irinotecan']);
   assert.ok(suggested.entries.every(item => item.nhiMatchLevel === 'component'));
+  assert.equal(suggested.nccnEvidence.length, 1);
+  assert.equal(suggested.nccnEvidence[0].option.label, 'FOLFIRI ± (Bevacizumab [preferred] or Ziv-aflibercept or Ramucirumab)');
 });
 
 test('slash and and spellings still overlap for similarity review', () => {

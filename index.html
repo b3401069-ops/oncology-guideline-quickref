@@ -112,7 +112,12 @@
     .nhi-query-panel { padding: 12px; border: 1px solid var(--gray-200); border-radius: 8px; background: var(--gray-50); margin-bottom: 12px; }
     .nhi-query-toolbar { display: flex; gap: 8px; }
     .nhi-query-toolbar .btn { min-width: 0; }
-    @media (max-width: 360px) { .nhi-query-toolbar { flex-direction: column; } }
+    .treatment-history-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .treatment-history-grid .form-group { min-width: 0; }
+    @media (max-width: 360px) {
+      .nhi-query-toolbar { flex-direction: column; }
+      .treatment-history-grid { grid-template-columns: minmax(0, 1fr); }
+    }
     .batch-summary { padding: 12px; border: 1px solid var(--blue-100); border-radius: 8px; background: var(--blue-50); margin-bottom: 12px; }
     .batch-progress { padding: 12px; border: 1px solid var(--gray-200); border-radius: 8px; background: #fff; margin-bottom: 12px; }
     .batch-pagination { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 12px 0 16px; }
@@ -243,11 +248,12 @@
   <script src="./nhi-parser.js"></script>
   <script src="./nhi-versioning.js"></script>
   <script src="./nhi-selector.js"></script>
+  <script src="./tfda-registry.js"></script>
   <script src="./nccn-parser.js"></script>
   <script type="module">
     // ========== Database ==========
     const DB_NAME = 'OncologyGuidelineDB';
-    const DB_VERSION = 2;
+    const DB_VERSION = 3;
     const APP_VERSION = window.ONCOLOGY_APP_VERSION || 'unknown';
     let db;
 
@@ -276,6 +282,10 @@
           if (!db.objectStoreNames.contains('nhiNotes')) {
             const store = db.createObjectStore('nhiNotes', { keyPath: 'id' });
             store.createIndex('cancerId', 'cancerId');
+          }
+          if (!db.objectStoreNames.contains('tfdaIndications')) {
+            const store = db.createObjectStore('tfdaIndications', { keyPath: 'id' });
+            store.createIndex('cancerIds', 'cancerIds', { multiEntry: true });
           }
           if (!db.objectStoreNames.contains('restoreSnapshots')) {
             db.createObjectStore('restoreSnapshots', { keyPath: 'id' });
@@ -576,6 +586,7 @@
     const NHI_CHAPTER_DOWNLOAD_URL = 'https://www.nhi.gov.tw/ch/np-3397-1.html';
     const NHI_SECTION9_PDF_URL = 'https://www.nhi.gov.tw/ch/dl-55685-99c675b771ab4b2789c891bc8db447ce-1.pdf';
     const NCCN_GUIDELINES_URL = 'https://www.nccn.org/guidelines/category_1';
+    const TFDA_LICENSE_URL = 'https://info.fda.gov.tw/MLMS/H0001.aspx';
     const NCCN_GUIDELINE_TITLE_ALIASES = {
       '1430': ['DFSP'],
       '1505': ['Myeloid or Lymphoid Neoplasms with Eosinophilia and Tyrosine Kinase Gene Fusions'],
@@ -704,11 +715,17 @@
         description: 'NCCN 通常需要在官方網站登入與逐份下載。此 app 不保存帳密、不批量抓取，避免違反授權或網站使用規則。',
         version: '登入後下載 PDF', primaryUrl: NCCN_GUIDELINES_URL,
         secondaryUrl: '', primaryLabel: '開啟 NCCN 指引頁', secondaryLabel: ''
+      },
+      {
+        id: 'tfda-license', icon: '💊', title: 'TFDA 藥品許可證與核定仿單', source: 'TFDA',
+        description: '以許可證字號、中文／英文品名或成分查詢核准適應症與核定仿單。查到後可回 App 的 TFDA 適應症資料庫建立結構化紀錄。',
+        version: '以官方查詢結果與核定仿單為準', primaryUrl: TFDA_LICENSE_URL,
+        secondaryUrl: '', primaryLabel: '開啟 TFDA 查詢', secondaryLabel: ''
       }
     ];
 
     // ========== 預設範本（下拉／快速加入用，皆可再手動修改） ==========
-    const PRESET_SOURCES = ['NCCN', 'ESMO', 'ASCO', '健保給付規定', 'TCOG', 'AJCC', 'WHO'];
+    const PRESET_SOURCES = ['NCCN', 'ESMO', 'ASCO', '健保給付規定', 'TFDA 核定仿單', 'TCOG', 'AJCC', 'WHO'];
     const sourceDatalist = () => `<datalist id="source-presets">${PRESET_SOURCES.map(s => `<option value="${esc(s)}"></option>`).join('')}</datalist>`;
 
     const PRESET_SECTIONS = [
@@ -905,6 +922,85 @@
         ? '請逐項核對適應症、病期、治療線別、生物標記、先前治療及事前審查；這裡不代表已通過給付資格審查。'
         : '目前資料不足，不能推論為沒有給付；請連結最新版健保規定並完成限制條件。';
       return `<div class="alert ${hasRelated ? 'alert-info' : 'alert-warning'} mb-3"><p class="font-semibold">${title}</p><p class="text-xs mt-1">${detail}</p></div>`;
+    };
+    const renderTfdaEvidence = (matches, docs) => {
+      if (!matches.length) return '';
+      return `<div class="space-y-2 mt-3">${matches.map(({ record, level }) => {
+        const linked = docs.find(doc => doc.id === record.sourceDocumentId);
+        const sourceUrl = safeExternalUrl(record.sourceUrl);
+        const metadata = [
+          window.TFDA_REGISTRY.matchLevelLabels[level],
+          record.permitNumber ? '許可證 ' + record.permitNumber : '',
+          record.approvalDate ? '核准日 ' + record.approvalDate : '',
+        ].filter(Boolean).join(' · ');
+        return `<div class="bg-blue-50 rounded-lg p-3">
+          <p class="text-sm font-semibold text-blue-800">${esc(record.genericName)}${record.brandName ? ' · ' + esc(record.brandName) : ''}</p>
+          ${metadata ? `<p class="text-xs text-gray-500 mt-1">${esc(metadata)}</p>` : ''}
+          <p class="text-sm text-gray-700 mt-2">${esc(record.indication)}</p>
+          ${record.biomarker ? `<p class="text-xs mt-2"><strong>生物標記：</strong>${esc(record.biomarker)}</p>` : ''}
+          ${record.lineSetting ? `<p class="text-xs mt-1"><strong>病期／線別：</strong>${esc(record.lineSetting)}</p>` : ''}
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px">
+            ${linked?.storageKey ? `<button type="button" class="btn btn-ghost btn-sm" style="width:auto" onclick="openPdf('${jsStr(linked.storageKey)}', ${safePdfPage(record.sourcePage || 1)})">開啟核定仿單${record.sourcePage ? ' · p.' + esc(record.sourcePage) : ''}</button>` : ''}
+            ${sourceUrl ? `<a class="btn btn-ghost btn-sm" style="width:auto" href="${esc(sourceUrl)}" target="_blank" rel="noopener noreferrer">開啟官方來源</a>` : ''}
+          </div>
+        </div>`;
+      }).join('')}</div>`;
+    };
+    const renderTreatmentHistory = (items, cancerId) => {
+      const rows = (items || []).map(item => {
+        const cycles = item.completedCycles || item.plannedCycles
+          ? `週期 ${item.completedCycles || '？'}／${item.plannedCycles || '？'}` : '';
+        const dates = [item.startDate, item.endDate].filter(Boolean).join(' ～ ');
+        const details = [item.status, cycles, dates].filter(Boolean).join(' · ');
+        return `<div class="list-item" style="align-items:flex-start">
+          <div class="min-w-0 flex-1">
+            <p class="text-xs font-semibold text-blue-700">${esc(item.phase || '階段待補')}</p>
+            <p class="text-sm font-semibold text-gray-800 mt-1">${esc(item.treatment || '療程待補')}</p>
+            ${details ? `<p class="text-xs text-gray-500 mt-1">${esc(details)}</p>` : ''}
+            ${item.stopReason ? `<p class="text-xs mt-1" style="color:var(--amber-700)">中止／調整原因：${esc(item.stopReason)}</p>` : ''}
+            ${item.toxicity ? `<p class="text-xs text-gray-500 mt-1">重要毒性：${esc(item.toxicity)}</p>` : ''}
+          </div>
+          <div style="display:flex;gap:4px;flex-shrink:0">
+            <button type="button" class="btn btn-ghost btn-sm" style="width:40px;padding:6px" title="編輯治療紀錄" aria-label="編輯治療紀錄" onclick="window._editTreatmentHistory('${jsStr(cancerId)}','${jsStr(item.id)}')">✏️</button>
+            <button type="button" class="btn btn-ghost btn-sm" style="width:40px;padding:6px;color:var(--red-600)" title="刪除治療紀錄" aria-label="刪除治療紀錄" onclick="window._deleteTreatmentHistory('${jsStr(cancerId)}','${jsStr(item.id)}')">🗑</button>
+          </div>
+        </div>`;
+      }).join('');
+      return `<div class="card section" id="treatment-history-section">
+        <div class="flex-between gap-2">
+          <h2 class="section-title">🗓️ 治療歷程</h2>
+          <span class="tag">${(items || []).length} 筆</span>
+        </div>
+        <p class="text-xs text-gray-500 mb-3">記錄術前與術後已完成療程，App 才不會把延續療程誤當成重新開始。</p>
+        ${rows || '<p class="text-sm text-gray-400 mb-3">尚未建立治療紀錄</p>'}
+        <details class="mt-3" id="treatment-history-editor">
+          <summary class="btn btn-secondary btn-sm" style="list-style:none;cursor:pointer">＋ 新增／編輯治療紀錄</summary>
+          <div class="mt-3 space-y-3">
+            <input type="hidden" id="treatment-history-id">
+            <div class="form-group"><label class="label">治療階段</label><select class="input" id="treatment-history-phase">
+              <option value="">（未輸入）</option>
+              ${['術前／新輔助','手術','術後／輔助','放射治療','內分泌／維持','復發／轉移','其他'].map(value => `<option value="${esc(value)}">${esc(value)}</option>`).join('')}
+            </select></div>
+            <div class="form-group"><label class="label">藥物／療程／處置</label><input class="input" id="treatment-history-treatment" placeholder="例如 TCHP、KEYNOTE-522 型療程、手術"></div>
+            <div class="form-group"><label class="label">狀態</label><select class="input" id="treatment-history-status">
+              <option value="">（未輸入）</option>
+              ${['計畫中','進行中','已完成','未完成／待續','因毒性中止','因病情調整'].map(value => `<option value="${esc(value)}">${esc(value)}</option>`).join('')}
+            </select></div>
+            <div class="treatment-history-grid">
+              <div class="form-group"><label class="label">已完成週期</label><input class="input" type="number" min="0" id="treatment-history-completed"></div>
+              <div class="form-group"><label class="label">計畫總週期</label><input class="input" type="number" min="0" id="treatment-history-planned"></div>
+              <div class="form-group"><label class="label">開始日期</label><input class="input" type="date" id="treatment-history-start"></div>
+              <div class="form-group"><label class="label">結束日期</label><input class="input" type="date" id="treatment-history-end"></div>
+            </div>
+            <div class="form-group"><label class="label">中止／調整原因</label><input class="input" id="treatment-history-stop-reason" placeholder="可留白"></div>
+            <div class="form-group"><label class="label">重要毒性</label><input class="input" id="treatment-history-toxicity" placeholder="可留白"></div>
+            <div class="nhi-query-toolbar">
+              <button type="button" class="btn btn-primary flex-1" id="treatment-history-save">儲存紀錄</button>
+              <button type="button" class="btn btn-secondary flex-1" id="treatment-history-reset">清空表單</button>
+            </div>
+          </div>
+        </details>
+      </div>`;
     };
     const renderNhiSourceMeta = (note) => {
       const parts = [];
@@ -1287,14 +1383,14 @@
     }
 
     // ========== Backup ==========
-    const BACKUP_STORES = ['cancerCards','documents','checklists','precisionFields','nhiNotes'];
+    const BACKUP_STORES = ['cancerCards','documents','checklists','precisionFields','nhiNotes','tfdaIndications'];
     const BACKUP_PLAN_KEY = 'oncology-backup-plan';
     const PDF_RESTORE_TRACKER_KEY = 'oncology-pdf-restore-progress';
 
     async function collectMetadataStores() {
-      const [cancerCards, documents, checklists, precisionFields, nhiNotes] = await Promise.all([
+      const [cancerCards, documents, checklists, precisionFields, nhiNotes, tfdaIndications] = await Promise.all([
         dbGetAll('cancerCards'), dbGetAll('documents'), dbGetAll('checklists'),
-        dbGetAll('precisionFields'), dbGetAll('nhiNotes')
+        dbGetAll('precisionFields'), dbGetAll('nhiNotes'), dbGetAll('tfdaIndications')
       ]);
       return {
         cancerCards,
@@ -1302,6 +1398,7 @@
         checklists,
         precisionFields: window.CASE_STATE.stripValues(precisionFields),
         nhiNotes,
+        tfdaIndications,
       };
     }
 
@@ -1667,6 +1764,14 @@
       return esc(String(value ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'"));
     }
 
+    function safeExternalUrl(value) {
+      try {
+        const url = new URL(String(value || ''), location.href);
+        return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
+      } catch {
+        return '';
+      }
+    }
     // ========== Toast ==========
     function showToast(msg, duration = 2500) {
       const el = document.getElementById('toast');
@@ -1752,6 +1857,8 @@
         await renderNhi(app);
       } else if (currentRoute === '/sources') {
         await renderSourceHub(app);
+      } else if (currentRoute === '/tfda') {
+        await renderTfdaRegistry(app);
       } else if (currentRoute === '/pdf-library' && !routeParams.docId) {
         await renderPdfLibrary(app);
       } else if (currentRoute === '/pdf-library/batch') {
@@ -1787,6 +1894,7 @@
       const qualitySummary = window.GUIDELINE_QUALITY.summarize(currentNccnDocs);
       const qualityAttentionCount = qualitySummary.review + qualitySummary.pending + qualitySummary.failed;
       const qualityAttentionNames = qualitySummary.attention.slice(0, 3).map(item => item.doc.title || item.doc.fileName).filter(Boolean);
+      const qualityStatusLabels = { ready: '可用', review: '需人工核對', pending: '待解析或舊版索引', failed: '解析失敗', redirect: '轉介至其他指引' };
       const scenarioSummary = window.CLINICAL_SCENARIOS.summarize(currentDocs, window.CLINICAL_MATCHER);
       const scenarioAttentionNames = scenarioSummary.attention.slice(0, 3).map(item => item.scenario.label);
       const currentNhiNotes = allNhiNotes.filter(note => window.NHI_VERSIONING.isActive(note));
@@ -1834,7 +1942,23 @@
               <strong>常用癌別情境驗收 ${scenarioSummary.pass} / ${scenarioSummary.total}</strong>
               ${scenarioAttentionNames.length ? `<p class="text-xs mt-1">待核對：${esc(scenarioAttentionNames.join('、'))}${scenarioSummary.attention.length > scenarioAttentionNames.length ? ' 等' : ''}</p>` : '<p class="text-xs mt-1">HCC、肺癌、大腸直腸癌、乳癌與 NET 路徑皆通過。</p>'}
             </div>
-            ${missingNccnGuidelineCount ? `<p class="text-xs mt-3" style="color:var(--amber-700)">尚缺 ${missingNccnGuidelineCount} 個指引系列${missingNccnSummary}</p>` : ""}
+            <details class="nhi-query-panel mt-3" ${missingNccnGuidelineCount || qualityAttentionCount || qualitySummary.freshnessAttention.length ? 'open' : ''}>
+              <summary class="text-sm font-semibold text-blue-700" style="cursor:pointer">資料健康明細 · ${missingNccnGuidelineCount + qualityAttentionCount + qualitySummary.freshnessAttention.length} 項</summary>
+              <div class="mt-3 space-y-3">
+                <div>
+                  <div class="flex-between" style="gap:8px"><p class="text-sm font-semibold text-gray-800">尚缺指引系列</p><span class="tag">${missingNccnGuidelineCount}</span></div>
+                  ${missingNccnGuidelineCount ? `<ul class="text-xs text-gray-600 mt-2" style="padding-left:18px;list-style:disc">${missingNccnGuidelines.map(guideline => `<li>${esc(guideline.title)}</li>`).join('')}</ul><button type="button" class="btn btn-secondary btn-sm mt-2" onclick="navigate('/pdf-library/batch')">前往批次匯入</button>` : '<p class="text-xs text-gray-500 mt-1">所有已登錄 NCCN 指引系列均有目前版本。</p>'}
+                </div>
+                <div>
+                  <div class="flex-between" style="gap:8px"><p class="text-sm font-semibold text-gray-800">解析需要處理</p><span class="tag">${qualityAttentionCount}</span></div>
+                  ${qualityAttentionCount ? `<div class="space-y-2 mt-2">${qualitySummary.attention.map(item => `<div class="list-item"><div><p class="text-xs font-semibold">${esc(item.doc.title || item.doc.fileName || '未命名文件')}</p><p class="text-xs text-gray-500">${esc(qualityStatusLabels[item.status] || item.status)}</p></div></div>`).join('')}</div><button type="button" class="btn btn-secondary btn-sm mt-2" onclick="navigate('/pdf-library')">前往文件庫處理</button>` : '<p class="text-xs text-gray-500 mt-1">已解析文件皆可建立療程索引。</p>'}
+                </div>
+                <div>
+                  <div class="flex-between" style="gap:8px"><p class="text-sm font-semibold text-gray-800">版本確認時效</p><span class="tag">${qualitySummary.stale + qualitySummary.undated}</span></div>
+                  ${qualitySummary.freshnessAttention.length ? `<div class="space-y-2 mt-2">${qualitySummary.freshnessAttention.map(item => `<div class="list-item"><div><p class="text-xs font-semibold">${esc(item.doc.title || item.doc.fileName || '未命名文件')}</p><p class="text-xs text-gray-500">${item.status === 'stale' ? '距上次確認 ' + item.ageDays + ' 天' : '未記錄版本確認日期'}</p></div></div>`).join('')}</div><button type="button" class="btn btn-secondary btn-sm mt-2" onclick="navigate('/pdf-library')">確認目前版本</button>` : '<p class="text-xs text-gray-500 mt-1">每份 NCCN 文件都有六個月內的版本確認日期。</p>'}
+                </div>
+              </div>
+            </details>
           </section>
           ${staleNhiRuleCount || undatedNhiRuleCount ? `<div class="alert alert-warning" style="cursor:pointer" onclick="navigate('/pdf-library')"><strong>健保規定時效待確認</strong>${staleNhiRuleCount ? ` · ${staleNhiRuleCount} 筆超過一年` : ''}${undatedNhiRuleCount ? ` · ${undatedNhiRuleCount} 筆未記錄日期` : ''}<p class="text-xs mt-1">重新解析目前健保 PDF 可補上公告日期並封存舊版。</p></div>` : ''}
           ${staleCount > 0 ? `<div class="alert alert-warning" style="cursor:pointer" onclick="navigate('/pdf-library')">⏰ 有 <strong>${staleCount}</strong> 份指引超過 6 個月未確認版本，點此前往文件庫</div>` : ''}
@@ -1963,6 +2087,7 @@
 
       const checklists = (await dbGetAll('checklists')).filter(c => c.cancerId === card.id);
       const nhiNotes = nhiNotesForCancer(await dbGetAll('nhiNotes'), card.id, relatedIds);
+      const tfdaRecords = await dbGetAll('tfdaIndications');
       const precisionFields = await getCasePrecisionFields(card.id);
       const jumpDoc = currentDocs.find(d => d.storageKey);
       const pfMap = buildPfMap(precisionFields);
@@ -2030,6 +2155,7 @@
           </div>
 
           <!-- Must Read Sections -->
+
           <div class="card section">
             <h2 class="section-title">📖 必查章節</h2>
             ${card.mustReadSections.length ? `<ul class="space-y-2">${card.mustReadSections.map(s => {
@@ -2124,7 +2250,9 @@
       const currentDocs = docs.filter(d => d.cancerIds?.some(id => relatedIds.includes(id)) && d.current && !d.archived);
       const checklists = (await dbGetAll('checklists')).filter(c => c.cancerId === card.id);
       const precisionFields = await getCasePrecisionFields(card.id);
+      const treatmentHistory = window.CASE_STATE.treatmentHistory(card.id);
       const nhiNotes = nhiNotesForCancer(await dbGetAll('nhiNotes'), card.id, relatedIds);
+      const tfdaRecords = await dbGetAll('tfdaIndications');
 
       const hasDocs = currentDocs.length > 0;
       const jumpDoc = currentDocs.find(d => d.storageKey);
@@ -2137,7 +2265,7 @@
       const parsedNccnDocs = currentDocs.filter(isUsableNccnStructure);
       const nccnMatches = nccnTreatmentMatches(parsedNccnDocs, queryPrecisionFields);
       const nccnDiagnosis = nccnTreatmentDiagnosis(parsedNccnDocs, queryPrecisionFields);
-      const adjuvant = window.CLINICAL_MATCHER.adjuvantAssessment(card.id, parsedNccnDocs, queryPrecisionFields);
+      const adjuvant = window.CLINICAL_MATCHER.adjuvantAssessment(card.id, parsedNccnDocs, queryPrecisionFields, treatmentHistory);
       const nccnDiagnosticFields = nccnDiagnosis.suggestedFields || [];
       const nccnDiagnosisFeatureLabels = nccnDiagnosis.positiveFeatures.map(item => window.CLINICAL_MATCHER.featureLabel(item.key));
       const nccnDiagnosisUnmatchedLabels = nccnDiagnosis.unmatchedFeatures.map(item => window.CLINICAL_MATCHER.featureLabel(item.key));
@@ -2181,6 +2309,55 @@
         : selectedUnmatchedEntries.length ? 'unmatched'
         : selectedMatchedEntries.length ? 'matched'
         : selectedTreatment ? 'review' : '';
+      const selectedNccnEvidence = selectedTreatment?.nccnEvidence || [];
+      const selectedTfdaMatches = selectedTreatment
+        ? window.TFDA_REGISTRY.match(tfdaRecords, selectedTreatment.label, relatedIds)
+        : [];
+      const selectedReasonLabels = [...new Set(selectedNccnEvidence.flatMap(item => item.reasons || [])
+        .map(key => window.CLINICAL_MATCHER.featureLabel(key) || key))];
+      const selectedReviewNotes = [...new Set(selectedNccnEvidence.flatMap(item => item.assessment?.reviewNotes || []))];
+      const selectedUsesAdjuvantPath = selectedNccnEvidence.some(item => (item.reasons || []).includes('adjuvant'));
+      const selectedMissingEvidence = [...new Set([
+        ...selectedReviewNotes,
+        ...selectedUnknownLabels.map(label => '健保條件尚未填寫：' + label),
+        ...(selectedUsesAdjuvantPath ? (adjuvant.missing || []) : []),
+      ])];
+      const selectedNccnPages = [...new Map(selectedNccnEvidence.map(item => [
+        [item.doc?.id || item.doc?.storageKey || '', item.page?.page || ''].join(':'),
+        item,
+      ])).values()];
+      const selectedNccnSourceButtons = selectedNccnPages.map(item => {
+        const code = item.page?.sectionCode || item.page?.title || 'NCCN';
+        const pageNumber = safePdfPage(item.page?.page || 1);
+        return item.doc?.storageKey
+          ? `<button type="button" class="btn btn-ghost btn-sm" style="width:auto" onclick="openPdf('${jsStr(item.doc.storageKey)}', ${pageNumber})">${esc(code)} · PDF p.${pageNumber}</button>`
+          : `<span class="tag">${esc(code)} · p.${pageNumber}</span>`;
+      }).join('');
+      const tfdaStatusText = selectedTfdaMatches.length
+        ? `找到 ${selectedTfdaMatches.length} 筆同名或療程成分候選；仍須核對癌別、病期、標記、線別與合併療法。`
+        : tfdaRecords.length
+          ? '目前資料庫未找到同名核准適應症候選；這不代表未核准。'
+          : '尚未建立 TFDA 核准適應症資料；不能由 NCCN 或健保狀態推定已核准。';
+      const selectedTreatmentEvidence = selectedTreatment ? `
+        <div class="mt-3" style="border-top:1px solid #e2e8f0;padding-top:10px">
+          <p class="text-sm font-semibold text-gray-800 mb-2">治療依據分開看</p>
+          <div class="space-y-2">
+            <div class="list-item"><div><p class="text-sm font-semibold">NCCN 指引</p><p class="text-xs text-gray-500">${selectedTreatment.fromNccn ? '已連結本機 NCCN 候選與對應頁；仍須核對完整條件。' : '此項來自健保資料，尚未連結 NCCN 候選。'}</p></div><span class="tag ${selectedTreatment.fromNccn ? 'tag-category' : ''}">${selectedTreatment.fromNccn ? '有候選' : '待核對'}</span></div>
+            <div class="list-item"><div><p class="text-sm font-semibold">台灣核准適應症</p><p class="text-xs text-gray-500">${esc(tfdaStatusText)}</p></div><span class="tag ${selectedTfdaMatches.length ? 'tag-category' : ''}">${selectedTfdaMatches.length ? selectedTfdaMatches.length + ' 筆候選' : '未確認'}</span></div>
+            <div class="list-item"><div><p class="text-sm font-semibold">健保給付</p><p class="text-xs text-gray-500">${selectedTreatment.entries.length ? '已找到相關條文；仍須逐項符合限制條件。' : '尚未找到同名條文；這不代表沒有給付。'}</p></div><span class="tag ${selectedTreatment.entries.length ? 'tag-category' : ''}">${selectedTreatment.entries.length ? esc(nhiMatchLevelLabels[selectedNhiMatchLevel] || '待核對') : '未對應'}</span></div>
+          </div>
+          ${renderTfdaEvidence(selectedTfdaMatches, docs)}
+          <details class="nhi-query-panel mt-3">
+            <summary class="text-sm font-semibold text-blue-700" style="cursor:pointer">查看此療程的判讀依據</summary>
+            <div class="mt-3 space-y-3">
+              <div><p class="text-sm font-semibold text-gray-800">為何出現</p><p class="text-xs text-gray-600 mt-1">${selectedReasonLabels.length ? esc(selectedReasonLabels.join('、')) : selectedTreatment.fromNccn ? '由本次 NCCN 療程頁命中，但解析器未提供更細的條件標籤。' : '由已建立的健保藥物／療程名稱帶入。'}</p></div>
+              <div><p class="text-sm font-semibold text-gray-800">已套用的排除邏輯</p><p class="text-xs text-gray-600 mt-1">已隱藏與目前陰性生物標記、互斥驅動基因或病程方向衝突的候選；未被排除仍不等於個案確定適用。</p></div>
+              <div><p class="text-sm font-semibold text-gray-800">尚缺或需核對</p>${selectedMissingEvidence.length ? `<ul class="text-xs text-gray-600 mt-1" style="padding-left:18px;list-style:disc">${selectedMissingEvidence.map(item => `<li>${esc(item)}</li>`).join('')}</ul>` : '<p class="text-xs text-gray-600 mt-1">目前沒有由結構化規則辨識出的缺漏；仍須核對完整原頁、腳註與個案共病。</p>'}</div>
+              <div><p class="text-sm font-semibold text-gray-800">原始 NCCN 證據</p><div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">${selectedNccnSourceButtons || '<span class="text-xs text-gray-500">尚未連結 NCCN 原頁</span>'}</div></div>
+            </div>
+          </details>
+          <button type="button" class="btn btn-ghost btn-sm mt-3" style="width:auto" onclick="navigate('/tfda')">管理 TFDA 適應症資料</button>
+        </div>` : '';
       const missingItems = [];
       if (!effectivePrimaryGuideline) missingItems.push('尚未設定主要指引');
       if (!card.mustReadSections.length && !parsedNccnDocs.some(doc => doc.nccnStructure?.sections?.length)) missingItems.push('尚未建立指引章節索引');
@@ -2227,6 +2404,8 @@
               ${filledPf.length ? filledPf.flatMap(field => (Array.isArray(field.value) ? field.value : [field.value]).map(value => `<span class="tag tag-category">${esc(field.label)}：${esc(value)}</span>`)).join('') : '<span class="text-xs text-gray-400">尚未輸入條件</span>'}
             </div>
           </div>
+
+          ${renderTreatmentHistory(treatmentHistory, card.id)}
 
           <div class="card section">
             <h2 class="section-title">📖 必查章節</h2>
@@ -2318,6 +2497,7 @@
               ${selectedTreatment ? `
                 ${selectedTreatment.entries.length ? `<div class="alert ${selectedNhiMatchLevel === 'exact' ? 'alert-success' : 'alert-warning'}"><p class="font-semibold">${esc(nhiMatchLevelLabels[selectedNhiMatchLevel] || '健保資料待核對')}</p><p class="text-xs mt-1">${selectedNhiMatchLevel === 'component' ? '目前只找到療程中部分藥物的相關規定，不代表整套療程均有給付。' : selectedNhiMatchLevel === 'similar' ? '目前只有名稱相似的條目，不可視為同一療程或給付依據。' : '已找到同名療程／藥物規定，仍需依完整條件判定。'}</p></div>${renderNhiSummary(selectedTreatment.entries.map(({ n }) => n))}` : '<div class="alert alert-info"><p class="font-semibold">NCCN 指引候選療程</p><p class="text-xs mt-1">尚未在已匯入的健保資料找到同名條目；這不代表沒有給付，請核對最新版給付規定。</p></div>'}
                 ${selectedTreatment.requiresSourceReview ? '<div class="alert alert-warning"><p class="font-semibold">此候選需開啟 NCCN 原頁核對</p><p class="text-xs mt-1">候選來自流程頁或敘述文字，請先確認完整適用條件，再進行健保比對。</p></div>' : ''}
+                ${selectedTreatmentEvidence}
                 ${selectedNhiResultState === 'missing' ? `<div class="nhi-query-status is-warning" aria-live="polite">
                   <p class="font-semibold">資料不足：尚缺 ${selectedUnknownLabels.length} 項必要條件</p>
                   <p class="text-xs mt-1">${esc(selectedUnknownLabels.join('、'))}</p>
@@ -2385,6 +2565,36 @@
         </div>
       `;
 
+      const resetTreatmentHistoryForm = () => {
+        ['id','phase','treatment','status','completed','planned','start','end','stop-reason','toxicity'].forEach(suffix => {
+          const control = document.getElementById('treatment-history-' + suffix);
+          if (control) control.value = '';
+        });
+      };
+      document.getElementById('treatment-history-reset')?.addEventListener('click', resetTreatmentHistoryForm);
+      document.getElementById('treatment-history-save')?.addEventListener('click', async () => {
+        const phase = document.getElementById('treatment-history-phase')?.value || '';
+        const treatment = document.getElementById('treatment-history-treatment')?.value.trim() || '';
+        const status = document.getElementById('treatment-history-status')?.value || '';
+        if (!phase || !treatment || !status) {
+          showToast('請填寫治療階段、療程與狀態');
+          return;
+        }
+        window.CASE_STATE.saveTreatment(card.id, {
+          id: document.getElementById('treatment-history-id')?.value || '',
+          phase,
+          treatment,
+          status,
+          completedCycles: document.getElementById('treatment-history-completed')?.value || '',
+          plannedCycles: document.getElementById('treatment-history-planned')?.value || '',
+          startDate: document.getElementById('treatment-history-start')?.value || '',
+          endDate: document.getElementById('treatment-history-end')?.value || '',
+          stopReason: document.getElementById('treatment-history-stop-reason')?.value.trim() || '',
+          toxicity: document.getElementById('treatment-history-toxicity')?.value.trim() || '',
+        });
+        showToast('已儲存治療紀錄並重新判讀');
+        await handleRoute({ preserveScroll: true, anchorId: 'treatment-history-section' });
+      });
       app.querySelectorAll('[data-nhi-treatment-key]').forEach((button) => {
         button.addEventListener('click', () => {
           const key = nhiTreatmentSessionKey(card.id);
@@ -2463,7 +2673,15 @@
           lines.push('', '精準化資訊：');
           filledPf.forEach(f => lines.push('- ' + f.label + '：' + pfValueText(f)));
         }
-        if (adjuvant.active) {
+        if (treatmentHistory.length) {
+          lines.push('', '治療歷程：');
+          treatmentHistory.forEach(item => {
+            const cycles = item.completedCycles || item.plannedCycles ? `；週期 ${item.completedCycles || '？'}／${item.plannedCycles || '？'}` : '';
+            lines.push(`- ${item.phase}：${item.treatment}（${item.status}${cycles}）`);
+            if (item.stopReason) lines.push('  • 中止／調整原因：' + item.stopReason);
+            if (item.toxicity) lines.push('  • 重要毒性：' + item.toxicity);
+          });
+        }        if (adjuvant.active) {
           lines.push('', (adjuvant.title || '術後輔助治療評估') + '：');
           lines.push('- ' + adjuvant.message);
           if (adjuvant.branchLabel) lines.push('- 目前路徑：' + adjuvant.branchLabel);
@@ -2484,7 +2702,17 @@
         if (selectedTreatment) {
           const selectedNotes = selectedTreatment.entries.map(({ n }) => n);
           const hasRelatedCoverage = selectedNotes.some(note => nhiCoverageStatus(note) === NHI_STATUS_RELATED);
+          lines.push('', '治療依據分開看：');
+          lines.push('- NCCN 指引：' + (selectedTreatment.fromNccn ? '已連結候選與原頁，仍須核對完整條件' : '尚未連結 NCCN 候選'));
+          lines.push('- 台灣核准適應症：' + (selectedTfdaMatches.length
+            ? '找到 ' + selectedTfdaMatches.length + ' 筆候選，仍須核對癌別、病期、標記、線別與合併療法'
+            : tfdaRecords.length ? '目前未找到同名候選，不代表未核准' : '尚未建立 TFDA 資料，不可由 NCCN 或健保狀態推定'));
+          lines.push('- 健保給付：' + (selectedTreatment.entries.length ? '已找到相關條文，仍須符合限制條件' : '尚未找到同名條文，不代表沒有給付'));
           lines.push('- 已選擇：' + selectedTreatment.label);
+          lines.push('- 為何出現：' + (selectedReasonLabels.length ? selectedReasonLabels.join('、') : selectedTreatment.fromNccn ? '本次 NCCN 療程頁命中' : '健保資料名稱帶入'));
+          lines.push('- 排除原則：已隱藏與目前陰性標記、互斥驅動基因或病程方向衝突的候選');
+          if (selectedMissingEvidence.length) lines.push('- 尚缺或需核對：' + selectedMissingEvidence.join('；'));
+          if (selectedNccnPages.length) lines.push('- 原始 NCCN 證據：' + selectedNccnPages.map(item => (item.page?.sectionCode || 'NCCN') + ' · PDF p.' + safePdfPage(item.page?.page || 1)).join('；'));
           lines.push('- 比對層級：' + (nhiMatchLevelLabels[selectedNhiMatchLevel] || '待核對'));
           lines.push('- ' + (selectedNhiMatchLevel === 'component'
             ? '部分成分有相關健保規定；不代表整套療程給付'
@@ -4009,6 +4237,181 @@
       });
     }
 
+    async function renderTfdaRegistry(app) {
+      const records = (await dbGetAll('tfdaIndications')).sort((a, b) =>
+        String(a.genericName || '').localeCompare(String(b.genericName || ''))
+      );
+      const cards = await dbGetAll('cancerCards');
+      const docs = (await dbGetAll('documents')).filter(doc => !doc.archived);
+      const summary = window.TFDA_REGISTRY.summarize(records);
+      const cardName = id => cards.find(card => card.id === id)?.zhName || id;
+      const docName = id => docs.find(doc => doc.id === id)?.title || '';
+
+      const recordHtml = records.length ? records.map(record => {
+        const cancers = (record.cancerIds || []).map(cardName).join('、') || '未限定癌別';
+        const source = docName(record.sourceDocumentId);
+        return '<div class="list-item" style="align-items:flex-start">' +
+          '<div class="min-w-0 flex-1">' +
+            '<p class="font-semibold text-gray-900">' + esc(record.genericName) +
+              (record.brandName ? ' · ' + esc(record.brandName) : '') + '</p>' +
+            '<p class="text-xs text-gray-500 mt-1">' + esc(cancers) +
+              (record.permitNumber ? ' · ' + esc(record.permitNumber) : '') +
+              (record.approvalDate ? ' · ' + esc(record.approvalDate) : '') + '</p>' +
+            '<p class="text-sm text-gray-700 mt-2">' + esc(record.indication) + '</p>' +
+            (record.biomarker ? '<p class="text-xs mt-1" style="color:var(--amber-700)">標記／條件：' + esc(record.biomarker) + '</p>' : '') +
+            (record.lineSetting ? '<p class="text-xs text-gray-500 mt-1">線別／情境：' + esc(record.lineSetting) + '</p>' : '') +
+            (source ? '<p class="text-xs text-gray-500 mt-1">本機來源：' + esc(source) + (record.sourcePage ? ' · p.' + record.sourcePage : '') + '</p>' : '') +
+          '</div>' +
+          '<div style="display:flex;gap:4px;flex-shrink:0">' +
+            '<button type="button" class="btn btn-ghost btn-sm" style="width:40px;padding:6px" title="編輯 TFDA 紀錄" onclick="window._editTfdaRecord(\'' + jsStr(record.id) + '\')">✏️</button>' +
+            '<button type="button" class="btn btn-ghost btn-sm" style="width:40px;padding:6px;color:var(--red-600)" title="刪除 TFDA 紀錄" onclick="window._deleteTfdaRecord(\'' + jsStr(record.id) + '\')">🗑</button>' +
+          '</div>' +
+        '</div>';
+      }).join('') : '<p class="text-sm text-gray-400">尚未建立 TFDA 核准適應症資料。</p>';
+
+      app.innerHTML = [
+        '<div class="container">',
+          '<button class="back-btn" onclick="navigate(\'/settings\')">← 返回</button>',
+          '<div class="flex-between gap-2 mb-4">',
+            '<div><h1 class="text-2xl font-bold">TFDA 適應症資料庫</h1><p class="text-sm text-gray-500 mt-1">核准適應症與健保給付分開保存</p></div>',
+            '<button type="button" class="btn btn-secondary btn-sm" id="tfda-official-btn" style="width:auto">官方查詢 ↗</button>',
+          '</div>',
+          '<div class="quality-grid mb-4">',
+            '<div class="quality-stat"><strong>' + summary.active + '</strong><span>目前紀錄</span></div>',
+            '<div class="quality-stat"><strong>' + summary.cancers + '</strong><span>涵蓋癌別</span></div>',
+            '<div class="quality-stat"><strong>' + summary.undated + '</strong><span>未記核准日期</span></div>',
+            '<div class="quality-stat"><strong>' + summary.withoutSource + '</strong><span>未連結來源</span></div>',
+          '</div>',
+          '<div class="alert alert-info"><p class="font-semibold">判讀邊界</p><p class="text-xs mt-1">找到同名藥物只代表有 TFDA 適應症候選；仍須核對核定仿單中的癌別、病期、標記、線別與合併療法。</p></div>',
+          '<div class="card mb-4">',
+            '<div class="flex-between gap-2 mb-3"><h2 class="font-semibold text-gray-800">資料工具</h2><div style="display:flex;gap:6px"><button class="btn btn-ghost btn-sm" id="tfda-import-json" style="width:auto">匯入 JSON</button><button class="btn btn-ghost btn-sm" id="tfda-export-json" style="width:auto">匯出 JSON</button></div></div>',
+            recordHtml,
+          '</div>',
+          '<div class="card mb-4" id="tfda-editor">',
+            '<h2 class="font-semibold text-gray-800 mb-3">新增／編輯核准適應症</h2>',
+            '<input type="hidden" id="tfda-id">',
+            '<div class="form-group"><label class="label">學名／主成分 *</label><input class="input" id="tfda-generic" placeholder="例如 Pembrolizumab"></div>',
+            '<div class="form-group"><label class="label">商品名</label><input class="input" id="tfda-brand" placeholder="例如 Keytruda"></div>',
+            '<div class="form-group"><label class="label">其他名稱</label><textarea class="input" id="tfda-aliases" rows="2" placeholder="每行一個；可填中文商品名或常用縮寫"></textarea></div>',
+            '<div class="form-group"><label class="label">許可證字號</label><input class="input" id="tfda-permit"></div>',
+            '<div class="form-group"><label class="label">對應癌別</label><div class="border rounded-xl p-2 overflow-y-auto max-h-64" style="border-color:var(--gray-200)">' +
+              cards.map(card => '<label class="checkbox-wrap" style="padding:6px 8px"><input type="checkbox" class="tfda-cancer-cb" value="' + esc(card.id) + '"><span class="text-sm">' + esc(card.zhName) + '</span></label>').join('') +
+            '</div></div>',
+            '<div class="form-group"><label class="label">核准適應症原文／摘要 *</label><textarea class="input" id="tfda-indication" rows="5"></textarea></div>',
+            '<div class="form-group"><label class="label">必要標記／限制摘要</label><textarea class="input" id="tfda-biomarker" rows="2" placeholder="例如 HER2-positive、PD-L1 CPS ≥10"></textarea></div>',
+            '<div class="form-group"><label class="label">治療線別／情境摘要</label><input class="input" id="tfda-line" placeholder="例如術後輔助、轉移第一線"></div>',
+            '<div class="form-group"><label class="label">核准／仿單日期</label><input class="input" type="date" id="tfda-date"></div>',
+            '<div class="form-group"><label class="label">官方來源網址</label><input class="input" type="url" id="tfda-url" placeholder="https://info.fda.gov.tw/..."></div>',
+            '<div class="form-group"><label class="label">連結本機仿單 PDF</label><select class="input" id="tfda-document"><option value="">（未連結）</option>' +
+              docs.map(doc => '<option value="' + esc(doc.id) + '">' + esc(doc.title || doc.fileName) + '</option>').join('') +
+            '</select></div>',
+            '<div class="form-group"><label class="label">PDF 實體頁碼</label><input class="input" type="number" min="1" id="tfda-page"></div>',
+            '<div class="nhi-query-toolbar"><button class="btn btn-primary flex-1" id="tfda-save">儲存</button><button class="btn btn-secondary flex-1" id="tfda-reset">清空表單</button></div>',
+          '</div>',
+          renderNav('settings'),
+        '</div>',
+      ].join('');
+
+      const reset = () => {
+        ['id','generic','brand','aliases','permit','indication','biomarker','line','date','url','page'].forEach(suffix => {
+          const element = document.getElementById('tfda-' + suffix);
+          if (element) element.value = '';
+        });
+        document.getElementById('tfda-document').value = '';
+        document.querySelectorAll('.tfda-cancer-cb').forEach(input => { input.checked = false; });
+      };
+
+      document.getElementById('tfda-official-btn').addEventListener('click', () =>
+        window.open(TFDA_LICENSE_URL, '_blank', 'noopener')
+      );
+      document.getElementById('tfda-reset').addEventListener('click', reset);
+      document.getElementById('tfda-save').addEventListener('click', async () => {
+        const id = document.getElementById('tfda-id').value;
+        const existing = records.find(record => record.id === id);
+        const genericName = document.getElementById('tfda-generic').value.trim();
+        const indication = document.getElementById('tfda-indication').value.trim();
+        if (!genericName || !indication) {
+          showToast('請填寫學名／主成分與核准適應症');
+          return;
+        }
+        const cleaned = window.TFDA_REGISTRY.cleanImportedRecord({
+          ...existing,
+          id: id || crypto.randomUUID(),
+          genericName,
+          brandName: document.getElementById('tfda-brand').value.trim(),
+          aliases: document.getElementById('tfda-aliases').value,
+          permitNumber: document.getElementById('tfda-permit').value.trim(),
+          cancerIds: [...document.querySelectorAll('.tfda-cancer-cb:checked')].map(input => input.value),
+          indication,
+          biomarker: document.getElementById('tfda-biomarker').value.trim(),
+          lineSetting: document.getElementById('tfda-line').value.trim(),
+          approvalDate: document.getElementById('tfda-date').value,
+          sourceUrl: safeExternalUrl(document.getElementById('tfda-url').value),
+          sourceDocumentId: document.getElementById('tfda-document').value,
+          sourcePage: document.getElementById('tfda-page').value,
+          current: true,
+          archived: false,
+          updatedAt: new Date().toISOString().split('T')[0],
+        });
+        await dbPut('tfdaIndications', cleaned);
+        showToast('已儲存 TFDA 適應症');
+        navigate('/tfda');
+      });
+
+      document.getElementById('tfda-import-json').addEventListener('click', () => {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json,application/json';
+        input.onchange = async event => {
+          const file = event.target.files[0];
+          if (!file) return;
+          try {
+            const imported = window.TFDA_REGISTRY.parseImport(JSON.parse(await file.text()));
+            const existingByPermit = new Map(records.filter(record => record.permitNumber).map(record => [record.permitNumber, record]));
+            const merged = imported.map(record => {
+              const previous = record.permitNumber ? existingByPermit.get(record.permitNumber) : null;
+              return previous ? { ...record, id: previous.id } : record;
+            });
+            await dbPutMany('tfdaIndications', merged);
+            showToast('已匯入 ' + merged.length + ' 筆 TFDA 適應症');
+            navigate('/tfda');
+          } catch (error) {
+            showToast('TFDA 匯入失敗：' + error.message);
+          }
+        };
+        input.click();
+      });
+      document.getElementById('tfda-export-json').addEventListener('click', () => {
+        downloadJSON({ exportedAt: new Date().toISOString(), tfdaIndications: records },
+          'tfda-indications-' + new Date().toISOString().split('T')[0] + '.json');
+      });
+
+      window._editTfdaRecord = id => {
+        const record = records.find(item => item.id === id);
+        if (!record) return;
+        document.getElementById('tfda-id').value = record.id;
+        document.getElementById('tfda-generic').value = record.genericName || '';
+        document.getElementById('tfda-brand').value = record.brandName || '';
+        document.getElementById('tfda-aliases').value = (record.aliases || []).join('\n');
+        document.getElementById('tfda-permit').value = record.permitNumber || '';
+        document.getElementById('tfda-indication').value = record.indication || '';
+        document.getElementById('tfda-biomarker').value = record.biomarker || '';
+        document.getElementById('tfda-line').value = record.lineSetting || '';
+        document.getElementById('tfda-date').value = record.approvalDate || '';
+        document.getElementById('tfda-url').value = record.sourceUrl || '';
+        document.getElementById('tfda-document').value = record.sourceDocumentId || '';
+        document.getElementById('tfda-page').value = record.sourcePage || '';
+        const selected = new Set(record.cancerIds || []);
+        document.querySelectorAll('.tfda-cancer-cb').forEach(input => { input.checked = selected.has(input.value); });
+        document.getElementById('tfda-editor').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      };
+      window._deleteTfdaRecord = async id => {
+        if (!confirm('確定刪除此 TFDA 適應症紀錄？')) return;
+        await dbDelete('tfdaIndications', id);
+        showToast('已刪除 TFDA 適應症');
+        navigate('/tfda');
+      };
+    }
     async function renderSettings(app) {
       let dbSize = '計算中...';
       if (navigator.storage?.estimate) {
@@ -4025,6 +4428,7 @@
       const pdfRestoreProgress = pdfRestoreTracker && Number(pdfRestoreTracker.batchCount) > 0
         ? BACKUP_FORMAT.batchProgress(pdfRestoreTracker.batchCount, pdfRestoreTracker.restored)
         : null;
+      const tfdaSummary = window.TFDA_REGISTRY.summarize(await dbGetAll('tfdaIndications'));
 
       app.innerHTML = `
         <div class="container">
@@ -4043,6 +4447,23 @@
               <p class="text-xs text-gray-400">先備份資料索引；PDF 每 5 份一批下載，避免 Android 一次載入全部檔案。v4 備份會檢查 SHA-256、批次完整性，且匯入資料前自動保留目前版本。</p>
               <p class="text-xs" style="color:var(--amber-700)">⚠️ 建議將本 App「加入主畫面」安裝使用，並定期匯出完整備份。瀏覽器在儲存空間不足時仍可能清除本機資料（含 PDF）。</p>
             </div>
+          </div>
+
+          <div class="card mb-4">
+            <div class="flex-between" style="gap:8px">
+              <div>
+                <h2 class="font-semibold text-gray-800">💊 TFDA 核准適應症</h2>
+                <p class="text-xs text-gray-500 mt-1">與 NCCN 建議及健保給付分開管理</p>
+              </div>
+              <span class="tag ${tfdaSummary.active ? 'tag-category' : ''}">${tfdaSummary.active} 筆</span>
+            </div>
+            <div class="quality-grid mt-3">
+              <div class="quality-stat"><strong>${tfdaSummary.cancers}</strong><span>已對應癌別</span></div>
+              <div class="quality-stat"><strong>${tfdaSummary.undated}</strong><span>未填核准日期</span></div>
+              <div class="quality-stat"><strong>${tfdaSummary.withoutSource}</strong><span>未連來源</span></div>
+            </div>
+            ${tfdaSummary.active ? '' : '<div class="alert alert-warning mt-3" style="margin-bottom:0">尚未建立核准適應症資料；快速查詢不會從 NCCN 或健保狀態推定 TFDA 核准。</div>'}
+            <button type="button" class="btn btn-secondary mt-3" onclick="navigate('/tfda')">管理 TFDA 適應症資料</button>
           </div>
 
           <div class="card mb-4">
@@ -4192,7 +4613,7 @@
           </div>
         `;
         document.getElementById('clear-confirm').addEventListener('click', async () => {
-          for (const store of ['cancerCards','documents','checklists','precisionFields','nhiNotes','restoreSnapshots']) await dbClear(store);
+          for (const store of ['cancerCards','documents','checklists','precisionFields','nhiNotes','tfdaIndications','restoreSnapshots']) await dbClear(store);
           window.CASE_STATE.clearAll();
           localStorage.removeItem(PDF_RESTORE_TRACKER_KEY);
           indexedDB.deleteDatabase('OncologyPdfStorage');
@@ -4282,6 +4703,36 @@
       for (const it of items) await dbPut('checklists', { ...it, checked: false });
       showToast('已重設勾選');
       handleRoute({ preserveScroll: true });
+    };
+    window._editTreatmentHistory = (cancerId, treatmentId) => {
+      const item = window.CASE_STATE.treatmentHistory(cancerId).find(entry => entry.id === treatmentId);
+      const editor = document.getElementById('treatment-history-editor');
+      if (!item || !editor) return;
+      editor.open = true;
+      const values = {
+        id: item.id,
+        phase: item.phase,
+        treatment: item.treatment,
+        status: item.status,
+        completed: item.completedCycles,
+        planned: item.plannedCycles,
+        start: item.startDate,
+        end: item.endDate,
+        'stop-reason': item.stopReason,
+        toxicity: item.toxicity,
+      };
+      Object.entries(values).forEach(([suffix, value]) => {
+        const control = document.getElementById('treatment-history-' + suffix);
+        if (control) control.value = value || '';
+      });
+      editor.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      document.getElementById('treatment-history-treatment')?.focus({ preventScroll: true });
+    };
+    window._deleteTreatmentHistory = async (cancerId, treatmentId) => {
+      if (!confirm('確定刪除此治療紀錄？')) return;
+      window.CASE_STATE.removeTreatment(cancerId, treatmentId);
+      showToast('已刪除治療紀錄並重新判讀');
+      await handleRoute({ preserveScroll: true, anchorId: 'treatment-history-section' });
     };
     window._newCase = async (cancerId) => {
       if (!confirm('清除這個癌別目前輸入的病患條件、勾選項目與已選藥物？')) return;

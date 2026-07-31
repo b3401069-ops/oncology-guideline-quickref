@@ -557,14 +557,30 @@
     return selected.slice(0, limit);
   }
 
-  function breastAdjuvantAssessment(documents, fields) {
-    const value = (key) => {
+  function breastAdjuvantAssessment(documents, fields, treatmentHistory = []) {
+    const values = (key) => {
       const field = (fields || []).find(item => item.sourceTemplateKey === key);
-      return Array.isArray(field?.value) ? normalize(field.value[0]) : normalize(field?.value);
+      const items = Array.isArray(field?.value) ? field.value : [field?.value];
+      return items.map(normalize).filter(Boolean);
     };
+    const value = key => values(key)[0] || '';
+    const history = (treatmentHistory || []).filter(item => item && typeof item === 'object');
+    const historyText = item => normalize([
+      item.phase, item.treatment, item.status, item.stopReason, item.toxicity,
+    ].filter(Boolean).join(' '));
+    const hasHistory = (pattern, phasePattern = null) => history.some(item =>
+      (!phasePattern || phasePattern.test(normalize(item.phase))) && pattern.test(historyText(item))
+    );
+    const preoperativeHistory = history.filter(item => /術前|新輔助|neoadjuvant|preoperative/i.test(normalize(item.phase)));
+    const unfinishedPreoperative = preoperativeHistory.filter(item => {
+      if (/中止|未完成|進行中|planned|ongoing/i.test(normalize(item.status))) return true;
+      const completed = Number(item.completedCycles);
+      const planned = Number(item.plannedCycles);
+      return Number.isFinite(completed) && Number.isFinite(planned) && completed < planned;
+    });
     const treatmentSetting = value('base-treatment-setting');
     const surgeryPath = value('breast-surgery-path');
-    const active = treatmentSetting === '術後/鞏固' || /先手術|術前全身治療後/.test(surgeryPath);
+    const active = treatmentSetting === '術後/鞏固' || /先手術|術前(?:全身)?治療後/.test(surgeryPath);
     if (!active) return { active: false, status: 'inactive', missing: [], reviewItems: [], pages: [] };
 
     const pathologyScope = value('breast-pathology-scope');
@@ -592,10 +608,10 @@
     }
 
     const path = addMissing('breast-surgery-path', '手術與術前治療情境');
-    addMissing('breast-pt', '病理腫瘤分期（pT／ypT）');
-    addMissing('breast-pn', '病理淋巴結分期（pN／ypN）');
-    addMissing('breast-grade', '組織學分級');
-    addMissing('breast-lvi', '淋巴血管侵犯（LVI）');
+    const pt = addMissing('breast-pt', '病理腫瘤分期（pT／ypT）');
+    const pn = addMissing('breast-pn', '病理淋巴結分期（pN／ypN）');
+    const grade = addMissing('breast-grade', '組織學分級');
+    const lvi = addMissing('breast-lvi', '淋巴血管侵犯（LVI）');
     const er = addMissing('breast-er', 'ER');
     const pr = addMissing('breast-pr', 'PR');
     const her2 = addMissing('breast-her2', 'HER2 原始結果');
@@ -615,28 +631,168 @@
     else if (hrNegative && her2Negative) { branchLabel = '三陰性乳癌術後路徑'; codes.push('BINV-10'); }
     else missing.push('可判讀的 ER／PR／HER2 臨床亞型');
 
-    if (/術前全身治療後/.test(path)) {
+    const afterPreoperative = /術前(?:全身)?治療後/.test(path);
+    if (afterPreoperative) {
       codes.splice(0, codes.length, 'BINV-14', 'BINV-15', 'BINV-16');
       branchLabel = branchLabel ? branchLabel + '（術前治療後）' : '術前治療後的術後路徑';
     }
+
     const reviewItems = [];
-    if (hrPositive && her2Negative) {
-      const menopause = value('breast-menopause');
-      const assay = value('breast-genomic-assay');
-      const recurrenceScore = value('breast-oncotype-rs');
-      if (!menopause || /待確認|不適用/.test(menopause)) reviewItems.push('補充停經狀態；它會影響 HR+/HER2- 的術後系統治療判讀。');
-      if (!assay || assay === '未評估') reviewItems.push('依 pT／pN 與臨床風險確認是否適用基因表現檢測。');
-      if (assay === 'Oncotype DX' && recurrenceScore === '') reviewItems.push('已選 Oncotype DX，但尚未輸入 Recurrence Score。');
-      if (assay === '已送檢待結果') reviewItems.push('基因表現結果尚未完成，暫時不能完成化療效益判讀。');
-    }
-    const pt = value('breast-pt');
-    const pn = value('breast-pn');
-    const grade = value('breast-grade');
+    const menopause = value('breast-menopause');
+    const assay = value('breast-genomic-assay');
+    const recurrenceScoreText = value('breast-oncotype-rs');
+    const recurrenceScore = Number(recurrenceScoreText);
+    const chemotherapyCandidate = value('breast-chemotherapy-candidate');
+    const tumorSize = Number(value('breast-tumor-size-cm'));
+    const ki67 = Number(value('breast-ki67'));
+    const initialRisk = value('breast-initial-clinical-risk');
+    const initialNodes = value('breast-initial-nodal-status');
+    const germlineResult = value('breast-germline-result');
+    const germlineGeneral = value('breast-germline');
+    const germlineAlterations = values('breast-advanced-alterations');
+    const germlineBrCa = /BRCA1\/2 pathogenic variant/i.test(germlineResult) ||
+      (/陽性/.test(germlineGeneral) && germlineAlterations.some(item => /^BRCA[12]$/i.test(item)));
+    const nodeNegative = /^(?:y?p)?N0\b/i.test(pn);
+    const nodeMicrometastatic = /^(?:y?p)?N1mi\b/i.test(pn);
+    const nodeOneToThree = /^(?:y?p)?N1(?!mi)\b/i.test(pn);
+    const nodeFourPlus = /^(?:y?p)?N[23]\b/i.test(pn);
+    const nodeMacrometastatic = nodeOneToThree || nodeFourPlus;
+    const pathologicResidual = /殘存浸潤癌/.test(path) || /^(?:ypT[1-4]|ypN[1-3])/i.test(pt + ' ' + pn);
+    const pcr = /達 pCR/.test(path) || (/^ypT0/i.test(pt) && /^ypN0/i.test(pn));
+    const stageBasis = `${pt || 'pT/ypT 待確認'}、${pn || 'pN/ypN 待確認'}`;
+
+    const regimenPair = (pattern) => pagePairs.find(({ page }) =>
+      String(page.sectionCode || '').toUpperCase() === 'BINV-M' &&
+      (page.options || []).some(option => pattern.test(optionText(option)))
+    );
+    const regimen = (label, pattern, pageCode = 'BINV-M') => {
+      const pair = pageCode === 'BINV-M'
+        ? regimenPair(pattern)
+        : pagePairs.find(({ page }) => String(page.sectionCode || '').toUpperCase() === pageCode &&
+          (page.options || []).some(option => pattern.test(optionText(option))));
+      if (!pair) return null;
+      const existing = (pair.page.options || []).find(option => pattern.test(optionText(option)));
+      return { ...pair, option: typeof existing === 'string' ? { label: existing, modality: 'systemic' } : { ...existing, label: label || existing?.label, modality: 'systemic' } };
+    };
+    const attachRegimens = (decision, title, note, candidates) => {
+      decision.regimens = uniqueRegimens(candidates).slice(0, 6);
+      if (decision.regimens.length) {
+        decision.regimenTitle = title;
+        decision.regimenNote = note;
+      }
+      return decision;
+    };
+    const endocrineRegimens = () => {
+      if (/停經前/.test(menopause)) return [
+        regimen('Tamoxifen ± ovarian function suppression', /Tamoxifen.*ovarian suppression/i, 'BINV-K'),
+        regimen('Aromatase inhibitor + ovarian function suppression', /Aromatase inhibitor.*ovarian suppression/i, 'BINV-K'),
+      ];
+      return [
+        regimen('Aromatase inhibitor', /Aromatase inhibitor/i, 'BINV-K'),
+        regimen('Tamoxifen（AI 不適用／不耐受時）', /Tamoxifen/i, 'BINV-K'),
+      ];
+    };
+    const chemotherapyRegimens = () => [
+      regimen('Dose-dense AC followed by Paclitaxel every 2 weeks', /Dose[- ]Dense AC.*Paclitaxel every 2 weeks/i),
+      regimen('Dose-dense AC followed by weekly Paclitaxel', /Dose[- ]Dense AC.*weekly Paclitaxel/i),
+      regimen('TC (Docetaxel/Cyclophosphamide)', /^TC \(Docetaxel\/Cyclophosphamide\)/i),
+    ];
+    const cdkRegimens = () => {
+      const candidates = [];
+      const abemaciclibEligible = nodeFourPlus || (nodeOneToThree && (/Grade 3/i.test(grade) || (Number.isFinite(tumorSize) && tumorSize >= 5)));
+      const ribociclibEligible = nodeMacrometastatic ||
+        (nodeNegative && Number.isFinite(tumorSize) && tumorSize > 5) ||
+        (nodeNegative && Number.isFinite(tumorSize) && tumorSize >= 2 && tumorSize <= 5 &&
+          (/Grade 3/i.test(grade) || (/Grade 2/i.test(grade) && ((Number.isFinite(ki67) && ki67 >= 20) || (Number.isFinite(recurrenceScore) && recurrenceScore >= 26)))));
+      if (abemaciclibEligible) candidates.push(regimen('Abemaciclib + endocrine therapy（2 年）', /abemaciclib/i, 'BINV-K'));
+      if (ribociclibEligible) candidates.push(regimen('Ribociclib + aromatase inhibitor（3 年）', /ribociclib/i, 'BINV-K'));
+      return candidates;
+    };
+
     let decision = null;
+    if (/先手術/.test(path) && hrPositive && her2Negative && /^pT/i.test(pt) && /^pN/i.test(pn)) {
+      if (!menopause || /待確認|不適用/.test(menopause)) missing.push('停經狀態');
+      if (!chemotherapyCandidate || /待確認/.test(chemotherapyCandidate)) missing.push('術後化療適用性');
+      const candidate = /適合接受化療/.test(chemotherapyCandidate);
+      let level = 'review';
+      let headline = '需先完成化療適用性與基因表現結果判讀';
+      const items = ['HR-positive／HER2-negative 個案原則上應規劃術後內分泌治療。'];
+      if (nodeFourPlus) {
+        level = candidate ? 'recommended' : 'omit';
+        headline = candidate ? '建議術後化療後接續內分泌治療（category 1）' : '目前不適合化療，改以內分泌治療並說明未化療原因';
+        items.push('≥4 顆陽性淋巴結時，不以 21-gene assay 取代臨床化療判讀。');
+      } else if (/^pT1a\b/i.test(pt) && nodeNegative) {
+        level = 'omit';
+        headline = '以術後內分泌治療為主，不常規加入化療';
+      } else if (/^pT1b\b/i.test(pt) && nodeNegative && /^Grade 1$/i.test(grade) && lvi === '無') {
+        level = 'omit';
+        headline = 'pT1bN0、Grade 1 且無 LVI：以輔助內分泌治療為主，不常規加入化療';
+        items.push('此低風險分支仍需核對完整病理、切緣與個別高風險特徵。');
+      } else if (!candidate && chemotherapyCandidate) {
+        level = 'omit';
+        headline = '不適合化療：以術後內分泌治療為主';
+      } else if (candidate) {
+        if (!assay || /未評估|已送檢待結果/.test(assay) || (assay === 'Oncotype DX' && !Number.isFinite(recurrenceScore))) {
+          missing.push(assay === 'Oncotype DX' ? 'Oncotype DX Recurrence Score' : '可判讀的基因表現檢測結果');
+          items.push('符合評估條件時，先完成 21-gene assay 再判讀化療效益。');
+        } else if (/停經後/.test(menopause)) {
+          if (recurrenceScore >= 26) {
+            level = 'recommended';
+            headline = 'Recurrence Score ≥26：建議化療後接續內分泌治療（category 1）';
+          } else {
+            level = 'omit';
+            headline = 'Recurrence Score <26：以術後內分泌治療為主（category 1）';
+          }
+        } else if (nodeNegative) {
+          if (recurrenceScore >= 26) {
+            level = 'recommended';
+            headline = '停經前且 Recurrence Score ≥26：建議化療後接續內分泌治療（category 1）';
+          } else if (recurrenceScore >= 16) {
+            level = 'consider';
+            headline = 'Recurrence Score 16–25：討論化療效益，並比較內分泌治療加卵巢功能抑制';
+          } else {
+            level = 'omit';
+            headline = 'Recurrence Score ≤15：以內分泌治療 ± 卵巢功能抑制為主';
+          }
+        } else if (nodeOneToThree || nodeMicrometastatic) {
+          level = 'consider';
+          headline = '停經前且 1–3 顆淋巴結陽性：化療後內分泌治療，或內分泌治療加卵巢功能抑制，需共同決策';
+          items.push('此情境的基因表現檢測主要協助預後與風險討論，不應直接套用停經後 RS <26 的省略化療結論。');
+        }
+      }
+      decision = { level, headline, basis: stageBasis + (Number.isFinite(recurrenceScore) ? `、RS ${recurrenceScore}` : ''), items, caveats: [] };
+      const candidates = [...endocrineRegimens(), ...cdkRegimens()];
+      if (level === 'recommended' || level === 'consider') candidates.push(...chemotherapyRegimens());
+      attachRegimens(decision, '術後全身治療候選', '先依化療效益決策，再依停經狀態、復發風險與禁忌選擇內分泌／CDK4/6 方案。', candidates);
+    }
+
+    if (/先手術/.test(path) && her2Positive && /^pT/i.test(pt) && /^pN/i.test(pn)) {
+
+      const stageOneNodeNegative = /^pT1(?:mi|[abc])\b/i.test(pt) && nodeNegative;
+      const microNodeNegative = /^pT1mi\b/i.test(pt) && nodeNegative;
+      const higherRisk = nodeMacrometastatic || /^pT(?:1c|[234])\b/i.test(pt);
+      decision = {
+        level: higherRisk ? 'recommended' : 'consider',
+        headline: higherRisk
+          ? '建議化療合併 HER2 導向治療；完成總療程並依淋巴結風險考慮 pertuzumab'
+          : microNodeNegative ? 'HER2 導向治療絕對效益很小，應個別化討論' : 'pT1a–bN0：考慮化療合併 trastuzumab，權衡絕對效益與心臟毒性',
+        basis: stageBasis,
+        items: hrPositive ? ['HER2 導向／化療完成後仍應接續適合的內分泌治療。'] : [],
+        caveats: ['治療前與治療中需追蹤 LVEF；避免 anthracycline 與 trastuzumab 同時給予。'],
+      };
+      const candidates = [];
+      if (stageOneNodeNegative || microNodeNegative) {
+        candidates.push(regimen('Paclitaxel + Trastuzumab', /Paclitaxel\s*\+\s*Trastuzumab/i));
+        candidates.push(regimen('TCH (Docetaxel/Carboplatin + Trastuzumab)', /^TCH\s*\(/i));
+      } else {
+        candidates.push(regimen('TCH (Docetaxel/Carboplatin + Trastuzumab)', /^TCH\s*\(/i));
+        if (nodeMacrometastatic || /^pT[23]/i.test(pt)) candidates.push(regimen('TCHP (Docetaxel/Carboplatin + Trastuzumab + Pertuzumab)', /^TCHP\s*\(/i));
+      }
+      if (hrPositive) candidates.push(...endocrineRegimens());
+      attachRegimens(decision, 'HER2-positive 術後處方候選', 'HER2 導向治療通常計入術前與術後合計療程，不應從術後重新計算完整一年。', candidates);
+    }
+
     if (/先手術/.test(path) && hrNegative && her2Negative && /^pT/i.test(pt) && /^pN/i.test(pn)) {
-      const nodeMicrometastatic = /^pN1mi/i.test(pn);
-      const nodeMacrometastatic = /^pN[1-3](?!mi)/i.test(pn);
-      const stageBasis = `${pt}、${pn}`;
       if (nodeMacrometastatic || /^pT(?:1c|[23])\b/i.test(pt)) {
         decision = {
           level: 'recommended',
@@ -649,7 +805,7 @@
           ],
           caveats: [],
         };
-      } else if (/^pT1a\b/i.test(pt) && /^pN0\b/i.test(pn)) {
+      } else if (/^pT1a\b/i.test(pt) && nodeNegative) {
         const highGrade = /^Grade 3$/i.test(grade);
         decision = {
           level: highGrade ? 'consider' : 'omit',
@@ -658,83 +814,122 @@
             : 'NCCN 主分支為不給予術後全身治療',
           basis: stageBasis,
           items: highGrade
-            ? ['BINV-10 的 footnote ss 允許特定高風險 pT1aN0 個案考慮輔助化療。']
+            ? ['特定高風險 pT1aN0 個案可討論輔助化療。']
             : ['目前 pT1aN0 分支未直接支持常規術後輔助化療。'],
-          caveats: ['仍需核對年齡、病理高風險特徵及 BINV-10 footnote ss；App 尚未收錄所有可能影響個案討論的風險因素。'],
+          caveats: ['仍需核對年齡、病理高風險特徵及 BINV-10 腳註。'],
         };
       } else if ((/^pT1a\b/i.test(pt) && nodeMicrometastatic) || /^pT1b\b/i.test(pt)) {
         decision = {
           level: 'consider',
           headline: '此分支為考慮術後輔助化療',
           basis: stageBasis,
-          items: [
-            '化療不是 App 自動判定的絕對結論；應依效益、毒性與個案偏好共同決策。',
-            '同頁列有 germline BRCA1/2 pathogenic variant 的 olaparib 路徑，仍須核對原頁資格門檻。',
-          ],
+          items: ['應依絕對效益、毒性與個案偏好共同決策。'],
           caveats: [],
         };
       } else {
         decision = {
           level: 'review',
-          headline: '此 pT／pN 組合未落在 App 已結構化的 BINV-10 三個主要分支',
+          headline: '此 pT／pN 組合未落在 App 已結構化的 BINV-10 主要分支',
           basis: stageBasis,
           items: ['請直接開啟 BINV-10 核對流程箭頭；App 不會用鄰近分支推測治療。'],
           caveats: [],
         };
       }
-    }    if (decision && /先手術/.test(path) && hrNegative && her2Negative) {
-      const regimenPage = pagePairs.find(({ page }) =>
-        String(page.sectionCode || '').toUpperCase() === 'BINV-M' &&
-        (page.options || []).some(option => /Pembrolizumab/i.test(optionText(option))) &&
-        (page.options || []).some(option => /Preferred.+stage I/i.test(optionText(option)))
-      ) || pagePairs.find(({ page }) =>
-        String(page.sectionCode || '').toUpperCase() === 'BINV-M' &&
-        (page.options || []).some(option => /^TC \(Docetaxel\/Cyclophosphamide\)/i.test(typeof option === 'string' ? option : option.label || ''))
-      );
-      if (regimenPage) {
-        const regimenPatterns = [
-          /^Dose[- ]Dense AC \(Doxorubicin\/Cyclophosphamide\) followed by Paclitaxel every 2 weeks/i,
-          /^Dose[- ]dense AC followed by Paclitaxel every 2 weeks/i,
-          /^Dose[- ]Dense AC followed by weekly Paclitaxel/i,
-          /^TC \(Docetaxel\/Cyclophosphamide\)/i,
-        ];
-        const seen = new Set();
-        decision.regimens = (regimenPage.page.options || []).filter(option => {
-          const label = typeof option === 'string' ? option : String(option.label || '');
-          if (!regimenPatterns.some(pattern => pattern.test(label))) return false;
-          const key = label.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-          if (seen.has(key)) return false;
-          seen.add(key);
-          return true;
-        }).slice(0, 3).map(option => ({ ...regimenPage, option }));
-        const stageI = /^pT1(?:mi|[abc])\b/i.test(pt) && /^pN0\b/i.test(pn);
-        decision.regimenTitle = stageI
-          ? '若決定化療：BINV-M Stage I 優先處方候選'
-          : '若決定化療：BINV-M 可考慮處方候選';
-        decision.regimenNote = stageI
-          ? '以下是處方入口，不代表三者等效或已替個案選定；仍需依心臟功能、周邊神經病變風險、共病與偏好選擇。'
-          : '較高病期仍須核對是否原本應採術前全身治療及 pembrolizumab 路徑，App 不會把術前療程誤列為單純術後處方。';
+      attachRegimens(decision, /^pT1(?:mi|[abc])\b/i.test(pt) && nodeNegative ? '若決定化療：Stage I 優先處方候選' : '若決定化療：處方候選', '處方需依心臟功能、周邊神經病變風險、共病與偏好選擇。', chemotherapyRegimens());
+    }
+
+    if (afterPreoperative && !missing.length) {
+      if (!preoperativeHistory.length) reviewItems.push('尚未建立術前治療歷程；請記錄已使用療程、完成週期與中止原因，避免把術前療程重新算成完整術後療程。');
+      if (her2Positive && (!initialNodes || /待確認/.test(initialNodes))) {
+        missing.push('術前治療前臨床淋巴結狀態');
       }
-    }    const codeSet = new Set(codes);
+      const usedPembrolizumab = hasHistory(/pembrolizumab|keytruda|吉舒達/i, /術前|新輔助|neoadjuvant|preoperative/i);
+      const usedHer2Therapy = hasHistory(/\\bTCHP?\\b|trastuzumab|pertuzumab|herceptin|賀癌平|perjeta|賀疾妥/i, /術前|新輔助|neoadjuvant|preoperative/i);
+      if (hrNegative && her2Negative) {
+        const candidates = [];
+        const items = [];
+        if (usedPembrolizumab) {
+          candidates.push(regimen('Pembrolizumab（完成原術前／術後計畫）', /Pembrolizumab/i));
+          items.push('只有術前已使用 pembrolizumab-containing regimen 時，才接續術後 pembrolizumab。');
+        } else if (pcr && preoperativeHistory.length) {
+          items.push('術前治療紀錄未包含 pembrolizumab 時，不在術後新啟動 pembrolizumab。');
+        }
+        if (pathologicResidual) {
+          candidates.push(regimen('Capecitabine（6–8 cycles）', /Capecitabine/i));
+          if (germlineBrCa) candidates.push(regimen('Olaparib（1 年）', /Olaparib/i));
+        }
+        const historyUnknown = !preoperativeHistory.length;
+        decision = {
+          level: pathologicResidual ? 'recommended' : usedPembrolizumab ? 'recommended' : historyUnknown ? 'review' : 'omit',
+          headline: pathologicResidual
+            ? 'TNBC 術前治療後有殘存浸潤癌：進入術後強化治療分支'
+            : usedPembrolizumab
+              ? '達 pCR：完成原計畫中的術後 pembrolizumab'
+              : historyUnknown
+                ? '達 pCR，但尚缺術前實際用藥紀錄：不能判定是否需續接 pembrolizumab'
+                : '達 pCR 且術前未使用 pembrolizumab：不另啟動新的術後化療／免疫療法',
+          basis: stageBasis,
+          items,
+          caveats: pathologicResidual ? ['Pembrolizumab、capecitabine 與 olaparib 之合併或先後順序缺乏直接資料；若同時符合多項，需個別化與核對原頁。'] : [],
+        };
+        attachRegimens(decision, '術前治療後的術後候選', '依術前實際用藥與殘存病灶選擇，不重新開始完整新輔助療程。', candidates);
+      } else if (her2Positive) {
+        const initialHighRisk = /cT4|cN2|不可手術/.test(initialRisk) || /^(?:yp)?N[1-3]/i.test(pn);
+        const candidates = [];
+        if (pcr && initialNodes === 'cN0') {
+          candidates.push(regimen('Trastuzumab（術前＋術後合計至 1 年）', /Trastuzumab/i));
+        } else if (pcr && /^cN[1-3]/.test(initialNodes)) {
+          candidates.push(regimen('Trastuzumab + Pertuzumab（術前＋術後合計至 1 年）', /Trastuzumab/i));
+        } else if (pathologicResidual) {
+          if (initialHighRisk) candidates.push(regimen('Fam-trastuzumab deruxtecan-nxki（高復發風險）', /Fam-trastuzumab deruxtecan/i));
+          candidates.push(regimen('Ado-trastuzumab emtansine (T-DM1)', /Ado-trastuzumab emtansine|T-DM1/i));
+        }
+        if (hrPositive) candidates.push(...endocrineRegimens());
+        decision = {
+          level: 'recommended',
+          headline: pcr ? 'HER2+ 達 pCR：延續 HER2 導向治療至術前／術後合計 1 年' : 'HER2+ 有殘存浸潤癌：改採術後殘存病灶強化療程',
+          basis: stageBasis,
+          items: [usedHer2Therapy ? '治療歷程已記錄術前 HER2 導向治療；術後只計算剩餘療程。' : '請補登術前 HER2 導向治療與已完成週期。'],
+          caveats: pathologicResidual && !initialHighRisk ? ['目前資料未命中 T-DXd 高復發風險定義；仍可依 BINV-16 核對 T-DM1 分支。'] : [],
+        };
+        attachRegimens(decision, 'HER2+ 術前治療後候選', 'T-DXd 高風險與 T-DM1 適用分支應核對 BINV-16／BINV-M；HER2 治療總期間包含術前已完成部分。', candidates);
+      } else if (hrPositive && her2Negative) {
+        const candidates = [...endocrineRegimens(), ...cdkRegimens()];
+        if (pathologicResidual && germlineBrCa) candidates.push(regimen('Olaparib（1 年；須再核對高風險資格）', /Olaparib/i));
+        decision = {
+          level: 'recommended',
+          headline: 'HR+/HER2- 術前治療後：術後內分泌治療為核心；依高風險資格加入 CDK4/6 或 olaparib',
+          basis: stageBasis,
+          items: unfinishedPreoperative.length ? ['原計畫仍有未完成療程時，只完成剩餘部分，不重新開始完整療程。'] : [],
+          caveats: germlineBrCa ? ['Olaparib 與 CDK4/6 inhibitor 都符合時，最佳先後順序仍不確定。'] : [],
+        };
+        attachRegimens(decision, '術前治療後的術後候選', '內分泌治療選擇依停經狀態；高風險藥物需逐項核對資格。', candidates);
+      }
+      if (decision && unfinishedPreoperative.length) {
+        decision.items.push(`治療歷程顯示 ${unfinishedPreoperative.length} 項術前療程尚未完成；僅補足原計畫剩餘部分。`);
+      }
+    }
+
+    const codeSet = new Set(codes);
     const supportingPages = decision
-      ? pagePairs.filter(({ page }) => String(page.sectionCode || '').toUpperCase() === 'BINV-M' &&
-        (page.options || []).some(option => /Pembrolizumab|Carboplatin\/Paclitaxel|Dose[- ]Dense AC|TC \(Docetaxel/i.test(optionText(option))))
+      ? pagePairs.filter(({ page }) => ['BINV-K', 'BINV-M'].includes(String(page.sectionCode || '').toUpperCase()) &&
+        (page.options || []).some(option => /Pembrolizumab|Capecitabine|Olaparib|Trastuzumab|Pertuzumab|Ado-trastuzumab|Abemaciclib|Ribociclib|Dose[- ]Dense AC|TC \(Docetaxel/i.test(optionText(option))))
       : [];
     return {
       active: true,
       status: missing.length ? 'missing' : 'ready',
       branchLabel: branchLabel || '乳癌術後輔助治療路徑',
       message: missing.length
-        ? '目前資料不足，尚不能判斷是否需要術後輔助性化療。'
-        : '已定位術後決策路徑；請依原頁門檻、腳註與個案共病完成化療效益判讀。',
+        ? '目前資料不足，尚不能判斷完整的術後輔助治療。'
+        : '已定位術後決策路徑；請依原頁門檻、腳註、既往療程與個案共病完成治療選擇。',
       missing: [...new Set(missing)],
-      reviewItems,
+      reviewItems: [...new Set(reviewItems)],
       decision,
       pages: pagePairs.filter(item => codeSet.has(String(item.page.sectionCode || '').toUpperCase())),
-      supportingPages: supportingPages.slice(0, 2),
+      supportingPages: supportingPages.slice(0, 4),
+      treatmentHistoryUsed: history.length > 0,
     };
   }
-
 
   const postoperativeFieldValues = (fields, key) => {
     const field = (fields || []).find(item => item.sourceTemplateKey === key);
@@ -791,8 +986,30 @@
     return consistent ? '' : '病理分期與 pT／pN 組合不一致，請回病理報告重新確認';
   }
 
-  function nsclcAdjuvantAssessment(documents, fields) {
+  function treatmentHistoryContext(treatmentHistory = []) {
+    const items = (treatmentHistory || []).filter(item => item && typeof item === 'object');
+    const text = item => [item.phase, item.treatment, item.status, item.stopReason].filter(Boolean).join(' ');
+    const phaseItems = pattern => items.filter(item => pattern.test(String(item.phase || '')));
+    const preoperative = phaseItems(/術前|新輔助|neoadjuvant|preoperative/i);
+    const postoperative = phaseItems(/術後|輔助|adjuvant|postoperative/i);
+    const completed = item => /已完成/.test(String(item.status || '')) ||
+      (Number(item.plannedCycles) > 0 && Number(item.completedCycles) >= Number(item.plannedCycles));
+    const has = (source, pattern) => source.some(item => pattern.test(text(item)));
+    return {
+      items,
+      preoperative,
+      postoperative,
+      hasPreoperative: pattern => has(preoperative, pattern),
+      hasPostoperative: pattern => has(postoperative, pattern),
+      completedPreoperative: pattern => preoperative.some(item => pattern.test(text(item)) && completed(item)),
+      completedPostoperative: pattern => postoperative.some(item => pattern.test(text(item)) && completed(item)),
+      firstPreoperative: pattern => preoperative.find(item => pattern.test(text(item))) || null,
+      unfinished: items.filter(item => /未完成|進行中|中止|調整/.test(String(item.status || ''))),
+    };
+  }
+  function nsclcAdjuvantAssessment(documents, fields, treatmentHistory = []) {
     const value = key => postoperativeFieldValue(fields, key);
+    const history = treatmentHistoryContext(treatmentHistory);
     const values = key => postoperativeFieldValues(fields, key);
     const treatmentSetting = value('base-treatment-setting');
     const path = value('nsclc-surgery-path');
@@ -825,11 +1042,14 @@
     const reviewItems = [];
     let decision = null;
     const basis = [stage, pt, pn, margin].filter(Boolean).join('、');
-    const neoadjuvantChemo = /術前(?:免疫治療[+＋])?化療後手術/.test(path);
+    const historyNeoadjuvantChemo = history.hasPreoperative(/cisplatin|carboplatin|platinum|pemetrexed|paclitaxel|gemcitabine|vinorelbine|含鉑/i);
+    const neoadjuvantChemo = /術前(?:免疫治療[+＋])?化療後手術/.test(path) || historyNeoadjuvantChemo;
+    const completedAdjuvantChemo = history.completedPostoperative(/cisplatin|carboplatin|platinum|pemetrexed|paclitaxel|gemcitabine|vinorelbine|含鉑/i);
     const positiveMargin = /^R[12]/.test(margin);
 
     if (!missing.length) {
       if (neoadjuvantChemo) {
+        if (!history.preoperative.length) reviewItems.push('請建立術前實際療程與週期紀錄，確認不是只靠病程選項推測已治療。');
         decision = {
           level: 'omit',
           headline: '不應再另加一套術後輔助化療',
@@ -892,7 +1112,7 @@
     }
 
     if (decision && !neoadjuvantChemo && !positiveMargin) {
-      const chemoEligible = ['recommended', 'consider'].includes(decision.level);
+      const chemoEligible = ['recommended', 'consider'].includes(decision.level) && !completedAdjuvantChemo;
       if (chemoEligible && postoperativeUnknown(histology)) reviewItems.push('補充 NSCLC 組織型，才能排除不適合的 pemetrexed／gemcitabine 組合。');
       if (chemoEligible && postoperativeUnknown(cisplatin)) reviewItems.push('補充 cisplatin 適用性，才能在 cisplatin 與 carboplatin 候選間縮小範圍。');
       const nonsquamous = /腺癌|非鱗/i.test(histology);
@@ -948,6 +1168,15 @@
       decision.regimenTitle = chemo.length && targeted.length
         ? '術後含鉑化療與後續標靶／免疫治療資格候選'
         : targeted.length ? 'NSCL-E 術後標靶治療資格候選' : 'NSCL-E 術後含鉑雙藥候選';
+      if (completedAdjuvantChemo) {
+        decision.items.unshift('治療歷程已記錄完成術後含鉑化療，因此不再列出另一套術後化療。');
+        if (targeted.filter(Boolean).length) {
+          decision.headline = '已完成術後含鉑化療：下一步只評估符合資格的標靶／免疫治療';
+        } else {
+          decision.level = 'omit';
+          decision.headline = '已完成術後含鉑化療，治療歷程不支持重複給予同類療程';
+        }
+      }
       decision.regimenNote = '各候選不是彼此等效；需依組織型、腎功能、聽力、周邊神經病變、驅動基因、PD-L1 與既往術前治療逐一縮小。';
     }
 
@@ -967,15 +1196,19 @@
           (code === 'NSCL-E' && /^(?:Adjuvant Chemotherapy|Other Adjuvant Systemic Therapy)$/i.test(String(page.title || '')));
       }),
       supportingPages: [],
+      treatmentHistoryUsed: history.items.length > 0,
     };
   }
 
-  function colonAdjuvantAssessment(documents, fields) {
+  function colonAdjuvantAssessment(documents, fields, treatmentHistory = []) {
     const value = key => postoperativeFieldValue(fields, key);
     const values = key => postoperativeFieldValues(fields, key);
+    const history = treatmentHistoryContext(treatmentHistory);
     const treatmentSetting = value('base-treatment-setting');
     const path = value('colon-surgery-path');
-    const preoperativeChemo = /術前 FOLFOX\/CAPEOX 後手術/.test(path);
+    const recordedPreoperative = history.firstPreoperative(/FOLFOX|CAPEOX/i);
+    const preoperativeChemo = /術前 FOLFOX\/CAPEOX 後手術/.test(path) || !!recordedPreoperative;
+    const completedAdjuvantChemo = history.completedPostoperative(/FOLFOX|CAPEOX/i);
     const active = treatmentSetting === '術後/鞏固' || /手術/.test(path);
     if (!active) return { active: false, status: 'inactive', missing: [], reviewItems: [], pages: [] };
 
@@ -991,8 +1224,10 @@
     const pn = required('colon-pn', '結腸癌病理 N 分期');
     const margin = required('colon-margin', '結腸癌手術切緣');
     const mmr = required('crc-mmr-msi', 'MMR／MSI');
-    const neoadjuvantRegimen = value('colon-neoadjuvant-regimen');
-    const neoadjuvantCyclesRaw = value('colon-neoadjuvant-cycles');
+    const recordedRegimen = /CAPEOX/i.test(recordedPreoperative?.treatment || '') ? 'CAPEOX'
+      : /FOLFOX/i.test(recordedPreoperative?.treatment || '') ? 'FOLFOX' : '';
+    const neoadjuvantRegimen = recordedRegimen || value('colon-neoadjuvant-regimen');
+    const neoadjuvantCyclesRaw = recordedPreoperative?.completedCycles || value('colon-neoadjuvant-cycles');
     const neoadjuvantCycles = Number(neoadjuvantCyclesRaw);
     if (preoperativeChemo && (postoperativeUnknown(neoadjuvantRegimen) || /未接受術前化療/.test(neoadjuvantRegimen))) {
       missing.push('結腸癌術前實際化療方案');
@@ -1017,6 +1252,7 @@
     ].filter(Boolean).join('、');
     if (preoperativeChemo) {
       reviewItems.push('已接受術前 FOLFOX／CAPEOX：術後應依已完成週期補足總療程，不可重新開始一套完整 3–6 個月療程。');
+      if (!history.preoperative.length) reviewItems.push('請建立術前實際療程紀錄，確認方案、週期與毒性。');
     }
     const nodeCountRaw = value('colon-nodes-examined');
     const nodeCount = nodeCountRaw === '' ? Number.NaN : Number(nodeCountRaw);
@@ -1097,6 +1333,12 @@
       decision.items.unshift('術後處方與剩餘週期須依術前實際方案、週期及毒性紀錄計算。');
     }
 
+    if (decision && completedAdjuvantChemo && ['recommended', 'consider'].includes(decision.level)) {
+      decision.level = 'omit';
+      decision.headline = '治療歷程已記錄完成術後 FOLFOX／CAPEOX，不再重複建議另一套輔助化療';
+      decision.items.unshift('後續轉入監測；若紀錄中的療程未完成，請把狀態改為「未完成／待續」並填寫週期。');
+    }
+
     if (decision && ['recommended', 'consider'].includes(decision.level)) {
       const labels = [];
       const continuation = preoperativeChemo ? '（依術前已完成 ' + neoadjuvantCyclesRaw + ' 週期補足全程）' : '';
@@ -1137,12 +1379,14 @@
       decision,
       pages: pairs.filter(({ page }) => [dmmr ? 'COL-13' : 'COL-4', 'COL-8'].includes(String(page.sectionCode || '').toUpperCase())),
       supportingPages: [],
+      treatmentHistoryUsed: history.items.length > 0,
     };
   }
 
-  function rectalAdjuvantAssessment(documents, fields) {
+  function rectalAdjuvantAssessment(documents, fields, treatmentHistory = []) {
     const value = key => postoperativeFieldValue(fields, key);
     const values = key => postoperativeFieldValues(fields, key);
+    const history = treatmentHistoryContext(treatmentHistory);
     const treatmentSetting = value('base-treatment-setting');
     const path = value('rectal-surgery-path');
     const active = treatmentSetting === '術後/鞏固' || /手術|切除|完全臨床反應/.test(path);
@@ -1183,6 +1427,14 @@
       differentiation, mesorectalInvasionRaw ? '進入直腸系膜 ' + mesorectalInvasionRaw + ' mm' : '',
     ].filter(Boolean).join('、');
     const reviewItems = [];
+    const completedPreoperativeSystemic = history.completedPreoperative(/FOLFOX|CAPEOX/i);
+    const completedPreoperativeRadiation = history.items.some(item =>
+      /已完成/.test(String(item.status || '')) &&
+      /術前|新輔助|放射治療/.test(String(item.phase || '')) &&
+      /radiation|chemo\/?RT|放射|放療|RT\b/i.test(String(item.treatment || ''))
+    );
+    const completedTntHistory = completedPreoperativeSystemic && completedPreoperativeRadiation;
+    const completedPostoperativeSystemic = history.completedPostoperative(/FOLFOX|CAPEOX/i);
     let decision = null;
 
     if (!missing.length) {
@@ -1194,7 +1446,8 @@
           items: ['依 dMMR／MSI-H 專屬流程持續反應評估與密集 surveillance。'],
           caveats: ['應由有經驗的多專科團隊執行 watch-and-wait，App 不以術後 pT／pN 推測。'],
         };
-      } else if (/完成 TNT 後手術/.test(path)) {
+      } else if (/完成 TNT 後手術/.test(path) || completedTntHistory) {
+        if (!history.preoperative.length) reviewItems.push('請建立 TNT 實際藥物、放療與週期紀錄，確認已完成全程。');
         decision = {
           level: 'omit',
           headline: '已完成 TNT：不應自動再加一套術後化療',
@@ -1297,6 +1550,12 @@
       reviewItems.push('已記錄 PI3K pathway alteration：REC-5／REC-14 建議術後恢復後評估 aspirin 100–162 mg/day、共 3 年（無禁忌時）；須核對出血風險與原頁。');
     }
 
+    if (decision && completedPostoperativeSystemic && ['recommended', 'consider'].includes(decision.level)) {
+      decision.level = 'omit';
+      decision.headline = '治療歷程已記錄完成術後 FOLFOX／CAPEOX，不再重複建議全身療程';
+      decision.items.unshift('仍需依切緣、CRM 與局部復發風險，獨立確認是否需要放射治療。');
+    }
+
     if (decision && ['recommended', 'consider'].includes(decision.level) && !dmmr) {
       const rec5 = pagePair(pairs, 'REC-5');
       const regimens = [];
@@ -1315,7 +1574,7 @@
 
     const rectalPageCodes = dmmr || nonoperative
       ? ['REC-14', 'REC-10A']
-      : /完成 TNT/.test(path) ? ['REC-6', 'REC-10A']
+      : (/完成 TNT/.test(path) || completedTntHistory) ? ['REC-6', 'REC-10A']
         : /經肛門局部切除/.test(path) ? ['REC-4', 'REC-5', 'REC-10A']
           : ['REC-5', 'REC-10A'];
     return {
@@ -1330,21 +1589,22 @@
       decision,
       pages: pairs.filter(({ page }) => rectalPageCodes.includes(String(page.sectionCode || '').toUpperCase())),
       supportingPages: [],
+      treatmentHistoryUsed: history.items.length > 0,
     };
   }
 
-  function adjuvantAssessment(cancerId, documents, fields) {
+  function adjuvantAssessment(cancerId, documents, fields, treatmentHistory = []) {
     if (cancerId === 'breast_cancer') {
-      const result = breastAdjuvantAssessment(documents, fields);
+      const result = breastAdjuvantAssessment(documents, fields, treatmentHistory);
       return {
         title: '乳癌術後輔助治療評估',
         decisionLabel: '依本次 pT／pN 命中的個案分支',
         ...result,
       };
     }
-    if (cancerId === 'nsclc') return nsclcAdjuvantAssessment(documents, fields);
-    if (cancerId === 'colon_cancer') return colonAdjuvantAssessment(documents, fields);
-    if (cancerId === 'rectal_cancer') return rectalAdjuvantAssessment(documents, fields);
+    if (cancerId === 'nsclc') return nsclcAdjuvantAssessment(documents, fields, treatmentHistory);
+    if (cancerId === 'colon_cancer') return colonAdjuvantAssessment(documents, fields, treatmentHistory);
+    if (cancerId === 'rectal_cancer') return rectalAdjuvantAssessment(documents, fields, treatmentHistory);
     return { active: false, status: 'inactive', missing: [], reviewItems: [], pages: [] };
   }
 

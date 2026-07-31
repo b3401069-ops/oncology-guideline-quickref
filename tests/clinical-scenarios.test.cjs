@@ -98,10 +98,10 @@ test('standard-case suite has unique IDs and multiple routes for each priority c
     output[item.cancerId] = (output[item.cancerId] || 0) + 1;
     return output;
   }, {});
-  assert.ok(counts.hepatocellular_carcinoma >= 2);
-  assert.ok(counts.nsclc >= 2);
+  assert.ok(counts.hepatocellular_carcinoma >= 3);
+  assert.ok(counts.nsclc >= 3);
   assert.ok(counts.sclc >= 2);
-  assert.ok(counts.colorectal_cancer >= 3);
-  assert.ok(counts.breast_cancer >= 6);
-  assert.ok(counts.neuroendocrine_tumor >= 2);
+  assert.ok(counts.colorectal_cancer >= 4);
+  assert.ok(counts.breast_cancer >= 7);
+  assert.ok(counts.neuroendocrine_tumor >= 3);
 });

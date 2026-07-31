@@ -2,6 +2,7 @@
   'use strict';
 
   const PREFIX = 'oncology-case:';
+  const TREATMENT_HISTORY_KEY = '__treatmentHistory';
 
   function storageOrNull(storage) {
     try {
@@ -64,6 +65,53 @@
     return values;
   }
 
+  function treatmentHistory(cancerId, storage) {
+    const value = read(cancerId, storage)[TREATMENT_HISTORY_KEY];
+    return Array.isArray(value)
+      ? value.filter(item => item && typeof item === 'object' && !Array.isArray(item))
+      : [];
+  }
+
+  function writeTreatmentHistory(cancerId, items, storage) {
+    const values = read(cancerId, storage);
+    const cleaned = (items || []).filter(item =>
+      item && typeof item === 'object' && !Array.isArray(item) &&
+      (hasValue(item.treatment) || hasValue(item.phase))
+    );
+    if (cleaned.length) values[TREATMENT_HISTORY_KEY] = cleaned;
+    else delete values[TREATMENT_HISTORY_KEY];
+    write(cancerId, values, storage);
+    return cleaned;
+  }
+
+  function saveTreatment(cancerId, item, storage) {
+    const items = treatmentHistory(cancerId, storage);
+    const next = {
+      id: item?.id || globalThis.crypto?.randomUUID?.() || ('treatment-' + Date.now()),
+      phase: String(item?.phase || '').trim(),
+      treatment: String(item?.treatment || '').trim(),
+      status: String(item?.status || '').trim(),
+      completedCycles: String(item?.completedCycles || '').trim(),
+      plannedCycles: String(item?.plannedCycles || '').trim(),
+      startDate: String(item?.startDate || '').trim(),
+      endDate: String(item?.endDate || '').trim(),
+      stopReason: String(item?.stopReason || '').trim(),
+      toxicity: String(item?.toxicity || '').trim(),
+      updatedAt: new Date().toISOString(),
+    };
+    const index = items.findIndex(existing => existing.id === next.id);
+    if (index >= 0) items[index] = next;
+    else items.push(next);
+    return writeTreatmentHistory(cancerId, items, storage);
+  }
+
+  function removeTreatment(cancerId, treatmentId, storage) {
+    return writeTreatmentHistory(
+      cancerId,
+      treatmentHistory(cancerId, storage).filter(item => item.id !== treatmentId),
+      storage
+    );
+  }
   function removeField(cancerId, fieldId, storage) {
     return setValue(cancerId, fieldId, '', storage);
   }
@@ -115,6 +163,10 @@
     write,
     apply,
     setValue,
+    treatmentHistory,
+    writeTreatmentHistory,
+    saveTreatment,
+    removeTreatment,
     removeField,
     clear,
     clearAll,

@@ -98,6 +98,15 @@
     return [...byKey.values()];
   }
 
+  function mergeNccnEvidence(items) {
+    const byKey = new Map();
+    for (const item of items || []) {
+      const key = [item.doc?.id || item.doc?.storageKey || '', item.page?.page || '', item.option?.label || ''].join(':');
+      if (!byKey.has(key)) byKey.set(key, item);
+    }
+    return [...byKey.values()];
+  }
+
   function mergeNccnGroups(nhiGroups, matches, assessOption) {
     const groups = new Map(nhiGroups.map(group => [
       group.key,
@@ -112,6 +121,14 @@
         const label = String(option.label || '').trim();
         const key = normalizeTreatmentName(label);
         if (!key) continue;
+        const evidence = {
+          doc: match.doc,
+          page: match.page,
+          option,
+          assessment,
+          reasons: match.reasons || [],
+          features: match.features || [],
+        };
         const relatedEntries = nhiGroups.flatMap(group => {
           // 先比類別標題，再比底下的個別藥名（取最強的一個）
           const level = strongestMatchLevel([
@@ -130,12 +147,14 @@
             fromNccn: true,
             requiresSourceReview: false,
             nhiMatchLevel: strongestMatchLevel(relatedEntries.map(entry => entry.nhiMatchLevel)),
+            nccnEvidence: [evidence],
           });
         } else {
           const group = groups.get(key);
           group.entries = mergeEntryRelations([...group.entries, ...relatedEntries]);
           group.fromNccn = true;
           group.nhiMatchLevel = strongestMatchLevel(group.entries.map(entry => entry.nhiMatchLevel));
+          group.nccnEvidence = mergeNccnEvidence([...(group.nccnEvidence || []), evidence]);
         }
         const group = groups.get(key);
         group.requiresSourceReview = group.requiresSourceReview || !!option.needsReview || !!option.sourceNeedsReview || option.recommendation === 'review';

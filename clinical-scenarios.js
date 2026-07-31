@@ -232,7 +232,80 @@
       expectations: [expect('systemic', 'SSTR-positive SSA／PRRT', /^(NET|NE)-/, [
         /lutetium|dotatate|octreotide|lanreotide/i,
       ])],
+    },    {
+      id: 'hcc-child-pugh-b7-systemic',
+      cancerId: 'hepatocellular_carcinoma',
+      label: 'HCC BCLC C／Child-Pugh B7 全身治療核對',
+      fields: [
+        field('BCLC 分期', 'C'),
+        field('Child-Pugh', 'B7'),
+      ],
+      required: ['systemic'],
+      expectations: [expect('systemic', 'HCC 肝功能分層全身治療頁', /^HCC-/, [
+        /nivolumab|sorafenib|lenvatinib|durvalumab|atezolizumab|cabozantinib/i,
+      ])],
     },
+    {
+      id: 'nsclc-no-driver-pdl1-high',
+      cancerId: 'nsclc',
+      label: 'NSCLC 無已知可標靶變異／PD-L1 高表現第一線',
+      fields: [
+        field('病程情境', '轉移／全身性'),
+        field('治療階段／線別', '第一線'),
+        { id: 'nsclc-drivers', label: 'NSCLC 驅動基因／可標靶變異', type: 'multi_select', value: ['無已知可標靶變異'] },
+        { id: 'nsclc-pdl1-tps', label: 'PD-L1 TPS（%）', type: 'number', value: 60, positiveAtLeast: 1 },
+      ],
+      required: ['systemic'],
+      expectations: [expect('systemic', '無驅動基因的免疫治療路徑', /^NSCL-/, [
+        /pembrolizumab|cemiplimab|atezolizumab|nivolumab|ipilimumab/i,
+      ])],
+    },
+    {
+      id: 'crc-braf-v600e-systemic',
+      cancerId: 'colorectal_cancer',
+      label: '大腸直腸癌 BRAF V600E 轉移治療',
+      fields: [
+        field('病程情境', '轉移／全身性'),
+        field('治療階段／線別', '第二線'),
+        field('BRAF V600E', '陽性'),
+      ],
+      required: ['systemic'],
+      expectations: [expect('systemic', 'BRAF V600E 標靶治療', /^(COL|REC)-/, [
+        /encorafenib|cetuximab|panitumumab/i,
+      ])],
+    },
+    {
+      id: 'breast-tnbc-pdl1-high',
+      cancerId: 'breast_cancer',
+      label: '晚期三陰性乳癌 PD-L1 CPS 高表現',
+      fields: [
+        field('病程情境', '轉移／全身性'),
+        field('治療階段／線別', '第一線'),
+        field('乳癌臨床亞型', '三陰性'),
+        { id: 'breast-pdl1-cps', label: 'PD-L1 CPS（晚期 TNBC）', type: 'number', value: 15, positiveAtLeast: 10 },
+      ],
+      required: ['systemic'],
+      expectations: [expect('systemic', '三陰性乳癌免疫治療路徑', /^BINV-/, [
+        /pembrolizumab|paclitaxel|nab-paclitaxel|carboplatin|gemcitabine/i,
+      ])],
+    },
+    {
+      id: 'net-sstr-negative-non-prrt',
+      cancerId: 'neuroendocrine_tumor',
+      label: '神經內分泌腫瘤 SSTR-negative 非 PRRT 路徑',
+      fields: [
+        field('病程情境', '轉移／全身性'),
+        field('治療階段／線別', '第二線'),
+        field('分化／分類', 'well-differentiated NET'),
+        field('SSTR 狀態', '陰性'),
+      ],
+      required: ['systemic'],
+      expectations: [expect('systemic', 'SSTR-negative 其他全身治療', /^(NET|NE)-/, [
+        /everolimus|sunitinib|cabozantinib|temozolomide|capecitabine/i,
+      ])],
+      forbiddenOptions: [/lutetium|dotatate/i],
+    },
+
   ];
 
   function optionText(option) {

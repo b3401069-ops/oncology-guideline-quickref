@@ -46,3 +46,28 @@ test('clears all cancer case sessions while leaving unrelated session data', () 
   assert.deepEqual(state.read('nsclc', storage), {});
   assert.equal(storage.getItem('unrelated'), 'keep');
 });
+
+test('stores editable treatment history with the case and clears it for a new patient', () => {
+  const storage = new MemoryStorage();
+  state.setValue('breast', 'stage', 'II', storage);
+  state.saveTreatment('breast', {
+    id: 'tx-1', phase: '術前／新輔助', treatment: 'TCHP', status: '進行中',
+    completedCycles: '4', plannedCycles: '6', toxicity: '周邊神經病變',
+  }, storage);
+  assert.equal(state.treatmentHistory('breast', storage).length, 1);
+  assert.equal(state.read('breast', storage).stage, 'II');
+
+  state.saveTreatment('breast', {
+    id: 'tx-1', phase: '術前／新輔助', treatment: 'TCHP', status: '已完成',
+    completedCycles: '6', plannedCycles: '6',
+  }, storage);
+  assert.equal(state.treatmentHistory('breast', storage)[0].status, '已完成');
+
+  state.removeTreatment('breast', 'tx-1', storage);
+  assert.deepEqual(state.treatmentHistory('breast', storage), []);
+  assert.equal(state.read('breast', storage).stage, 'II');
+
+  state.saveTreatment('breast', { id: 'tx-2', phase: '術後／輔助', treatment: 'Trastuzumab', status: '進行中' }, storage);
+  state.clear('breast', storage);
+  assert.deepEqual(state.treatmentHistory('breast', storage), []);
+});
