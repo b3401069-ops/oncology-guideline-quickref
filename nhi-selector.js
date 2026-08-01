@@ -4,13 +4,6 @@
   };
 
   const GENERAL_NOTE_LABEL = /^(?:完整限制條件清單|給付線數限制|治療線別限制|比對健保給付規定|自費討論|事前審查(?:條件)?|尚待核對最新給付規定)$/;
-  const REGIMEN_COMPONENTS = {
-    folfiri: ['fluorouracil', 'leucovorin', 'irinotecan'],
-    folfox: ['fluorouracil', 'leucovorin', 'oxaliplatin'],
-    folfoxiri: ['fluorouracil', 'leucovorin', 'oxaliplatin', 'irinotecan'],
-    capox: ['capecitabine', 'oxaliplatin'],
-    capeox: ['capecitabine', 'oxaliplatin'],
-  };
   const MATCH_LEVEL_RANK = { none: 0, similar: 1, component: 2, exact: 3 };
   const MATCH_LEVEL_LABELS = {
     exact: '完整療程相符',
@@ -33,15 +26,9 @@
   }
 
   function normalizeTreatmentName(value) {
-    return String(value || '')
-      .normalize('NFKC').toLowerCase()
-      .replace(/\(\s*category\s+[12](?:a|b)?\s*\)/gi, '')
-      .replace(/[®™]/g, '')
-      .replace(/\b(?:and|or|with)\b/g, ' ')
-      .replace(/[^a-z0-9\u3400-\u9fff]+/g, ' ')
-      .replace(/\s+/g, ' ').trim();
+    const cleaned = String(value || '').replace(/\(\s*category\s+[12](?:a|b)?\s*\)/gi, '');
+    return window.DRUG_VOCABULARY.canonicalName(cleaned);
   }
-
   function strongestMatchLevel(levels) {
     return [...levels].sort((a, b) => (MATCH_LEVEL_RANK[b] || 0) - (MATCH_LEVEL_RANK[a] || 0))[0] || 'none';
   }
@@ -66,26 +53,13 @@
   }
 
   function labelsOverlap(left, right) {
-    if (!left || !right) return false;
-    if (left === right) return true;
-    if (Math.min(left.length, right.length) < 4) return false;
-    return (` ${left} `).includes(` ${right} `) || (` ${right} `).includes(` ${left} `);
+    return window.DRUG_VOCABULARY.labelsOverlap(left, right);
   }
 
   function treatmentMatchLevel(treatmentKey, groupKey) {
-    if (!treatmentKey || !groupKey) return 'none';
-    if (treatmentKey === groupKey) return 'exact';
-    const treatmentTokens = treatmentKey.split(' ').filter(Boolean);
-    const groupTokens = groupKey.split(' ').filter(Boolean);
-    const treatmentSet = new Set(treatmentTokens);
-    if (groupTokens.length && groupTokens.every(token => treatmentSet.has(token))) return 'component';
-    for (const [regimen, components] of Object.entries(REGIMEN_COMPONENTS)) {
-      if (!treatmentSet.has(regimen)) continue;
-      if (components.some(component => component === groupKey || labelsOverlap(component, groupKey))) return 'component';
-    }
-    return labelsOverlap(treatmentKey, groupKey) ? 'similar' : 'none';
+    const level = window.DRUG_VOCABULARY.matchLevel(treatmentKey, groupKey);
+    return level === 'ingredient' ? 'component' : level;
   }
-
   function mergeEntryRelations(entries) {
     const byKey = new Map();
     for (const entry of entries || []) {

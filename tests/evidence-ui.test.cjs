@@ -28,6 +28,19 @@ test('TFDA registry is routed, backed up, and visible from settings', () => {
   assert.match(html, /TFDA 藥品許可證與核定仿單/);
 });
 
+test('TFDA label parsing exposes batch, review, and manual confirmation states', () => {
+  for (const marker of [
+    'parse-all-tfda-btn',
+    'TFDA_PARSER.extractAndParse',
+    'TFDA_REGISTRY.archiveSuperseded',
+    "extractionStatus: 'confirmed'",
+    '未對應癌別（不會自動命中）',
+    '自動擷取待核對',
+  ]) {
+    assert.ok(html.includes(marker), 'missing TFDA UI marker: ' + marker);
+  }
+});
+
 test('home dashboard lists actionable guideline health details', () => {
   for (const label of ['尚缺指引系列', '解析需要處理', '版本確認時效', '前往批次匯入']) {
     assert.match(html, new RegExp(label));

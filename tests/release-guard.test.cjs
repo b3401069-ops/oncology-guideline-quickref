@@ -10,7 +10,7 @@ const read = (file) => fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
 const CACHE_BUSTED_FILES = [
   'index.html', 'sw.js', 'clinical-templates.js', 'clinical-matcher.js', 'clinical-scenarios.js',
   'nccn-parser.js', 'nhi-parser.js', 'nhi-selector.js', 'nhi-versioning.js',
-  'case-state.js', 'backup-format.js', 'guideline-quality.js', 'tfda-registry.js',
+  'case-state.js', 'backup-format.js', 'guideline-quality.js', 'drug-vocabulary.js', 'tfda-parser.js', 'tfda-registry.js',
 ];
 
 test('service worker 的快取名稱綁定 app 版本', () => {

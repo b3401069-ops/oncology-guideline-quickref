@@ -2,6 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 global.window = {};
+require('../drug-vocabulary.js');
+window.DRUG_VOCABULARY = global.DRUG_VOCABULARY;
 require('../nhi-selector.js');
 const selector = window.NHI_SELECTOR;
 

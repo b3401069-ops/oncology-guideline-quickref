@@ -245,9 +245,11 @@
   <script src="./clinical-templates.js"></script>
   <script src="./clinical-matcher.js"></script>
   <script src="./clinical-scenarios.js"></script>
+  <script src="./drug-vocabulary.js"></script>
   <script src="./nhi-parser.js"></script>
   <script src="./nhi-versioning.js"></script>
   <script src="./nhi-selector.js"></script>
+  <script src="./tfda-parser.js"></script>
   <script src="./tfda-registry.js"></script>
   <script src="./nccn-parser.js"></script>
   <script type="module">
@@ -930,6 +932,8 @@
         const sourceUrl = safeExternalUrl(record.sourceUrl);
         const metadata = [
           window.TFDA_REGISTRY.matchLevelLabels[level],
+          record.extractionStatus === 'review_needed' ? '自動擷取待核對' :
+            record.extractionStatus === 'auto_extracted' ? 'PDF 自動擷取' : '已確認',
           record.permitNumber ? '許可證 ' + record.permitNumber : '',
           record.approvalDate ? '核准日 ' + record.approvalDate : '',
         ].filter(Boolean).join(' · ');
@@ -939,6 +943,7 @@
           <p class="text-sm text-gray-700 mt-2">${esc(record.indication)}</p>
           ${record.biomarker ? `<p class="text-xs mt-2"><strong>生物標記：</strong>${esc(record.biomarker)}</p>` : ''}
           ${record.lineSetting ? `<p class="text-xs mt-1"><strong>病期／線別：</strong>${esc(record.lineSetting)}</p>` : ''}
+          ${record.extractionStatus === 'review_needed' && record.reviewItems?.length ? `<p class="text-xs mt-2" style="color:var(--amber-700)"><strong>待核對：</strong>${esc(record.reviewItems.join('、'))}</p>` : ''}
           <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px">
             ${linked?.storageKey ? `<button type="button" class="btn btn-ghost btn-sm" style="width:auto" onclick="openPdf('${jsStr(linked.storageKey)}', ${safePdfPage(record.sourcePage || 1)})">開啟核定仿單${record.sourcePage ? ' · p.' + esc(record.sourcePage) : ''}</button>` : ''}
             ${sourceUrl ? `<a class="btn btn-ghost btn-sm" style="width:auto" href="${esc(sourceUrl)}" target="_blank" rel="noopener noreferrer">開啟官方來源</a>` : ''}
@@ -2333,8 +2338,9 @@
           ? `<button type="button" class="btn btn-ghost btn-sm" style="width:auto" onclick="openPdf('${jsStr(item.doc.storageKey)}', ${pageNumber})">${esc(code)} · PDF p.${pageNumber}</button>`
           : `<span class="tag">${esc(code)} · p.${pageNumber}</span>`;
       }).join('');
+      const tfdaReviewMatchCount = selectedTfdaMatches.filter(({ record }) => record.extractionStatus === 'review_needed').length;
       const tfdaStatusText = selectedTfdaMatches.length
-        ? `找到 ${selectedTfdaMatches.length} 筆同名或療程成分候選；仍須核對癌別、病期、標記、線別與合併療法。`
+        ? `找到 ${selectedTfdaMatches.length} 筆同名或療程成分候選${tfdaReviewMatchCount ? `，其中 ${tfdaReviewMatchCount} 筆為自動擷取待核對` : ''}；仍須核對癌別、病期、標記、線別與合併療法。`
         : tfdaRecords.length
           ? '目前資料庫未找到同名核准適應症候選；這不代表未核准。'
           : '尚未建立 TFDA 核准適應症資料；不能由 NCCN 或健保狀態推定已核准。';
@@ -3556,6 +3562,9 @@
       const nccnParsedCount = nccnDocs.filter(isCurrentNccnStructure).length;
       const nccnReviewCount = nccnDocs.filter(doc => !isCurrentNccnStructure(doc) && doc.nccnParseError).length;
       const nccnPendingCount = nccnDocs.filter(doc => !isCurrentNccnStructure(doc)).length;
+      const tfdaDocs = docs.filter(doc => TFDA_PARSER.isTfdaDocument(doc) && doc.current && !doc.archived && doc.storageKey);
+      const tfdaParsedCount = tfdaDocs.filter(doc => doc.tfdaExtraction).length;
+      const tfdaPendingCount = tfdaDocs.filter(doc => !doc.tfdaExtraction).length;
 
       app.innerHTML = `
         <div class="container">
@@ -3584,6 +3593,16 @@
               <button type="button" class="btn btn-primary btn-sm" id="parse-all-nccn-btn" style="width:auto;min-width:160px" ${nccnPendingCount ? '' : 'disabled'}>${nccnPendingCount ? '一鍵升級 ' + nccnPendingCount + ' 份' : '全部已完成'}</button>
             </div>
           </div>
+
+          ${tfdaDocs.length ? `<div class="alert ${tfdaPendingCount ? 'alert-warning' : 'alert-info'} mb-4">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+              <div class="min-w-0 flex-1">
+                <p class="font-semibold">TFDA 仿單結構化：${tfdaParsedCount} / ${tfdaDocs.length} 份完成</p>
+                <p class="text-xs mt-1">${tfdaPendingCount ? '可一次擷取許可證、學名、適應症、癌別與原始頁。' : '目前 TFDA 仿單均已建立結構化適應症資料。'}</p>
+              </div>
+              <button type="button" class="btn btn-secondary btn-sm" id="parse-all-tfda-btn" style="width:auto;min-width:150px" ${tfdaPendingCount ? '' : 'disabled'}>${tfdaPendingCount ? '一鍵解析 ' + tfdaPendingCount + ' 份' : '全部已完成'}</button>
+            </div>
+          </div>` : ''}
 
           <div class="filter-bar">
             <button class="filter-chip active" data-source="">全部</button>
@@ -3629,6 +3648,8 @@
                   <p class="text-xs text-gray-500 mt-1">${esc(doc.source)} · ${esc(doc.version)}${doc.verifiedAt ? ` · 已確認 ${esc(doc.verifiedAt)}` : ''}</p>
                   ${isStaleDoc(doc) ? `<p class="text-xs mt-1" style="color:var(--amber-700)">⏰ 超過 6 個月未確認版本 <button class="text-xs" style="color:var(--primary-600);font-weight:500;border:none;background:none;cursor:pointer" onclick="window._verifyDoc('${jsStr(doc.id)}')">確認為最新</button></p>` : ''}
                   ${doc.nhiExtraction ? `<p class="text-xs mt-1" style="color:var(--blue-700)">健保解析：${doc.nhiExtraction.noteCount || 0} 筆資料 · ${doc.nhiExtraction.cancerCount || 0} 個癌別 · ${esc(doc.nhiExtraction.extractedAt || '')}</p>` : ''}
+                  ${doc.tfdaExtraction ? `<p class="text-xs mt-1" style="color:${doc.tfdaExtraction.status === 'review_needed' ? 'var(--amber-700)' : 'var(--blue-700)'}">TFDA 解析：${esc(doc.tfdaExtraction.permitNumber || '許可證待補')} · ${doc.tfdaExtraction.cancerCount || 0} 個癌別 · ${doc.tfdaExtraction.status === 'review_needed' ? '待核對' : '已擷取'}</p>` : ''}
+                  ${doc.tfdaParseError ? `<p class="text-xs mt-1" style="color:var(--amber-700)">TFDA 待核對：${esc(doc.tfdaParseError.message || '無法建立適應症資料')}</p>` : ''}
                   ${redirectGuidelines.length ? `<p class="text-xs mt-1" style="color:var(--amber-700)">NCCN 分拆公告：真正指引為 ${esc(redirectGuidelines.join('、'))}；此公告無需解析。</p>` : doc.nccnStructure ? '<p class="text-xs mt-1" style="color:var(--blue-700)">NCCN 索引：' + (doc.nccnStructure.sections?.length || 0) + ' 個章節頁 · ' + (doc.nccnStructure.treatmentPages?.length || 0) + ' 個治療相關頁 · ' + esc(doc.nccnStructure.version || doc.version || '') + '</p>' : ''}
                   ${doc.nccnParseError ? '<p class="text-xs mt-1" style="color:var(--amber-700)">NCCN 待核對：' + esc(doc.nccnParseError.message || '無法建立章節索引') + '</p>' : ''}
                 </div>
@@ -3643,6 +3664,7 @@
                 <button class="btn btn-ghost btn-sm text-red-500" onclick="window._deleteDoc('${jsStr(doc.id)}')">刪除</button>
               </div>
               ${doc.storageKey && NHI_PARSER.isNhiDocument(doc) && !doc.archived ? `<button class="btn btn-secondary btn-sm mt-3" onclick="window._parseNhiDoc('${jsStr(doc.id)}')">${doc.nhiExtraction ? '重新解析健保規定' : '解析健保規定'}</button>` : ''}
+              ${doc.storageKey && TFDA_PARSER.isTfdaDocument(doc) && !doc.archived ? `<button class="btn btn-secondary btn-sm mt-3" onclick="window._parseTfdaDoc('${jsStr(doc.id)}')">${doc.tfdaExtraction ? '重新解析 TFDA 仿單' : '解析 TFDA 仿單'}</button>` : ''}
               ${doc.storageKey && NCCN_PARSER.isNccnDocument(doc) && !doc.archived && doc.nccnParseError ? '<button class="btn btn-secondary btn-sm mt-3" onclick="window._parseNccnDoc(\'' + jsStr(doc.id) + '\')">重試此份 NCCN</button>' : ''}
             </div>
           `;
@@ -3822,6 +3844,103 @@
           showNhiParseModal('無法完成解析', `<div class="alert alert-warning"><p class="font-semibold">${esc(error?.message || '解析失敗')}</p></div><p class="text-xs text-gray-500">原 PDF 與既有手動健保資料均未變更。</p>`, false);
         }
       };
+
+      const parseTfdaDocument = async (doc, onProgress) => {
+        const blob = await getPdfBlob(doc.storageKey);
+        if (!blob) throw new Error('找不到 PDF 檔案本體');
+        const result = await TFDA_PARSER.extractAndParse(blob, cancerCards, {
+          moduleUrl: new URL('./vendor/pdf.min.mjs', location.href).href,
+          workerUrl: new URL('./vendor/pdf.worker.min.mjs', location.href).href,
+          documentTitle: doc.title,
+          onProgress,
+        });
+        if (!result.candidate) throw new Error('沒有辨識到適應症章節；若 PDF 是掃描影像，需要 OCR 後再匯入');
+        const today = new Date().toISOString().split('T')[0];
+        const record = window.TFDA_REGISTRY.cleanImportedRecord({
+          ...result.candidate,
+          id: 'tfda-auto-' + doc.id,
+          sourceDocumentId: doc.id,
+          sourcePage: result.candidate.sourcePage,
+          current: true,
+          archived: false,
+          updatedAt: today,
+        });
+        if (!record) throw new Error('仿單缺少可保存的藥名或適應症');
+        const existingRecords = await dbGetAll('tfdaIndications');
+        const superseded = window.TFDA_REGISTRY.archiveSuperseded(existingRecords, [record], today);
+        await dbPut('tfdaIndications', record);
+        if (superseded.length) await dbPutMany('tfdaIndications', superseded);
+        await dbPut('documents', {
+          ...doc,
+          pageCount: result.pageCount,
+          tfdaParseError: null,
+          tfdaExtraction: {
+            extractedAt: today,
+            recordId: record.id,
+            permitNumber: record.permitNumber,
+            cancerCount: record.cancerIds.length,
+            status: record.extractionStatus,
+            reviewItems: record.reviewItems,
+            lowTextPages: result.lowTextPages,
+          },
+        });
+        return { result, record, superseded };
+      };
+
+      window._parseTfdaDoc = async (id) => {
+        const doc = await dbGet('documents', id);
+        if (!doc?.storageKey) { showToast('此文件需要重新匯入 PDF'); return; }
+        if (!confirm('開始解析「' + doc.title + '」？只會擷取仿單明確記載的許可證、藥名與適應症。')) return;
+        const modal = showNhiParseModal('解析 TFDA 核定仿單', '<p class="text-sm text-gray-600">準備讀取 PDF…</p>');
+        try {
+          const { result, record, superseded } = await parseTfdaDocument(doc, ({ pageNumber, pageCount }) => {
+            const body = modal.querySelector('#nhi-parse-body');
+            if (body) body.innerHTML = '<p class="text-sm text-gray-700">正在擷取第 ' + pageNumber + ' / ' + pageCount + ' 頁</p><div style="height:8px;background:var(--gray-100);border-radius:4px;overflow:hidden;margin-top:10px"><div style="height:100%;width:' + Math.round(pageNumber / pageCount * 100) + '%;background:var(--primary-500)"></div></div>';
+          });
+          const review = record.extractionStatus === 'review_needed';
+          const reviewHtml = review
+            ? '<div class="alert alert-warning"><p class="font-semibold">已建立待核對候選</p><p class="text-xs mt-1">尚缺：' + esc(record.reviewItems.join('、')) + '。未補癌別前不會在個案查詢中自動命中。</p></div>'
+            : '<div class="alert alert-success"><p class="font-semibold">已建立 TFDA 適應症資料</p><p class="text-xs mt-1">' + esc(record.genericName) + ' · ' + esc(record.permitNumber) + ' · ' + record.cancerIds.length + ' 個癌別</p></div>';
+          const warning = result.lowTextPages ? '<p class="text-xs mt-2" style="color:var(--amber-700)">有 ' + result.lowTextPages + ' 頁文字很少，可能是掃描頁或表格，建議抽查原文。</p>' : '';
+          const archive = superseded.length ? '<p class="text-xs text-gray-500 mt-2">已封存 ' + superseded.length + ' 筆同許可證舊版自動紀錄。</p>' : '';
+          showNhiParseModal('TFDA 仿單解析完成', reviewHtml + warning + archive + '<p class="text-xs text-gray-500 mt-3">請到 TFDA 適應症資料庫確認內容；個案是否符合仍須核對完整核定仿單。</p>', false);
+        } catch (error) {
+          await dbPut('documents', { ...doc, tfdaParseError: { message: error?.message || '解析失敗', checkedAt: new Date().toISOString() } });
+          showNhiParseModal('無法完成解析', '<div class="alert alert-warning"><p class="font-semibold">' + esc(error?.message || '解析失敗') + '</p></div><p class="text-xs text-gray-500">原 TFDA 適應症資料未變更。</p>', false);
+        }
+      };
+
+      window._parseAllTfdaDocs = async () => {
+        const targets = tfdaDocs.filter(doc => !doc.tfdaExtraction);
+        if (!targets.length) { showToast('目前 TFDA 仿單均已完成解析'); return; }
+        if (!confirm('開始依序解析 ' + targets.length + ' 份 TFDA 仿單？全程只在本機進行。')) return;
+        const modal = showNhiParseModal('建立 TFDA 適應症資料', '<p class="text-sm text-gray-600">準備讀取 PDF…</p>');
+        let completed = 0;
+        let reviewCount = 0;
+        const failures = [];
+        for (let index = 0; index < targets.length; index++) {
+          const doc = targets[index];
+          try {
+            const { record } = await parseTfdaDocument(doc, ({ pageNumber, pageCount }) => {
+              const body = modal.querySelector('#nhi-parse-body');
+              if (!body) return;
+              const percent = Math.round(pageNumber / pageCount * 100);
+              body.innerHTML = '<p class="font-semibold text-gray-800">第 ' + (index + 1) + ' / ' + targets.length + ' 份</p><p class="text-sm text-gray-600 mt-1">' + esc(doc.title) + '</p><p class="text-xs text-gray-500 mt-2">正在擷取第 ' + pageNumber + ' / ' + pageCount + ' 頁</p><div style="height:8px;background:var(--gray-100);border-radius:4px;overflow:hidden;margin-top:10px"><div style="height:100%;width:' + percent + '%;background:var(--primary-500)"></div></div>';
+            });
+            completed++;
+            if (record.extractionStatus === 'review_needed') reviewCount++;
+          } catch (error) {
+            const message = error?.message || '解析失敗';
+            await dbPut('documents', { ...doc, tfdaParseError: { message, checkedAt: new Date().toISOString() } });
+            failures.push(doc.title + '：' + message);
+          }
+          await new Promise(resolve => setTimeout(resolve, 0));
+        }
+        const failureHtml = failures.length ? '<div class="alert alert-warning mt-3"><p class="font-semibold">' + failures.length + ' 份無法解析</p><ul class="text-xs mt-2" style="padding-left:18px;list-style:disc">' + failures.slice(0, 10).map(item => '<li>' + esc(item) + '</li>').join('') + '</ul></div>' : '';
+        showNhiParseModal('TFDA 仿單解析完成', '<div class="alert alert-info"><p class="font-semibold">已完成 ' + completed + ' / ' + targets.length + ' 份</p><p class="text-xs mt-1">' + reviewCount + ' 筆因缺學名、許可證或癌別而標示待核對。</p></div>' + failureHtml, false);
+      };
+
+      document.getElementById('parse-all-tfda-btn')?.addEventListener('click', () => window._parseAllTfdaDocs());
 
       window._setCurrent = async (id) => {
         const doc = await dbGet('documents', id);
@@ -4248,8 +4367,10 @@
       const docName = id => docs.find(doc => doc.id === id)?.title || '';
 
       const recordHtml = records.length ? records.map(record => {
-        const cancers = (record.cancerIds || []).map(cardName).join('、') || '未限定癌別';
+        const cancers = (record.cancerIds || []).map(cardName).join('、') || '未對應癌別（不會自動命中）';
         const source = docName(record.sourceDocumentId);
+        const extractionLabel = record.extractionStatus === 'review_needed' ? '待核對' :
+          record.extractionStatus === 'auto_extracted' ? 'PDF 自動擷取' : '已確認';
         return '<div class="list-item" style="align-items:flex-start">' +
           '<div class="min-w-0 flex-1">' +
             '<p class="font-semibold text-gray-900">' + esc(record.genericName) +
@@ -4260,6 +4381,8 @@
             '<p class="text-sm text-gray-700 mt-2">' + esc(record.indication) + '</p>' +
             (record.biomarker ? '<p class="text-xs mt-1" style="color:var(--amber-700)">標記／條件：' + esc(record.biomarker) + '</p>' : '') +
             (record.lineSetting ? '<p class="text-xs text-gray-500 mt-1">線別／情境：' + esc(record.lineSetting) + '</p>' : '') +
+            '<p class="text-xs mt-1" style="color:' + (record.extractionStatus === 'review_needed' ? 'var(--amber-700)' : 'var(--gray-500)') + '">解析狀態：' + esc(extractionLabel) + '</p>' +
+            (record.reviewItems?.length ? '<p class="text-xs mt-1" style="color:var(--amber-700)">待核對：' + esc(record.reviewItems.join('、')) + '</p>' : '') +
             (source ? '<p class="text-xs text-gray-500 mt-1">本機來源：' + esc(source) + (record.sourcePage ? ' · p.' + record.sourcePage : '') + '</p>' : '') +
           '</div>' +
           '<div style="display:flex;gap:4px;flex-shrink:0">' +
@@ -4349,6 +4472,9 @@
           sourceUrl: safeExternalUrl(document.getElementById('tfda-url').value),
           sourceDocumentId: document.getElementById('tfda-document').value,
           sourcePage: document.getElementById('tfda-page').value,
+          autoExtracted: false,
+          extractionStatus: 'confirmed',
+          reviewItems: [],
           current: true,
           archived: false,
           updatedAt: new Date().toISOString().split('T')[0],
@@ -4462,6 +4588,7 @@
               <div class="quality-stat"><strong>${tfdaSummary.undated}</strong><span>未填核准日期</span></div>
               <div class="quality-stat"><strong>${tfdaSummary.withoutSource}</strong><span>未連來源</span></div>
             </div>
+            ${tfdaSummary.review ? `<div class="alert alert-warning mt-3" style="margin-bottom:0">有 ${tfdaSummary.review} 筆自動擷取資料待核對；完成癌別、成分與適應症確認前，不應視為已確認核准適應症。</div>` : ''}
             ${tfdaSummary.active ? '' : '<div class="alert alert-warning mt-3" style="margin-bottom:0">尚未建立核准適應症資料；快速查詢不會從 NCCN 或健保狀態推定 TFDA 核准。</div>'}
             <button type="button" class="btn btn-secondary mt-3" onclick="navigate('/tfda')">管理 TFDA 適應症資料</button>
           </div>
