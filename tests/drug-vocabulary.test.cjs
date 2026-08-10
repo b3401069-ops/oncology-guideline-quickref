@@ -22,3 +22,19 @@ test('short regimen abbreviations require token boundaries', () => {
   assert.equal(vocabulary.matchLevel('Paclitaxel', 'Doxorubicin'), 'none');
   assert.deepEqual(vocabulary.components('Paclitaxel'), []);
 });
+
+test('supports persistent custom aliases, regimen components, and ignored labels', () => {
+  vocabulary.configure([
+    { term: 'Custom Brand', kind: 'alias', canonicalName: 'custom-drug' },
+    { term: 'ABC Combo', kind: 'regimen', components: ['custom-drug', 'carboplatin'] },
+    { term: 'Treatment heading only', kind: 'ignore' },
+  ]);
+  try {
+    assert.equal(vocabulary.matchLevel('Custom Brand', 'custom-drug'), 'exact');
+    assert.equal(vocabulary.matchLevel('ABC Combo', 'carboplatin'), 'ingredient');
+    assert.equal(vocabulary.matchLevel('ABC Combo', 'Custom Brand'), 'ingredient');
+    assert.equal(vocabulary.isIgnored('Treatment heading only'), true);
+  } finally {
+    vocabulary.configure();
+  }
+});

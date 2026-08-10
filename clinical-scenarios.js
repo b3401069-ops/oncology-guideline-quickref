@@ -2,8 +2,8 @@
   'use strict';
 
   const field = (label, value) => ({ label, value });
-  const expect = (modality, label, sectionPattern, optionPatterns = []) => ({
-    modality, label, sectionPattern, optionPatterns,
+  const expect = (modality, label, sectionPattern, optionPatterns = [], titlePattern = null) => ({
+    modality, label, sectionPattern, optionPatterns, titlePattern,
   });
 
   const scenarios = [
@@ -305,6 +305,95 @@
       ])],
       forbiddenOptions: [/lutetium|dotatate/i],
     },
+    {
+      id: 'prostate-mhspc-first-line',
+      cancerId: 'prostate_cancer',
+      label: '攝護腺癌 mHSPC／mCSPC 第一線',
+      fields: [
+        field('病程情境', '轉移／全身性'),
+        field('治療階段／線別', '第一線'),
+        field('攝護腺癌疾病狀態', 'mHSPC／mCSPC'),
+      ],
+      required: ['systemic'],
+      expectations: [expect('systemic', 'mHSPC／mCSPC 治療強化頁', /^PROS-(?:14|15)$/, [
+        /apalutamide|enzalutamide|darolutamide|abiraterone|docetaxel/i,
+      ], /M1.*CSPC/i)],
+    },
+    {
+      id: 'pancreas-metastatic-first-line',
+      cancerId: 'pancreatic_cancer',
+      label: '胰臟腺癌轉移第一線',
+      fields: [
+        field('病程情境', '轉移／全身性'),
+        field('治療階段／線別', '第一線'),
+        field('胰臟癌可切除性', '轉移'),
+      ],
+      required: ['systemic'],
+      expectations: [expect('systemic', '轉移性胰臟癌第一線療程', /^PANC-G$/, [
+        /FOLFIRINOX|albumin-bound paclitaxel.*gemcitabine|NALIRIFOX/i,
+      ], /Metastatic Disease \(First-Line Therapy\)/i)],
+    },
+    {
+      id: 'gastric-her2-positive-first-line',
+      cancerId: 'gastric_cancer',
+      label: 'HER2-positive 胃腺癌轉移第一線',
+      fields: [
+        field('病程情境', '轉移／全身性'),
+        field('治療階段／線別', '第一線'),
+        field('上消化道原發／病理', '胃腺癌'),
+        field('HER2', '陽性'),
+        { label: 'PD-L1 CPS', type: 'number', value: 5, positiveAtLeast: 1 },
+      ],
+      required: ['systemic'],
+      expectations: [expect('systemic', 'HER2-positive 胃癌第一線療程', /^GAST-F$/, [
+        /trastuzumab/i,
+      ], /^First-Line Therapy$/i)],
+    },
+    {
+      id: 'rcc-clear-cell-first-line',
+      cancerId: 'renal_cell_carcinoma',
+      label: 'Clear-cell RCC 轉移第一線',
+      fields: [
+        field('病程情境', '轉移／全身性'),
+        field('治療階段／線別', '第一線'),
+        field('RCC 組織型', 'clear cell'),
+        field('IMDC risk', 'intermediate'),
+      ],
+      required: ['systemic'],
+      expectations: [expect('systemic', 'Clear-cell RCC 第一線療程', /^KID-D$/, [
+        /axitinib.*pembrolizumab|cabozantinib.*nivolumab|ipilimumab.*nivolumab|lenvatinib.*pembrolizumab/i,
+      ], /FIRST-LINE THERAPY FOR CLEAR CELL/i)],
+    },
+    {
+      id: 'bladder-metastatic-first-line',
+      cancerId: 'bladder_cancer',
+      label: '膀胱尿路上皮癌轉移第一線',
+      fields: [
+        field('病程情境', '轉移／全身性'),
+        field('治療階段／線別', '第一線'),
+        field('尿路上皮癌原發位置', '膀胱'),
+        field('膀胱肌層侵犯', 'MIBC'),
+      ],
+      required: ['systemic'],
+      expectations: [expect('systemic', '轉移性膀胱癌第一線療程', /^BL-G$/, [
+        /enfortumab.*pembrolizumab|cisplatin.*gemcitabine|carboplatin.*gemcitabine/i,
+      ], /First-Line Systemic Therapy.*Metastatic/i)],
+    },
+    {
+      id: 'ovarian-recurrent-folr1-positive',
+      cancerId: 'ovarian_cancer',
+      label: '復發卵巢癌 FRα／FOLR1-positive',
+      fields: [
+        field('病程情境', '復發'),
+        field('治療階段／線別', '第二線'),
+        field('卵巢癌組織型', 'high-grade serous'),
+        field('FRα（FOLR1）', '陽性'),
+      ],
+      required: ['systemic'],
+      expectations: [expect('systemic', 'FRα／FOLR1 對應療程頁', /^OV-D$/, [
+        /mirvetuximab/i,
+      ], /Recurrence Therapy/i)],
+    },
 
   ];
 
@@ -333,6 +422,7 @@
   function expectationMatches(expectation, match, matcher) {
     if (expectation.modality && match.modality !== expectation.modality) return false;
     if (expectation.sectionPattern && !patternMatches(expectation.sectionPattern, match.page?.sectionCode)) return false;
+    if (expectation.titlePattern && !patternMatches(expectation.titlePattern, match.page?.title)) return false;
     if (!expectation.optionPatterns?.length) return true;
     return activeOptions(match, matcher).some(option =>
       expectation.optionPatterns.some(pattern => patternMatches(pattern, optionText(option)))

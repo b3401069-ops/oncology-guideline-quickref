@@ -16,7 +16,7 @@ test('seeds disease-specific fields for hematology guidelines that do not use so
     const fields = templates.precisionForCancer(cancerId);
     assert.ok(fields.some(field => field.key === fieldKey), `${cancerId}: ${fieldKey}`);
   }
-  assert.equal(templates.version, 7);
+  assert.equal(templates.version, 8);
 });
 
 // Windows checkouts may use CRLF; structural regexes below assume LF.
@@ -55,6 +55,18 @@ test('exclusive multi-select states clear contradictory values', () => {
   assert.deepEqual(templates.toggleMultiValue(field, ['EGFR sensitizing'], '待檢'), ['待檢']);
   assert.deepEqual(templates.toggleMultiValue(field, ['待檢'], 'ALK fusion'), ['ALK fusion']);
   assert.deepEqual(templates.toggleMultiValue(field, ['ALK fusion'], 'ROS1 fusion'), ['ALK fusion', 'ROS1 fusion']);
+});
+
+test('NSCLC driver choices are present and startup reconciliation checks actual stored fields', () => {
+  const field = templates.precisionForCancer('nsclc').find(item => item.key === 'nsclc-drivers');
+  assert.equal(field.type, 'multi_select');
+  for (const option of ['EGFR exon 19 deletion', 'ALK fusion', 'ROS1 fusion', 'KRAS G12C', 'MET exon 14 skipping', 'RET fusion']) {
+    assert.ok(field.options.includes(option), option);
+  }
+
+  const html = readSource('index.html');
+  assert.doesNotMatch(html, /clinicalTemplateVersion \|\| 0\) >= CLINICAL_TEMPLATE_VERSION\) continue/);
+  assert.doesNotMatch(html, /if \(offeredKeys\.has\(offeredKey\)\) continue/);
 });
 
 test('ambiguous legacy states are visibly marked for confirmation', () => {

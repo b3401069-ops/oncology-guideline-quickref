@@ -13,6 +13,15 @@ test('quick reference keeps NCCN, TFDA, and NHI evidence separate', () => {
   assert.match(html, /這不代表沒有給付/);
 });
 
+test('advanced NSCLC prompts for driver results even when PD-L1 already matches pages', () => {
+  assert.match(html, /const nsclcNeedsDriverResult = card\.id === 'nsclc'/);
+  assert.match(html, /晚期／復發 NSCLC 在採用 PD-L1 路徑前/);
+  assert.match(html, /nccnPromptFields\.map\(renderNhiQueryField\)/);
+  assert.match(html, /nccnPromptFields\.forEach/);
+  assert.match(html, /\.\.\.nccnDiagnosticFields/);
+  assert.doesNotMatch(html, /nccnMatches\.length \? \[\] : nccnDiagnosticFields/);
+});
+
 test('selected treatments expose reasons, exclusions, missing data, and source pages', () => {
   for (const label of ['為何出現', '已套用的排除邏輯', '尚缺或需核對', '原始 NCCN 證據']) {
     assert.match(html, new RegExp(label));

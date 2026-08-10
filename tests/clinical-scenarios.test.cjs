@@ -87,7 +87,7 @@ test('separates missing PDF, unparsed PDF, and incomplete clinical routes', () =
 
 test('covers HCC, lung, colorectal, breast, and neuroendocrine cancers', () => {
   const ids = new Set(scenarios.scenarios.map(item => item.cancerId));
-  for (const expected of ['hepatocellular_carcinoma', 'nsclc', 'sclc', 'colorectal_cancer', 'breast_cancer', 'neuroendocrine_tumor']) {
+  for (const expected of ['hepatocellular_carcinoma', 'nsclc', 'sclc', 'colorectal_cancer', 'breast_cancer', 'neuroendocrine_tumor', 'prostate_cancer', 'pancreatic_cancer', 'gastric_cancer', 'renal_cell_carcinoma', 'bladder_cancer', 'ovarian_cancer']) {
     assert.ok(ids.has(expected), expected);
   }
 });
@@ -104,4 +104,29 @@ test('standard-case suite has unique IDs and multiple routes for each priority c
   assert.ok(counts.colorectal_cancer >= 4);
   assert.ok(counts.breast_cancer >= 7);
   assert.ok(counts.neuroendocrine_tumor >= 3);
+});
+
+test('can require a page title as well as section and regimen evidence', () => {
+  const scenario = {
+    cancerId: 'pancreatic_cancer',
+    fields: [],
+    required: ['systemic'],
+    expectations: [{
+      modality: 'systemic',
+      label: 'metastatic first line',
+      sectionPattern: /^PANC-G$/,
+      titlePattern: /Metastatic Disease \(First-Line Therapy\)/i,
+      optionPatterns: [/FOLFIRINOX/i],
+    }],
+  };
+  const doc = { cancerIds: ['pancreatic_cancer'], nccnStructure: { treatmentPages: [] } };
+  const matcher = {
+    matchTreatmentPages: () => [{
+      modality: 'systemic',
+      features: [],
+      page: { sectionCode: 'PANC-G', title: 'Locally Advanced Disease (First-Line Therapy)', options: [{ label: 'FOLFIRINOX', modality: 'systemic' }] },
+    }],
+    optionAssessment: () => ({ blocked: false }),
+  };
+  assert.equal(scenarios.runScenario(scenario, [doc], matcher).status, 'review');
 });

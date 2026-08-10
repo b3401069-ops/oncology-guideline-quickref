@@ -25,6 +25,11 @@ const cases = [
   ['Breast', 'Breast Cancer.pdf'],
   ['Rectal', 'Rectal Cancer.pdf'],
   ['Prostate', 'Prostate Cancer.pdf'],
+  ['Pancreas', 'Pancreatic Adenocarcinoma.pdf'],
+  ['Gastric', 'Gastric Cancer.pdf'],
+  ['Kidney', 'Kidney Cancer.pdf'],
+  ['Bladder', 'Bladder Cancer.pdf'],
+  ['Ovarian', 'Ovarian Cancer_Fallopian Tube Cancer_Primary Peritoneal Cancer.pdf'],
   ['NET', 'Neuroendocrine and Adrenal Tumors.pdf'],
 ];
 
@@ -101,6 +106,12 @@ async function main() {
     { title: 'Small Cell Lung Cancer', cancerIds: ['sclc'], nccnStructure: results.get('SCLC') },
     { title: 'Breast Cancer', cancerIds: ['breast_cancer'], nccnStructure: results.get('Breast') },
     { title: 'Rectal Cancer', cancerIds: ['colorectal_cancer'], nccnStructure: results.get('Rectal') },
+    { title: 'Prostate Cancer', cancerIds: ['prostate_cancer'], nccnStructure: results.get('Prostate') },
+    { title: 'Pancreatic Adenocarcinoma', cancerIds: ['pancreatic_cancer'], nccnStructure: results.get('Pancreas') },
+    { title: 'Gastric Cancer', cancerIds: ['gastric_cancer'], nccnStructure: results.get('Gastric') },
+    { title: 'Kidney Cancer', cancerIds: ['renal_cell_carcinoma'], nccnStructure: results.get('Kidney') },
+    { title: 'Bladder Cancer', cancerIds: ['bladder_cancer'], nccnStructure: results.get('Bladder') },
+    { title: 'Ovarian Cancer', cancerIds: ['ovarian_cancer'], nccnStructure: results.get('Ovarian') },
     { title: 'Neuroendocrine and Adrenal Tumors', cancerIds: ['neuroendocrine_tumor'], nccnStructure: results.get('NET') },
   ];
   const scenarioSummary = scenarios.summarize(scenarioDocuments, matcher);

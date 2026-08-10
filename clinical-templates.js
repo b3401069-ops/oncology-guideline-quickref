@@ -924,7 +924,7 @@
   };
 
   window.CLINICAL_TEMPLATES = Object.freeze({
-    version: 7,
+    version: 8,
     commonChecklists,
     commonPrecisionFields,
     toggleMultiValue,

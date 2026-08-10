@@ -50,14 +50,55 @@
   };
 
   const aliasToCanonical = new Map();
-  for (const [canonical, aliases] of Object.entries(ALIASES)) {
-    aliasToCanonical.set(normalize(canonical), normalize(canonical));
-    for (const alias of aliases) aliasToCanonical.set(normalize(alias), normalize(canonical));
+  const customRegimens = new Map();
+  const ignoredTerms = new Set();
+
+  function resetAliases() {
+    aliasToCanonical.clear();
+    for (const [canonical, aliases] of Object.entries(ALIASES)) {
+      aliasToCanonical.set(normalize(canonical), normalize(canonical));
+      for (const alias of aliases) aliasToCanonical.set(normalize(alias), normalize(canonical));
+    }
+  }
+
+  function configure(mappings = []) {
+    resetAliases();
+    customRegimens.clear();
+    ignoredTerms.clear();
+
+    const activeMappings = mappings.filter(mapping => mapping && mapping.archived !== true && mapping.term);
+    for (const mapping of activeMappings) {
+      const term = normalize(mapping.term);
+      if (!term) continue;
+      if (mapping.kind === 'ignore') ignoredTerms.add(term);
+      if (mapping.kind === 'alias' && mapping.canonicalName) {
+        const canonical = normalize(mapping.canonicalName);
+        if (canonical) {
+          aliasToCanonical.set(canonical, canonical);
+          aliasToCanonical.set(term, canonical);
+        }
+      }
+    }
+
+    for (const mapping of activeMappings) {
+      if (mapping.kind !== 'regimen') continue;
+      const term = normalize(mapping.term);
+      const ingredients = Array.isArray(mapping.components) ? mapping.components : [];
+      const normalizedIngredients = ingredients.map(canonicalName).filter(Boolean);
+      if (term && normalizedIngredients.length) customRegimens.set(term, [...new Set(normalizedIngredients)]);
+    }
   }
 
   function canonicalName(value) {
-    const key = normalize(value);
-    return aliasToCanonical.get(key) || key;
+    let key = normalize(value);
+    const seen = new Set();
+    while (aliasToCanonical.has(key) && !seen.has(key)) {
+      seen.add(key);
+      const next = aliasToCanonical.get(key);
+      if (!next || next === key) break;
+      key = next;
+    }
+    return key;
   }
 
   function includesPhrase(text, phrase) {
@@ -74,7 +115,15 @@
       if (!includesPhrase(text, regimen)) continue;
       ingredients.forEach(ingredient => output.add(canonicalName(ingredient)));
     }
+    for (const [regimen, ingredients] of customRegimens.entries()) {
+      if (!includesPhrase(text, regimen)) continue;
+      ingredients.forEach(ingredient => output.add(canonicalName(ingredient)));
+    }
     return [...output];
+  }
+
+  function isIgnored(value) {
+    return ignoredTerms.has(normalize(value));
   }
 
   function labelsOverlap(left, right) {
@@ -100,6 +149,10 @@
     components,
     labelsOverlap,
     matchLevel,
+    configure,
+    isIgnored,
     regimens: Object.freeze(REGIMENS),
   });
+
+  configure();
 })();

@@ -34,6 +34,7 @@
     'breast-her2-positive': 'HER2-positive', 'breast-her2-negative': 'HER2-negative',
     'breast-node-positive': '淋巴結陽性', 'breast-node-negative': '淋巴結陰性',
     'breast-genomic-assay': '乳癌基因表現檢測',
+    'prostate-mhspc': 'mHSPC／mCSPC', 'prostate-nmcrpc': 'nmCRPC', 'prostate-mcrpc': 'mCRPC',
     'mpn-pv': 'PV', 'mpn-et': 'ET', 'mpn-mf': 'PMF/pre-PMF',
   };
 
@@ -65,6 +66,9 @@
     'breast-genomic-assay': /gene expression assay|21[- ]gene|Oncotype|recurrence score/i,
     'limited-stage-sclc': /limited[- ]stage/i,
     'extensive-stage-sclc': /extensive[- ]stage/i,
+    'prostate-mhspc': /\b(?:m?HSPC|m?CSPC)\b|metastatic (?:hormone|castration)[- ]sensitive/i,
+    'prostate-nmcrpc': /\bnmCRPC\b|M0 castration[- ]resistant/i,
+    'prostate-mcrpc': /\bmCRPC\b|M1 castration[- ]resistant/i,
   };
 
   const DIAGNOSTIC_FIELD_PATTERNS = [
@@ -118,6 +122,12 @@
 
   const normalize = (value) => String(value || '').normalize('NFKC').replace(/\s+/g, ' ').trim();
   const hasValue = (value) => Array.isArray(value) ? value.length > 0 : value !== undefined && value !== null && String(value).trim() !== '';
+  const UNRESOLVED_CLINICAL_VALUE = /待檢|待確認|未評估|尚未評估|已送檢待|不可評估/;
+  const needsClinicalResolution = (value) => {
+    if (!hasValue(value)) return true;
+    const values = Array.isArray(value) ? value : [value];
+    return values.some(item => UNRESOLVED_CLINICAL_VALUE.test(normalize(item)));
+  };
 
   function addFeature(output, key, polarity, field, value) {
     if (!key || polarity === 'unknown') return;
@@ -217,6 +227,11 @@
         if (/mixed\s+hcc[- ]cca|combined hepatocellular[- ]cholangiocarcinoma/.test(lower)) addFeature(output, 'mixed-hcc-cca', 'positive', field, value);
         if (/sclc.*侷限期|侷限期.*sclc|limited[- ]stage/.test(lower)) addFeature(output, 'limited-stage-sclc', 'positive', field, value);
         if (/sclc.*廣泛期|廣泛期.*sclc|extensive[- ]stage/.test(lower)) addFeature(output, 'extensive-stage-sclc', 'positive', field, value);
+        if (/攝護腺癌疾病狀態|prostate.*(?:state|status)/i.test(label)) {
+          if (/m?HSPC|m?CSPC/i.test(raw)) addFeature(output, 'prostate-mhspc', 'positive', field, value);
+          if (/nmCRPC/i.test(raw)) addFeature(output, 'prostate-nmcrpc', 'positive', field, value);
+          if (/mCRPC/i.test(raw) && !/nmCRPC/i.test(raw)) addFeature(output, 'prostate-mcrpc', 'positive', field, value);
+        }
 
         const bclc = /BCLC/i.test(label) ? raw.match(/^(0|A|B|C|D)$/i) : null;
         if (bclc) addFeature(output, 'bclc-' + bclc[1].toLowerCase(), 'positive', field, value);
@@ -414,6 +429,16 @@
   function isBreastDocument(doc) {
     return /breast cancer|乳癌/i.test([doc?.title, doc?.fileName, doc?.source, doc?.guidelineName].filter(Boolean).join(' '));
   }
+  function isProstateDocument(doc) {
+    return /prostate cancer|攝護腺癌/i.test([doc?.title, doc?.fileName, doc?.source, doc?.guidelineName].filter(Boolean).join(' '));
+  }
+  function conflictingProstateStatePage(page, selectedKey) {
+    const code = String(page.sectionCode || '').toUpperCase();
+    const pageState = /^PROS-(?:13|14|15)$/.test(code) ? 'prostate-mhspc'
+      : code === 'PROS-16' ? 'prostate-nmcrpc'
+        : /^PROS-(?:17|18)$/.test(code) ? 'prostate-mcrpc' : '';
+    return !!pageState && pageState !== selectedKey;
+  }
   function isBreastAdjuvantPage(page, features) {
     const code = String(page.sectionCode || '').toUpperCase();
     const selected = new Set((features || []).filter(feature => feature.polarity === 'positive').map(feature => feature.key));
@@ -453,6 +478,9 @@
     if (feature.key === 'sm-aggressive') return /AGGRESSIVE SYSTEMIC MASTOCYTOSIS/i.test(page.title || '');
     if (feature.key === 'sm-mcl') return /MAST CELL LEUKEMIA/i.test(page.title || '');
     if (feature.key === 'sm-ahn') return /ASSOCIATED HEMATOLOGIC|\bAHN\b/i.test(page.title || '');
+    if (feature.key === 'prostate-mhspc') return /^PROS-(?:13|14|15)$/.test(code) || /\b(?:CSPC|HSPC)\b/i.test(page.title || '');
+    if (feature.key === 'prostate-nmcrpc') return code === 'PROS-16' || /M0 CASTRATION-RESISTANT/i.test(page.title || '');
+    if (feature.key === 'prostate-mcrpc') return /^PROS-(?:17|18)$/.test(code) || /M1 CRPC/i.test(page.title || '');
     return false;
   }
   function featureMatchesPage(doc, page, feature) {
@@ -472,7 +500,7 @@
 
   // 解析器不會產生對應關鍵字的條件（例如 ECOG）永遠無法匹配任何頁面，
   // 不該被當成「找不到對應頁面」的證據，應明示為僅供記錄。
-  const ROUTABLE_EXTRA_KEYS = /^(?:mpn-|sm-|bclc-|child-pugh-|stage-)/;
+  const ROUTABLE_EXTRA_KEYS = /^(?:mpn-|sm-|bclc-|child-pugh-|stage-|prostate-)/;
   function isRoutableFeature(key) {
     const vocabulary = window.NCCN_PARSER?.KEYWORD_VOCABULARY;
     if (!vocabulary) return true;
@@ -487,7 +515,7 @@
     const allPositive = features.filter(item => isActionablePolarity(item.polarity));
     const recordOnlyFeatures = allPositive.filter(item => !isRoutableFeature(item.key));
     const positiveFeatures = allPositive.filter(item => isRoutableFeature(item.key));
-    const suggestedFields = (fields || []).filter(field => !hasValue(field.value))
+    const suggestedFields = (fields || []).filter(field => needsClinicalResolution(field.value))
       .filter(field => diagnosticFieldRank(field) < DIAGNOSTIC_FIELD_PATTERNS.length)
       .sort((a, b) => diagnosticFieldRank(a) - diagnosticFieldRank(b))
       .slice(0, 4);
@@ -521,10 +549,13 @@
         const reasons = matched.map(feature => feature.key);
         if (!reasons.length) continue;
         if (isBreastDocument(doc) && positive.some(feature => feature.key === 'adjuvant') && !isBreastAdjuvantPage(page, features)) continue;
+        const prostateState = positive.find(feature => /^prostate-/.test(feature.key));
+        if (prostateState && isProstateDocument(doc) && conflictingProstateStatePage(page, prostateState.key)) continue;
         const selectedMetastatic = positive.some(feature => feature.key === 'metastatic');
         const localizedTitle = /\b(?:PREOPERATIVE|NEOADJUVANT|ADJUVANT)\b/i.test(page.title || '');
+        const locallyAdvancedOnlyTitle = /\bLOCALLY ADVANCED\b/i.test(page.title || '') && !/\bMETASTATIC\b/i.test(page.title || '');
         const metastaticTitle = /\b(?:METASTATIC|RECURRENT|UNRESECTABLE)\b/i.test(page.title || '');
-        if (selectedMetastatic && localizedTitle && !metastaticTitle) continue;
+        if (selectedMetastatic && (localizedTitle || locallyAdvancedOnlyTitle) && !metastaticTitle) continue;
         const hasFollowupOption = (page.options || []).some(option => typeof option !== 'string' && option.modality === 'followup');
         const modality = matched.some(feature => feature.key === 'followup') && hasFollowupOption
           ? 'followup'

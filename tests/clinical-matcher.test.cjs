@@ -737,3 +737,35 @@ test('rectal history recognizes completed TNT and completed postoperative CAPEOX
   assert.equal(completed.decision.level, 'omit');
   assert.match(completed.decision.headline, /不再重複建議/);
 });
+test('prostate disease state prioritizes mHSPC pages and excludes CRPC branches', () => {
+  const documents = [{
+    title: 'Prostate Cancer',
+    nccnStructure: { treatmentPages: [
+      { page: 29, sectionCode: 'PROS-14', title: 'TREATMENT OF LOW-VOLUME M1 CSPC', role: 'pathway', keywords: ['metastatic'], types: ['systemic'], options: [{ label: 'Apalutamide', modality: 'systemic' }] },
+      { page: 33, sectionCode: 'PROS-17', title: 'TREATMENT OF M1 CRPC', role: 'pathway', keywords: ['metastatic', 'first-line'], types: ['systemic'], options: [{ label: 'Docetaxel', modality: 'systemic' }] },
+    ] },
+  }];
+  const matches = matcher.matchTreatmentPages(documents, [
+    field('病程情境', '轉移／全身性'),
+    field('治療階段／線別', '第一線'),
+    field('攝護腺癌疾病狀態', 'mHSPC／mCSPC'),
+  ]);
+  assert.equal(matches[0].page.sectionCode, 'PROS-14');
+  assert.ok(matches[0].reasons.includes('prostate-mhspc'));
+  assert.ok(!matches.some(match => match.page.sectionCode === 'PROS-17'));
+});
+
+test('metastatic selection excludes pages explicitly limited to locally advanced disease', () => {
+  const documents = [{
+    title: 'Pancreatic Adenocarcinoma',
+    nccnStructure: { treatmentPages: [
+      { page: 55, sectionCode: 'PANC-G', title: 'Locally Advanced Disease (First-Line Therapy)', role: 'recommendation', keywords: ['metastatic', 'first-line'], types: ['systemic'], options: [{ label: 'FOLFIRINOX', modality: 'systemic' }] },
+      { page: 57, sectionCode: 'PANC-G', title: 'Metastatic Disease (First-Line Therapy)', role: 'recommendation', keywords: ['metastatic', 'first-line'], types: ['systemic'], options: [{ label: 'FOLFIRINOX', modality: 'systemic' }] },
+    ] },
+  }];
+  const matches = matcher.matchTreatmentPages(documents, [
+    field('病程情境', '轉移／全身性'),
+    field('治療階段／線別', '第一線'),
+  ]);
+  assert.deepEqual(matches.map(match => match.page.page), [57]);
+});

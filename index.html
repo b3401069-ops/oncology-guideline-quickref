@@ -251,11 +251,13 @@
   <script src="./nhi-selector.js"></script>
   <script src="./tfda-parser.js"></script>
   <script src="./tfda-registry.js"></script>
+  <script src="./quality-audit.js"></script>
+  <script src="./quality-audit-page.js"></script>
   <script src="./nccn-parser.js"></script>
   <script type="module">
     // ========== Database ==========
     const DB_NAME = 'OncologyGuidelineDB';
-    const DB_VERSION = 3;
+    const DB_VERSION = 4;
     const APP_VERSION = window.ONCOLOGY_APP_VERSION || 'unknown';
     let db;
 
@@ -288,6 +290,9 @@
           if (!db.objectStoreNames.contains('tfdaIndications')) {
             const store = db.createObjectStore('tfdaIndications', { keyPath: 'id' });
             store.createIndex('cancerIds', 'cancerIds', { multiEntry: true });
+          }
+          if (!db.objectStoreNames.contains('drugMappings')) {
+            db.createObjectStore('drugMappings', { keyPath: 'id' });
           }
           if (!db.objectStoreNames.contains('restoreSnapshots')) {
             db.createObjectStore('restoreSnapshots', { keyPath: 'id' });
@@ -1225,14 +1230,12 @@
       const pendingClinicalCards = [];
 
       for (const [cancerId, card] of cardsById) {
-        if (Number(card.clinicalTemplateVersion || 0) >= CLINICAL_TEMPLATE_VERSION) continue;
         const offeredKeys = new Set(card.clinicalTemplateKeys || []);
         const checklistLabels = new Set((checklistByCancer.get(cancerId) || []).map(item => normalizeClinicalLabel(item.label)));
         const precisionLabels = new Set((precisionByCancer.get(cancerId) || []).map(item => normalizeClinicalLabel(item.label)));
 
         for (const template of checklistTemplatesForCancer(cancerId)) {
           const offeredKey = 'checklist:' + template.key;
-          if (offeredKeys.has(offeredKey)) continue;
           const knownLabels = [template.label, ...(template.aliases || [])].map(normalizeClinicalLabel);
           if (!knownLabels.some(label => checklistLabels.has(label))) {
             pendingClinicalChecklists.push({
@@ -1256,7 +1259,6 @@
 
         for (const template of precisionTemplatesForCancer(cancerId)) {
           const offeredKey = 'precision:' + template.key;
-          if (offeredKeys.has(offeredKey)) continue;
           const knownLabels = [template.label, ...(template.aliases || [])].map(normalizeClinicalLabel);
           if (!knownLabels.some(label => precisionLabels.has(label))) {
             pendingClinicalPrecision.push({
@@ -1279,14 +1281,19 @@
           offeredKeys.add(offeredKey);
         }
 
-        const updatedCard = {
-          ...card,
-          clinicalTemplateVersion: CLINICAL_TEMPLATE_VERSION,
-          clinicalTemplateKeys: [...offeredKeys],
-          clinicalTemplateSeededAt: today,
-        };
-        pendingClinicalCards.push(updatedCard);
-        cardsById.set(cancerId, updatedCard);
+        const nextKeys = [...offeredKeys];
+        const cardNeedsUpdate = Number(card.clinicalTemplateVersion || 0) !== CLINICAL_TEMPLATE_VERSION ||
+          JSON.stringify(card.clinicalTemplateKeys || []) !== JSON.stringify(nextKeys);
+        if (cardNeedsUpdate) {
+          const updatedCard = {
+            ...card,
+            clinicalTemplateVersion: CLINICAL_TEMPLATE_VERSION,
+            clinicalTemplateKeys: nextKeys,
+            clinicalTemplateSeededAt: today,
+          };
+          pendingClinicalCards.push(updatedCard);
+          cardsById.set(cancerId, updatedCard);
+        }
       }
 
       await Promise.all([
@@ -1388,14 +1395,14 @@
     }
 
     // ========== Backup ==========
-    const BACKUP_STORES = ['cancerCards','documents','checklists','precisionFields','nhiNotes','tfdaIndications'];
+    const BACKUP_STORES = ['cancerCards','documents','checklists','precisionFields','nhiNotes','tfdaIndications','drugMappings'];
     const BACKUP_PLAN_KEY = 'oncology-backup-plan';
     const PDF_RESTORE_TRACKER_KEY = 'oncology-pdf-restore-progress';
 
     async function collectMetadataStores() {
-      const [cancerCards, documents, checklists, precisionFields, nhiNotes, tfdaIndications] = await Promise.all([
+      const [cancerCards, documents, checklists, precisionFields, nhiNotes, tfdaIndications, drugMappings] = await Promise.all([
         dbGetAll('cancerCards'), dbGetAll('documents'), dbGetAll('checklists'),
-        dbGetAll('precisionFields'), dbGetAll('nhiNotes'), dbGetAll('tfdaIndications')
+        dbGetAll('precisionFields'), dbGetAll('nhiNotes'), dbGetAll('tfdaIndications'), dbGetAll('drugMappings')
       ]);
       return {
         cancerCards,
@@ -1404,6 +1411,7 @@
         precisionFields: window.CASE_STATE.stripValues(precisionFields),
         nhiNotes,
         tfdaIndications,
+        drugMappings,
       };
     }
 
@@ -1588,6 +1596,7 @@
       stores.precisionFields = window.CASE_STATE.stripValues(importedFields);
       for (const pdf of pdfBuffers) await putPdfBuffer(pdf.key, pdf.buf);
       await dbReplaceStores(stores);
+      window.DRUG_VOCABULARY.configure(await dbGetAll('drugMappings'));
       window.CASE_STATE.clearAll();
       const migration = window.CASE_STATE.migrateLegacy(importedFields);
       if (data.version === BACKUP_FORMAT.version && data.manifest?.pdfBatchCount > 0) {
@@ -1864,6 +1873,8 @@
         await renderSourceHub(app);
       } else if (currentRoute === '/tfda') {
         await renderTfdaRegistry(app);
+      } else if (currentRoute === '/quality-audit') {
+        await renderQualityAudit(app);
       } else if (currentRoute === '/pdf-library' && !routeParams.docId) {
         await renderPdfLibrary(app);
       } else if (currentRoute === '/pdf-library/batch') {
@@ -1964,6 +1975,7 @@
                 </div>
               </div>
             </details>
+            <button type="button" class="btn btn-secondary mt-3" onclick="navigate('/quality-audit')">開啟完整品質稽核</button>
           </section>
           ${staleNhiRuleCount || undatedNhiRuleCount ? `<div class="alert alert-warning" style="cursor:pointer" onclick="navigate('/pdf-library')"><strong>健保規定時效待確認</strong>${staleNhiRuleCount ? ` · ${staleNhiRuleCount} 筆超過一年` : ''}${undatedNhiRuleCount ? ` · ${undatedNhiRuleCount} 筆未記錄日期` : ''}<p class="text-xs mt-1">重新解析目前健保 PDF 可補上公告日期並封存舊版。</p></div>` : ''}
           ${staleCount > 0 ? `<div class="alert alert-warning" style="cursor:pointer" onclick="navigate('/pdf-library')">⏰ 有 <strong>${staleCount}</strong> 份指引超過 6 個月未確認版本，點此前往文件庫</div>` : ''}
@@ -2272,6 +2284,20 @@
       const nccnDiagnosis = nccnTreatmentDiagnosis(parsedNccnDocs, queryPrecisionFields);
       const adjuvant = window.CLINICAL_MATCHER.adjuvantAssessment(card.id, parsedNccnDocs, queryPrecisionFields, treatmentHistory);
       const nccnDiagnosticFields = nccnDiagnosis.suggestedFields || [];
+      const fieldByTemplateKey = key => queryPrecisionFields.find(field => field.sourceTemplateKey === key);
+      const nsclcDiseaseSetting = pfValueText(fieldByTemplateKey('base-disease-setting'));
+      const nsclcDriverField = fieldByTemplateKey('nsclc-drivers');
+      const nsclcDriverValues = Array.isArray(nsclcDriverField?.value)
+        ? nsclcDriverField.value
+        : (nsclcDriverField?.value ? [nsclcDriverField.value] : []);
+      const nsclcNeedsDriverResult = card.id === 'nsclc' &&
+        /局部晚期|不可切除|復發|轉移|全身性/.test(nsclcDiseaseSetting) &&
+        (!nsclcDriverValues.length || nsclcDriverValues.some(value => /待檢|待確認/.test(value)));
+      const priorityNccnFields = nsclcNeedsDriverResult && nsclcDriverField ? [nsclcDriverField] : [];
+      const nccnPromptFields = [...new Map([
+        ...priorityNccnFields,
+        ...nccnDiagnosticFields,
+      ].map(field => [field.id, field])).values()];
       const nccnDiagnosisFeatureLabels = nccnDiagnosis.positiveFeatures.map(item => window.CLINICAL_MATCHER.featureLabel(item.key));
       const nccnDiagnosisUnmatchedLabels = nccnDiagnosis.unmatchedFeatures.map(item => window.CLINICAL_MATCHER.featureLabel(item.key));
       const nccnConflicts = nccnClinicalConflicts(card.id, queryPrecisionFields);
@@ -2477,6 +2503,8 @@
           <div class="card section">
             <h2 class="section-title">🧭 NCCN 治療選項</h2>
             ${nccnConflicts.length ? `<div class="alert alert-warning mb-3"><p class="font-semibold">先確認資料矛盾</p><ul class="text-sm mt-2 space-y-1">${nccnConflicts.map(item => `<li>• ${esc(item)}</li>`).join('')}</ul></div>` : ''}
+            ${priorityNccnFields.length ? `<div class="alert alert-warning mb-3"><p class="font-semibold">治療前先確認驅動基因</p><p class="text-sm mt-1">晚期／復發 NSCLC 在採用 PD-L1 路徑前，應先確認完整 DNA＋RNA 驅動基因檢測結果。</p></div>` : ''}
+            ${nccnPromptFields.length ? `<div id="nccn-diagnostic-panel" class="nhi-query-panel mb-3"><p class="text-sm font-semibold text-gray-700 mb-3">${priorityNccnFields.length ? '選擇驅動基因／可標靶變異' : '可優先補填'}</p>${nccnPromptFields.map(renderNhiQueryField).join('')}<button type="button" class="btn btn-primary" id="nccn-diagnostic-submit-btn">重新查詢療程</button></div>` : ''}
             ${nccnMatches.length ? `
               <div class="alert alert-info mb-3"><p class="font-semibold">依目前條件找到 ${nccnMatches.length} 個優先查閱頁面</p><p class="text-xs mt-1">以下是 PDF 自動擷取的指引候選選項；請以原頁流程、腳註及完整病況確認，不代表系統已替您決定治療。</p></div>
               <div class="space-y-3">${nccnMatches.map(renderNccnTreatmentMatch).join('')}</div>
@@ -2484,7 +2512,6 @@
                 <p class="font-semibold text-gray-800">${nccnDiagnosis.code === "insufficient_conditions" ? "尚缺可用的病程條件" : "目前條件沒有對應到療程索引"}</p>
                 ${nccnDiagnosisFeatureLabels.length ? `<p class="text-sm text-gray-600 mt-2">已辨識：${esc(nccnDiagnosisFeatureLabels.join("、"))}</p>` : `<p class="text-sm text-gray-600 mt-2">目前輸入尚未形成病程、線別或生物標記條件。</p>`}
                 ${nccnDiagnosisUnmatchedLabels.length ? `<p class="text-sm mt-2" style="color:var(--amber-700)">索引未找到：${esc(nccnDiagnosisUnmatchedLabels.join("、"))}</p>` : ""}
-                ${nccnDiagnosticFields.length ? `<div id="nccn-diagnostic-panel" class="nhi-query-panel mt-3"><p class="text-sm font-semibold text-gray-700 mb-3">可優先補填</p>${nccnDiagnosticFields.map(renderNhiQueryField).join("")}<button type="button" class="btn btn-primary" id="nccn-diagnostic-submit-btn">重新查詢療程</button></div>` : ""}
                 ${jumpDoc?.storageKey ? `<button type="button" class="btn btn-ghost btn-sm mt-2" onclick="openPdf('${jsStr(jumpDoc.storageKey)}')">直接開啟原始指引核對</button>` : ""}
               </div>` :
               hasDocs ? `<div class="bg-gray-50 rounded p-3"><p class="text-sm text-gray-600">PDF 已匯入，但尚未建立內部章節索引。</p><button class="btn btn-secondary btn-sm mt-3" onclick="navigate('/pdf-library')">前往解析 NCCN 指引</button></div>` :
@@ -2617,7 +2644,7 @@
         const controls = [...panel.querySelectorAll('[data-nhi-query-field]')];
         const currentState = readNhiQueryState(card.id);
         const values = { ...currentState.values };
-        nccnDiagnosticFields.forEach((field) => {
+        nccnPromptFields.forEach((field) => {
           const fieldControls = controls.filter(control => control.dataset.nhiQueryField === field.id);
           values[field.id] = field.type === 'multi_select'
             ? fieldControls.filter(control => control.checked).map(control => control.value)
@@ -3236,6 +3263,10 @@
             publishedDate: document.getElementById('nhi-published-date').value,
             effectiveDate: document.getElementById('nhi-effective-date').value,
             condition: readCond(),
+            autoExtracted: false,
+            extractionStatus: 'confirmed',
+            reviewItems: [],
+            truncated: false,
             current: true, archived: false,
             updatedAt: new Date().toISOString().split('T')[0],
           });
@@ -3289,7 +3320,9 @@
 
       window._editNhi = async (id) => {
         const item = await dbGet('nhiNotes', id);
-        if (item) renderForm(item);
+        if (!item) return;
+        renderForm(item);
+        document.getElementById('nhi-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       };
       window._deleteNhi = async (id) => {
         if (!confirm('確定刪除此提醒？')) return;
@@ -3297,6 +3330,11 @@
         showToast('已刪除');
         navigate('/cancer/' + card.id + '/nhi');
       };
+      const qualityEditNhiId = sessionStorage.getItem('quality-edit-nhi');
+      if (qualityEditNhiId) {
+        sessionStorage.removeItem('quality-edit-nhi');
+        requestAnimationFrame(() => window._editNhi(qualityEditNhiId));
+      }
     }
 
     // 只封存「所有對應癌別都被新文件涵蓋」的舊版本；
@@ -4356,6 +4394,92 @@
       });
     }
 
+    async function renderQualityAudit(app) {
+      const [cards, documents, nhiNotes, tfdaRecords, drugMappings] = await Promise.all([
+        dbGetAll('cancerCards'), dbGetAll('documents'), dbGetAll('nhiNotes'), dbGetAll('tfdaIndications'),
+        dbGetAll('drugMappings'),
+      ]);
+      window.DRUG_VOCABULARY.configure(drugMappings);
+      const currentNccnDocs = documents.filter(doc => doc.current && !doc.archived && nccnGuidelineForDocument(doc));
+      const data = {
+        cards,
+        documents,
+        drugMappings: drugMappings.sort((left, right) => String(left.term || '').localeCompare(String(right.term || ''))),
+        cancerAudit: window.QUALITY_AUDIT.auditCancerCoverage(cards, currentNccnDocs, window.CLINICAL_SCENARIOS.scenarios),
+        scenarioAudit: window.CLINICAL_SCENARIOS.summarize(currentNccnDocs, window.CLINICAL_MATCHER),
+        reviewAudit: window.QUALITY_AUDIT.auditReviewQueue(nhiNotes, tfdaRecords, documents),
+        treatmentAudit: window.QUALITY_AUDIT.auditTreatmentCoverage(currentNccnDocs, tfdaRecords, nhiNotes),
+      };
+      app.innerHTML = window.QUALITY_AUDIT_PAGE.render(data, { esc, jsStr, safePdfPage, renderNav });
+      document.getElementById('rerun-quality-audit').addEventListener('click', () => renderQualityAudit(app));
+
+      const mappingKind = document.getElementById('drug-mapping-kind');
+      const mappingPanel = document.getElementById('drug-mapping-panel');
+      const updateMappingFields = () => {
+        const kind = mappingKind.value;
+        document.getElementById('drug-mapping-canonical-group').classList.toggle('hidden', kind !== 'alias');
+        document.getElementById('drug-mapping-components-group').classList.toggle('hidden', kind !== 'regimen');
+      };
+      const resetMappingForm = () => {
+        document.getElementById('drug-mapping-id').value = '';
+        document.getElementById('drug-mapping-term').value = '';
+        document.getElementById('drug-mapping-canonical').value = '';
+        document.getElementById('drug-mapping-components').value = '';
+        mappingKind.value = 'regimen';
+        updateMappingFields();
+      };
+      mappingKind.addEventListener('change', updateMappingFields);
+      document.getElementById('drug-mapping-cancel').addEventListener('click', resetMappingForm);
+      updateMappingFields();
+
+      window._editDrugMapping = label => {
+        const normalized = window.DRUG_VOCABULARY.normalize(label);
+        const existing = drugMappings.find(mapping => window.DRUG_VOCABULARY.normalize(mapping.term) === normalized);
+        document.getElementById('drug-mapping-id').value = existing?.id || '';
+        document.getElementById('drug-mapping-term').value = existing?.term || label;
+        mappingKind.value = existing?.kind || 'regimen';
+        document.getElementById('drug-mapping-canonical').value = existing?.canonicalName || '';
+        document.getElementById('drug-mapping-components').value = (existing?.components || []).join('\n');
+        updateMappingFields();
+        mappingPanel.open = true;
+        mappingPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      };
+      window._deleteDrugMapping = async id => {
+        if (!confirm('刪除此名稱修正？重新稽核後，此名稱會恢復原始判定。')) return;
+        await dbDelete('drugMappings', id);
+        window.DRUG_VOCABULARY.configure(await dbGetAll('drugMappings'));
+        showToast('已刪除名稱修正');
+        await renderQualityAudit(app);
+      };
+      document.getElementById('drug-mapping-save').addEventListener('click', async () => {
+        const term = document.getElementById('drug-mapping-term').value.trim();
+        const kind = mappingKind.value;
+        const canonicalName = document.getElementById('drug-mapping-canonical').value.trim();
+        const components = document.getElementById('drug-mapping-components').value
+          .split(/\r?\n|[,;，；]/).map(value => value.trim()).filter(Boolean);
+        if (!term) { showToast('請填寫 NCCN 擷取名稱'); return; }
+        if (kind === 'alias' && !canonicalName) { showToast('請填寫標準學名'); return; }
+        if (kind === 'regimen' && !components.length) { showToast('請至少填寫一項療程成分'); return; }
+        const normalized = window.DRUG_VOCABULARY.normalize(term);
+        const existing = drugMappings.find(mapping =>
+          mapping.id === document.getElementById('drug-mapping-id').value ||
+          window.DRUG_VOCABULARY.normalize(mapping.term) === normalized
+        );
+        await dbPut('drugMappings', {
+          ...(existing || {}),
+          id: existing?.id || crypto.randomUUID(),
+          term,
+          kind,
+          canonicalName: kind === 'alias' ? canonicalName : '',
+          components: kind === 'regimen' ? [...new Set(components)] : [],
+          archived: false,
+          updatedAt: new Date().toISOString().split('T')[0],
+        });
+        window.DRUG_VOCABULARY.configure(await dbGetAll('drugMappings'));
+        showToast('已儲存名稱修正並重新稽核');
+        await renderQualityAudit(app);
+      });
+    }
     async function renderTfdaRegistry(app) {
       const records = (await dbGetAll('tfdaIndications')).sort((a, b) =>
         String(a.genericName || '').localeCompare(String(b.genericName || ''))
@@ -4537,6 +4661,11 @@
         showToast('已刪除 TFDA 適應症');
         navigate('/tfda');
       };
+      const qualityEditTfdaId = sessionStorage.getItem('quality-edit-tfda');
+      if (qualityEditTfdaId) {
+        sessionStorage.removeItem('quality-edit-tfda');
+        requestAnimationFrame(() => window._editTfdaRecord(qualityEditTfdaId));
+      }
     }
     async function renderSettings(app) {
       let dbSize = '計算中...';
@@ -4572,6 +4701,13 @@
               ${pdfRestoreProgress ? `<div class="alert ${pdfRestoreProgress.complete ? 'alert-success' : 'alert-warning'}"><p class="font-semibold">PDF 還原批次 ${pdfRestoreProgress.restored.length} / ${pdfRestoreProgress.batchCount}</p><p class="text-xs mt-1">${pdfRestoreProgress.complete ? '所有批次均已補回。' : '尚缺第 ' + pdfRestoreProgress.missing.join('、') + ' 批。'}</p></div>` : ''}
               <p class="text-xs text-gray-400">先備份資料索引；PDF 每 5 份一批下載，避免 Android 一次載入全部檔案。v4 備份會檢查 SHA-256、批次完整性，且匯入資料前自動保留目前版本。</p>
               <p class="text-xs" style="color:var(--amber-700)">⚠️ 建議將本 App「加入主畫面」安裝使用，並定期匯出完整備份。瀏覽器在儲存空間不足時仍可能清除本機資料（含 PDF）。</p>
+            </div>
+          </div>
+
+          <div class="card mb-4">
+            <div class="flex-between" style="gap:8px">
+              <div><h2 class="font-semibold text-gray-800">品質稽核</h2><p class="text-xs text-gray-500 mt-1">全癌別資料、臨床情境、待核對紀錄與療程名稱對接</p></div>
+              <button type="button" class="btn btn-secondary btn-sm" style="width:auto" onclick="navigate('/quality-audit')">立即稽核</button>
             </div>
           </div>
 
@@ -4726,6 +4862,7 @@
       document.getElementById('rollback-restore-btn')?.addEventListener('click', async () => {
         if (!latestRestoreSnapshot || !confirm('以匯入前自動保留資料取代目前資料？')) return;
         await dbReplaceStores(latestRestoreSnapshot.data);
+        window.DRUG_VOCABULARY.configure(await dbGetAll('drugMappings'));
         window.CASE_STATE.clearAll();
         showToast('已復原匯入前資料索引；PDF 未變更');
         navigate('/');
@@ -4740,7 +4877,7 @@
           </div>
         `;
         document.getElementById('clear-confirm').addEventListener('click', async () => {
-          for (const store of ['cancerCards','documents','checklists','precisionFields','nhiNotes','tfdaIndications','restoreSnapshots']) await dbClear(store);
+          for (const store of ['cancerCards','documents','checklists','precisionFields','nhiNotes','tfdaIndications','drugMappings','restoreSnapshots']) await dbClear(store);
           window.CASE_STATE.clearAll();
           localStorage.removeItem(PDF_RESTORE_TRACKER_KEY);
           indexedDB.deleteDatabase('OncologyPdfStorage');
@@ -4755,6 +4892,7 @@
     async function init() {
       await openDB();
       await seedDatabase();
+      window.DRUG_VOCABULARY.configure(await dbGetAll('drugMappings'));
       await migrateLegacyCaseValues();
       // 要求持久儲存，避免瀏覽器在空間不足時清除 IndexedDB（含 PDF）
       if (navigator.storage?.persist) navigator.storage.persist();

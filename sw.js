@@ -17,6 +17,8 @@ const ASSETS = [
   './nhi-selector.js',
   './tfda-parser.js',
   './tfda-registry.js',
+  './quality-audit.js',
+  './quality-audit-page.js',
   './nccn-parser.js',
   './vendor/pdf.min.mjs',
   './vendor/pdf.worker.min.mjs',
