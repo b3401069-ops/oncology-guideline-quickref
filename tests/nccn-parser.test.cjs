@@ -120,6 +120,16 @@ test('limits schema 9 reparse to lung, colon and rectal guidelines while preserv
   assert.equal(parser.isCurrentStructure({ title: 'Breast Cancer', nccnStructure: { schemaVersion: 7 } }), false);
   assert.equal(parser.isCurrentStructure({ title: 'Colon Cancer', nccnStructure: { schemaVersion: 9 } }), true);
 });
+
+test('old compatible indexes offer a source-context refresh without becoming unreadable', () => {
+  const legacy = { title: 'Breast Cancer', nccnStructure: { schemaVersion: 9 } };
+  assert.equal(parser.isCurrentStructure(legacy), true);
+  assert.equal(parser.needsEvidenceRefresh(legacy), true);
+  assert.equal(parser.needsEvidenceRefresh({ ...legacy, nccnStructure: { schemaVersion: 9, evidenceContextVersion: 1 } }), true);
+  assert.equal(parser.needsEvidenceRefresh({ ...legacy, nccnStructure: { schemaVersion: 9, evidenceContextVersion: 2 } }), true);
+  assert.equal(parser.needsEvidenceRefresh({ ...legacy, nccnStructure: { schemaVersion: 9, evidenceContextVersion: 2, branchContextVersion:1 } }), false);
+  assert.equal(parser.needsEvidenceRefresh({}), true);
+});
 test('does not classify preoperative systemic regimens as surgery', () => {
   assert.equal(
     parser.classifyModality('Preoperative or adjuvant setting: TC (Docetaxel/Cyclophosphamide)', ['systemic']),
@@ -131,4 +141,13 @@ test('classifies common colorectal regimen acronyms as systemic therapy', () => 
   assert.equal(parser.classifyModality('FOLFOX (6 mo)'), 'systemic');
   assert.equal(parser.classifyModality('CAPEOX (3 mo)'), 'systemic');
   assert.equal(parser.classifyModality('Consider FOLFIRINOX'), 'systemic');
+});
+
+test('explicit source relationships preserve footnote targets and part numbers, not all navigation links', () => {
+  const result = parser.extractSourceContext('ADJUVANT THERAPY\nSee footnotes on NSCL-4A\nFootnotes (NSCL-E 2 of 6)\nFollow-up (NSCL-17)\nSee BINV-K 3 of 4 for eligibility criteria', 'NSCL-4');
+  assert.deepEqual(result.requiredReferences, [{ code: 'NSCL-4A', kind: 'footnotes' }, { code: 'NSCL-E', part: 2, kind: 'footnotes' }]);
+  assert.deepEqual(result.conditionalReferences, [{ code: 'BINV-K', part: 3, kind: 'eligibility' }]);
+  assert.equal(result.version, 2);
+  assert.deepEqual(parser.extractSourceContext('FOOTNOTES FOR NSCL-4\nSome conditions.', 'NSCL-4A').footnotesFor, ['NSCL-4']);
+  assert.deepEqual(parser.extractSourceContext('See footnotes on\nNSCL-4A', 'NSCL-4').requiredReferences, [{ code: 'NSCL-4A', kind: 'footnotes' }]);
 });

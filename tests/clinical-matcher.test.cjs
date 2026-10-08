@@ -162,7 +162,7 @@ test('locates the HR-positive HER2-negative postoperative decision pages when co
   ], completeBreastAdjuvantFields());
   assert.equal(result.status, 'ready');
   assert.match(result.branchLabel, /HR-positive／HER2-negative/);
-  assert.deepEqual(result.pages.map(item => item.page.sectionCode), ['BINV-4', 'BINV-6', 'BINV-7']);
+  assert.deepEqual(result.pages.map(item => item.page.sectionCode), ['BINV-6']);
   assert.deepEqual(result.missing, []);
 });
 
@@ -527,7 +527,116 @@ test('postoperative source pages exclude the opposite molecular branch', () => {
     keyedField('crc-mmr-msi', 'MMR／MSI', 'pMMR／MSS'),
   ];
   const result = matcher.colonAdjuvantAssessment([fakeNccnDocument('Colon Cancer', pages)], fields);
-  assert.deepEqual(result.pages.map(item => item.page.sectionCode), ['COL-4', 'COL-8']);
+  assert.deepEqual(result.pages.map(item => item.page.sectionCode), ['COL-4']);
+  assert.deepEqual(result.supportingPages, []);
+
+  const complete = matcher.colonAdjuvantAssessment([fakeNccnDocument('Colon Cancer', pages)], [
+    ...fields,
+    keyedField('colon-nodes-examined', '結腸癌檢查淋巴結數', '15'),
+  ]);
+  assert.equal(complete.decision.level, 'omit');
+  assert.deepEqual(complete.supportingPages.map(item => item.page.sectionCode), ['COL-8']);
+});
+
+test('NSCLC source pages follow stage and only include regimen appendices actually selected', () => {
+  const document = fakeNccnDocument('Non-Small Cell Lung Cancer', [
+    { page: 29, sectionCode: 'NSCL-4', title: 'FINDINGS AT SURGERY / ADJUVANT TREATMENT', options: [] },
+    { page: 30, sectionCode: 'NSCL-4A', title: 'FOOTNOTES FOR NSCL-4', options: [] },
+    { page: 92, sectionCode: 'NSCL-E', title: 'Adjuvant Chemotherapy', options: [
+      { label: 'Cisplatin/Pemetrexed', modality: 'systemic' },
+    ] },
+    { page: 93, sectionCode: 'NSCL-E', title: 'Other Adjuvant Systemic Therapy', options: [
+      { label: 'Alectinib', modality: 'systemic' },
+      { label: 'Osimertinib', modality: 'systemic' },
+    ] },
+  ]);
+  const common = [
+    keyedField('base-treatment-setting', '治療階段／線別', '術後／鞏固'),
+    keyedField('nsclc-surgery-path', 'NSCLC 手術／術前治療情境', '先手術（未接受術前全身治療）'),
+    keyedField('nsclc-margin', 'NSCLC 手術切緣', 'R0（陰性）'),
+    keyedField('nsclc-histology', 'NSCLC 組織型', '腺癌'),
+    keyedField('nsclc-cisplatin', 'Cisplatin 適用性', '適合 cisplatin'),
+  ];
+  const stageIib = matcher.nsclcAdjuvantAssessment([document], [
+    ...common,
+    keyedField('nsclc-path-stage', 'NSCLC 術後病理分期', 'IIB'),
+    keyedField('nsclc-pt', 'NSCLC 病理 T 分期', 'pT3'),
+    keyedField('nsclc-pn', 'NSCLC 病理 N 分期', 'pN0'),
+    keyedField('nsclc-tumor-size-cm', 'NSCLC 病理腫瘤最大徑（cm）', '4.2'),
+    keyedField('nsclc-drivers', 'NSCLC 驅動基因／可標靶變異', ['ALK fusion']),
+  ]);
+  assert.deepEqual(stageIib.pages.map(item => item.page.sectionCode), ['NSCL-4']);
+  assert.deepEqual(stageIib.supportingPages.map(item => item.page.page), [30, 92, 93]);
+
+  const stageIbEgfr = matcher.nsclcAdjuvantAssessment([document], [
+    ...common,
+    keyedField('nsclc-path-stage', 'NSCLC 術後病理分期', 'IB'),
+    keyedField('nsclc-pt', 'NSCLC 病理 T 分期', 'pT2a'),
+    keyedField('nsclc-pn', 'NSCLC 病理 N 分期', 'pN0'),
+    keyedField('nsclc-high-risk', 'NSCLC 術後高風險特徵', ['無上述特徵']),
+    keyedField('nsclc-drivers', 'NSCLC 驅動基因／可標靶變異', ['EGFR exon 19 deletion']),
+  ]);
+  assert.deepEqual(stageIbEgfr.pages.map(item => item.page.sectionCode), ['NSCL-4']);
+  assert.deepEqual(stageIbEgfr.supportingPages.map(item => item.page.page), [30, 93]);
+});
+
+test('colon and rectal source pages add surveillance only after observation or completed treatment', () => {
+  const colonDocument = fakeNccnDocument('Colon Cancer', [
+    { page: 13, sectionCode: 'COL-4', title: 'ADJUVANT TREATMENT', options: [
+      { label: 'CAPEOX (3 mo)', modality: 'systemic' },
+      { label: 'FOLFOX (3–6 mo)', modality: 'systemic' },
+    ] },
+    { page: 17, sectionCode: 'COL-8', title: 'SURVEILLANCE', options: [] },
+    { page: 22, sectionCode: 'COL-13', title: 'DMMR ADJUVANT TREATMENT', options: [] },
+  ]);
+  const stageIii = matcher.colonAdjuvantAssessment([colonDocument], [
+    keyedField('base-treatment-setting', '治療階段／線別', '術後／鞏固'),
+    keyedField('colon-surgery-path', '結腸癌手術／術前治療情境', '先手術'),
+    keyedField('colon-path-stage', '結腸癌術後病理分期', 'IIIB'),
+    keyedField('colon-pt', '結腸癌病理 T 分期', 'pT3'),
+    keyedField('colon-pn', '結腸癌病理 N 分期', 'pN1'),
+    keyedField('colon-margin', '結腸癌手術切緣', '陰性'),
+    keyedField('crc-mmr-msi', 'MMR／MSI', 'pMMR／MSS'),
+  ]);
+  assert.deepEqual(stageIii.pages.map(item => item.page.sectionCode), ['COL-4']);
+  assert.deepEqual(stageIii.supportingPages, []);
+
+  const rectalDocument = fakeNccnDocument('Rectal Cancer', [
+    { page: 15, sectionCode: 'REC-4', title: 'LOCAL EXCISION', options: [] },
+    { page: 16, sectionCode: 'REC-5', title: 'ADJUVANT TREATMENT', options: [
+      { label: 'FOLFOX or CAPEOX', modality: 'systemic' },
+    ] },
+    { page: 17, sectionCode: 'REC-6', title: 'AFTER TNT', options: [] },
+    { page: 21, sectionCode: 'REC-10', title: 'SURVEILLANCE FOLLOWING OPERATIVE MANAGEMENT', options: [] },
+    { page: 22, sectionCode: 'REC-10A', title: 'SURVEILLANCE FOLLOWING NONOPERATIVE MANAGEMENT', options: [] },
+    { page: 31, sectionCode: 'REC-14', title: 'DMMR PATHWAY', options: [] },
+  ]);
+  const rectalBase = [
+    keyedField('base-treatment-setting', '治療階段／線別', '術後／鞏固'),
+    keyedField('rectal-margin', '直腸癌切緣', '陰性'),
+    keyedField('rectal-crm', '直腸癌環周切緣（CRM）', '陰性／未受威脅'),
+    keyedField('crc-mmr-msi', 'MMR／MSI', 'pMMR／MSS'),
+  ];
+  const upfront = matcher.rectalAdjuvantAssessment([rectalDocument], [
+    ...rectalBase,
+    keyedField('rectal-surgery-path', '直腸癌手術／術前治療情境', '先做經腹切除'),
+    keyedField('rectal-path-stage', '直腸癌術後病理分期', 'IIB'),
+    keyedField('rectal-pt', '直腸癌病理 T 分期', 'pT4a'),
+    keyedField('rectal-pn', '直腸癌病理 N 分期', 'pN0'),
+    keyedField('rectal-high-risk', '直腸癌術後高風險特徵', ['無上述特徵']),
+  ]);
+  assert.deepEqual(upfront.pages.map(item => item.page.sectionCode), ['REC-5']);
+  assert.deepEqual(upfront.supportingPages, []);
+
+  const afterTnt = matcher.rectalAdjuvantAssessment([rectalDocument], [
+    ...rectalBase,
+    keyedField('rectal-surgery-path', '直腸癌手術／術前治療情境', '完成 TNT 後手術'),
+    keyedField('rectal-path-stage', '直腸癌術後病理分期', 'IIA'),
+    keyedField('rectal-pt', '直腸癌病理 T 分期', 'ypT3'),
+    keyedField('rectal-pn', '直腸癌病理 N 分期', 'ypN0'),
+  ]);
+  assert.deepEqual(afterTnt.pages.map(item => item.page.sectionCode), ['REC-6']);
+  assert.deepEqual(afterTnt.supportingPages.map(item => item.page.sectionCode), ['REC-10']);
 });
 
 test('HR-positive HER2-negative postoperative assessment uses menopause and Oncotype thresholds', () => {
@@ -551,6 +660,7 @@ test('HR-positive HER2-negative postoperative assessment uses menopause and Onco
   assert.match(low.decision.headline, /Recurrence Score <26/);
   assert.ok(low.decision.regimens.some(item => /Aromatase inhibitor/.test(item.option.label)));
   assert.ok(!low.decision.regimens.some(item => /Dose-dense AC/i.test(item.option.label)));
+  assert.deepEqual(low.supportingPages.map(item => item.page.sectionCode), ['BINV-K']);
 
   const highFields = completeBreastAdjuvantFields().map(field =>
     field.sourceTemplateKey === 'breast-oncotype-rs' ? { ...field, value: '30' } : field
@@ -559,6 +669,52 @@ test('HR-positive HER2-negative postoperative assessment uses menopause and Onco
   assert.equal(high.decision.level, 'recommended');
   assert.match(high.decision.headline, /≥26/);
   assert.ok(high.decision.regimens.some(item => /Dose-dense AC/i.test(item.option.label)));
+  assert.deepEqual(high.supportingPages.map(item => item.page.sectionCode), ['BINV-M', 'BINV-K']);
+});
+
+test('unassessed Oncotype does not become a false Recurrence Score of zero', () => {
+  const fields = completeBreastAdjuvantFields().map(field => {
+    if (field.sourceTemplateKey === 'breast-genomic-assay') return { ...field, value: '未評估' };
+    if (field.sourceTemplateKey === 'breast-oncotype-rs') return { ...field, value: '' };
+    return field;
+  });
+  const result = matcher.breastAdjuvantAssessment([], fields);
+  assert.equal(result.status, 'missing');
+  assert.ok(result.missing.includes('可判讀的基因表現檢測結果'));
+  assert.match(result.decision.headline, /尚不能使用 RS 門檻/);
+  assert.doesNotMatch(result.decision.basis, /RS 0/);
+});
+
+test('ER-low postmenopausal pT2N1 path keeps only BINV-6 and the matching BINV-M chemotherapy page', () => {
+  const fields = completeBreastAdjuvantFields().map(field => {
+    const values = {
+      'breast-pn': 'pN1（1–3 顆陽性）',
+      'breast-grade': 'Grade 3',
+      'breast-lvi': '有',
+      'breast-er': '低度陽性（1–10%）',
+      'breast-pr': '陰性',
+      'breast-tumor-size-cm': '3',
+      'breast-ki67': '35',
+      'breast-genomic-assay': '未評估',
+      'breast-oncotype-rs': '',
+    };
+    return Object.hasOwn(values, field.sourceTemplateKey)
+      ? { ...field, value: values[field.sourceTemplateKey] }
+      : field;
+  });
+  const pages = [
+    { page: 17, sectionCode: 'BINV-4', options: [] },
+    { page: 19, sectionCode: 'BINV-6', options: [] },
+    { page: 20, sectionCode: 'BINV-7', options: [] },
+    { page: 21, sectionCode: 'BINV-8', options: [] },
+    { page: 71, sectionCode: 'BINV-M', options: [{ label: 'Endocrine therapy' }] },
+    { page: 72, sectionCode: 'BINV-M', options: [{ label: 'Dose-Dense AC followed by Paclitaxel every 2 weeks' }] },
+    { page: 73, sectionCode: 'BINV-M', options: [{ label: 'Pembrolizumab for TNBC' }] },
+    { page: 74, sectionCode: 'BINV-M', options: [{ label: 'Trastuzumab for HER2-positive disease' }] },
+  ];
+  const result = matcher.breastAdjuvantAssessment([fakeNccnDocument('Breast Cancer', pages)], fields);
+  assert.deepEqual(result.pages.map(item => item.page.sectionCode), ['BINV-6']);
+  assert.deepEqual(result.supportingPages.map(item => item.page.page), [72]);
 });
 
 test('HER2-positive upfront surgery maps stage I and higher-risk adjuvant regimens', () => {

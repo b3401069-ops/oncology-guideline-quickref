@@ -591,6 +591,27 @@
     }
     return output;
   }
+  function extractSourceContext(text, currentCode) {
+    const footnotesFor = [], requiredReferences = [], conditionalReferences = [];
+    const codes = line => [...line.matchAll(/\b([A-Z][A-Z0-9]{1,10}(?:-[A-Z0-9]{1,8})+)\b(?:\s+(\d+)\s+of\s+\d+)?/g)]
+      .filter(match => !NON_SECTION_CODES.test(match[1])).map(match => ({ code: match[1], ...(match[2] ? { part: Number(match[2]) } : {}) }));
+    const lines = text.split('\n').map(cleanLine).filter(Boolean);
+    for (let index = 0; index < lines.length; index++) {
+      const line = lines[index];
+      if (/FOOTNOTES FOR/i.test(line)) footnotesFor.push(...codes(line.replace(/^.*?FOOTNOTES FOR/i, '')).map(ref => ref.code));
+      // Explicit cross-page footnotes are required; generic See/next-step links
+      // are not evidence that all branches of the referenced appendix apply.
+      if (/\b(?:see\s+)?footnotes?\s*(?:on|in|at|\()/i.test(line) && !/FOOTNOTES FOR/i.test(line)) {
+        const linked = codes(line);
+        if (!linked.length && /\bfootnotes?\s*(?:on|in|at|\()\s*$/i.test(line)) linked.push(...codes(lines[index + 1] || ''));
+        requiredReferences.push(...linked.map(ref => ({ ...ref, kind: 'footnotes' })));
+      }
+      if (/eligibility criteria|for eligibility/i.test(line)) conditionalReferences.push(...codes(line).map(ref => ({ ...ref, kind: 'eligibility' })));
+    }
+    const unique = refs => [...new Map(refs.map(ref => [JSON.stringify(ref), ref])).values()];
+    return { version: 2, textExtracted: !!text.trim(), footnotesFor: [...new Set(footnotesFor)],
+      requiredReferences: unique(requiredReferences), conditionalReferences: unique(conditionalReferences) };
+  }
   async function loadPdfJs(moduleUrl, workerUrl) {
     if (!pdfJsPromise) pdfJsPromise = import(moduleUrl).then(pdfjs => {
       pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -641,13 +662,19 @@
         const supportingPage = /^(?:MS|ABBR)-/.test(section.code) || updatePage ||
           pageLines.some(line => /^(?:FOOTNOTES|REFERENCES|ABBREVIATIONS)$/.test(line)) ||
           citationLineCount >= Math.max(6, Math.ceil(pageLines.length * 0.2));
-        if (section.code && !navigationPage) sections.push({ ...section, page: pageNumber, title: pageTitle(text, section), types });
+        const sourceContext = extractSourceContext(text, section.code);
+        const width = page.view[2] - page.view[0], height = page.view[3] - page.view[1];
+        const sourceLayout = {version:1,rotation:page.rotate || 0,rows:layout.rows.map(row=>({top:1-(row.y-page.view[1])/height,
+          items:row.items.map(item=>({left:(item.x-page.view[0])/width,text:item.text}))}))};
+        if (section.code && !navigationPage) sections.push({ ...section, page: pageNumber, title: pageTitle(text, section), types, updatePage, supportingPage,
+          ...(!supportingPage || sourceContext.footnotesFor.length ? { sourceText: text, sourceContext, sourceLayout } : {}),
+        });
         if (section.code && !navigationPage && !supportingPage && types.some(type => ['systemic', 'treatment', 'radiation', 'surgery', 'followup'].includes(type))) {
           const treatmentOptions = extractTreatmentOptions(layout, types);
           if (treatmentOptions.length) treatmentPages.push({
             page: pageNumber, sectionCode: section.code, sectionPart: section.part, sectionTotal: section.total,
             title: pageTitle(text, section), types, role: detectPageRole(text, treatmentOptions, section),
-            keywords: pageKeywords(text), options: treatmentOptions,
+            keywords: pageKeywords(text), options: treatmentOptions, sourceText: text, sourceContext, sourceLayout,
             nextStepRefs: extractNextStepReferences(text, section.code),
           });
         }
@@ -656,6 +683,7 @@
       }
       const sectionsByCode = new Map();
       for (const section of sections) {
+        if (section.updatePage || (section.supportingPage && !section.sourceContext?.footnotesFor?.length)) continue;
         if (!sectionsByCode.has(section.code)) sectionsByCode.set(section.code, []);
         sectionsByCode.get(section.code).push(section);
       }
@@ -665,15 +693,22 @@
           const nextPart = (sectionsByCode.get(page.sectionCode) || []).find(section => section.part === page.sectionPart + 1);
           if (nextPart) refs.unshift({ code: page.sectionCode, label: page.sectionCode + ' ' + nextPart.part + '/' + nextPart.total, page: nextPart.page });
         }
-        page.nextSteps = refs.map(ref => {
-          const target = ref.page ? { page: ref.page } : (sectionsByCode.get(ref.code) || [])[0];
-          return target ? { code: ref.code, label: ref.label, page: target.page } : null;
+        page.relatedReferences = refs.map(ref => {
+          const targets = sectionsByCode.get(ref.code) || [];
+          const target = ref.page ? { page: ref.page } : targets.length === 1 ? targets[0] : null;
+          return { code: ref.code, label: ref.label, ...(target ? { page: target.page } : { unresolved: true }) };
         }).filter(Boolean).filter((item, index, all) => all.findIndex(other => other.code === item.code && other.page === item.page) === index).slice(0, 8);
-        for (const option of page.options) if (typeof option !== 'string') option.referencePages = (option.references || []).map(code => ({ code, page: (sectionsByCode.get(code) || [])[0]?.page })).filter(item => item.page);
+        page.nextSteps = page.relatedReferences.filter(ref => ref.page);
+        for (const option of page.options) if (typeof option !== 'string') option.referencePages = (option.references || []).flatMap(code => {
+          const targets = sectionsByCode.get(code) || [];
+          return targets.length === 1 ? [{ code, page: targets[0].page }] : [];
+        });
         delete page.nextStepRefs;
       }
       return {
-        schemaVersion: SCHEMA_VERSION, parsedAt: new Date().toISOString(), version, versionDate, pageCount: pdf.numPages,
+        schemaVersion: SCHEMA_VERSION, evidenceContextVersion: 2, branchContextVersion: 1,
+        sourceSha256: Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await blob.arrayBuffer()))).map(byte=>byte.toString(16).padStart(2,'0')).join(''),
+        parsedAt: new Date().toISOString(), version, versionDate, pageCount: pdf.numPages,
         lowTextPages, sections, treatmentPages, redirectGuidelines,
         status: redirectGuidelines.length ? 'redirect_notice' :
           lowTextPages > Math.max(3, Math.ceil(pdf.numPages * 0.1)) ? 'review_needed' : 'parsed',
@@ -690,11 +725,18 @@
     if (SCHEMA_VERSION === 9 && version === 8) return !/\b(?:Non-Small Cell Lung Cancer|Colon Cancer|Rectal Cancer)\b/i.test(identity);
     if (SCHEMA_VERSION === 9 && version === 7) return !needsAdjuvantReparse;
     return false;
-  }  window.NCCN_PARSER = {
+  }
+  // Index compatibility and complete AI source context are separate capabilities.
+  // Old indexes remain readable while the library offers a local-only refresh.
+  function needsEvidenceRefresh(doc) {
+    return !isCurrentStructure(doc) || Number(doc?.nccnStructure?.evidenceContextVersion || 0) < 2 || doc?.nccnStructure?.branchContextVersion !== 1;
+  }
+  window.NCCN_PARSER = {
     schemaVersion: SCHEMA_VERSION,
     KEYWORD_VOCABULARY,
     isNccnDocument,
     isCurrentStructure,
+    needsEvidenceRefresh,
     normalizeText,
     detectVersion,
     detectSectionCode,
@@ -707,6 +749,7 @@
     normalizeTreatmentOption,
     detectPageRole,
     extractNextStepReferences,
+    extractSourceContext,
     extractAndParse,
   };
 })();

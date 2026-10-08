@@ -9,6 +9,7 @@ const read = (file) => fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
 // 忘記更新版本就會讓使用者拿到「新的 index.html + 舊的模組」。
 const CACHE_BUSTED_FILES = [
   'index.html', 'sw.js', 'clinical-templates.js', 'clinical-matcher.js', 'clinical-scenarios.js',
+  'case-workflow.js', 'case-review.js', 'branch-evidence.js', 'reference-cases.js',
   'nccn-parser.js', 'nhi-parser.js', 'nhi-selector.js', 'nhi-versioning.js',
   'case-state.js', 'backup-format.js', 'guideline-quality.js', 'drug-vocabulary.js', 'tfda-parser.js', 'tfda-registry.js', 'quality-audit.js', 'quality-audit-page.js',
 ];

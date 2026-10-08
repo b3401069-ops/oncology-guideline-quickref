@@ -1,3 +1,13 @@
 
 # 本機驗證用的 NCCN PDF（版權素材，不得提交）
 _local-pdfs/
+
+# Gemini API 金鑰只留在本機／部署環境，不得提交
+.env.local
+
+# 部署憑證與本機附件不得進入公開 GitHub 倉庫
+.env
+.env.*
+!.env.example
+.codex-remote-attachments/
+node_modules/

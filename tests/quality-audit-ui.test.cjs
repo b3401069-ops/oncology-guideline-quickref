@@ -24,7 +24,8 @@ test('quality audit page keeps structural, clinical, review, and treatment check
   for (const label of ['全癌別資料與標準情境', 'TFDA／健保待核對佇列', '療程名稱與台灣資料對接', '重新稽核']) {
     assert.match(html, new RegExp(label));
   }
-  assert.match(html, /資料可用性與臨床情境驗收分開計算/);
+  assert.match(html, /工程檢索檢查，不代表醫師已完成臨床驗收/);
+  assert.match(html, /既有情境工程比對通過/);
   assert.match(html, /未連結不代表未核准或未給付/);
 });
 

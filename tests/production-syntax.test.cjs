@@ -7,6 +7,7 @@ test('production scripts and inline module parse as JavaScript', () => {
   if (!scripts.length) throw new Error('module script missing');
   new Function(scripts.at(-1)[1]);
   for (const file of [
+    'case-workflow.js', 'case-review.js', 'branch-evidence.js', 'reference-cases.js',
     'app-version.js', 'case-state.js', 'backup-format.js', 'clinical-templates.js', 'clinical-scenarios.js', 'nhi-versioning.js',
     'drug-vocabulary.js', 'nhi-parser.js', 'nhi-selector.js', 'tfda-parser.js', 'tfda-registry.js', 'quality-audit.js', 'quality-audit-page.js', 'sw.js',
   ]) new Function(fs.readFileSync(file, 'utf8'));
