@@ -8,7 +8,7 @@
 - 雲端每個請求都驗證 Google IAP 的 ES256 簽章、issuer、audience、時間及指定帳號；未簽章的 email 標頭不能授權。API 另外要求精確 Origin 與既有確認傳送標記。
 - 必須另在 Cloud Run 啟用 IAP、拒絕匿名存取並設定僅限使用者的存取政策；程式驗證不代表這些雲端設定已完成。無組織專案首次 OAuth/IAP 設定可能需要使用者在 Google 控制台操作。
 - 私有容器已部署至 `asia-east1`，IAP 已啟用，Cloud Run Invoker 僅授予 IAP 服務代理；最多 1 個執行個體、閒置 0 個。尚待首次 OAuth 設定及 App 實際登入驗收，不能視為手機版已可用。
-- 金鑰預計由 Secret Manager 注入，尚未上傳或接入。移動既有 key 不會改變其原計費專案；新專案的預算警示不一定涵蓋該 key 的 Gemini 費用。預算警示不是自動停用的硬上限。
+- 既有 Gemini 金鑰已存入新專案 Secret Manager，Cloud Run 綁定 `gemini-api-key` 第 1 版；執行帳號僅能讀取此指定 secret，尚未驗收雲端 Gemini 呼叫。移動既有 key 不會改變其原計費專案；新專案的每月 TWD 300 預算警示（50%、80%、100%）不一定涵蓋該 key 的 Gemini 費用。預算警示不是自動停用的硬上限。
 - 換成新的雲端網址不會自動帶入舊網址的本機 PDF／IndexedDB；使用前須從舊 App 匯出完整備份，再於新網址匯入，勿先清除舊資料。
 - 本次 264 項工程測試通過（Gemini 測試使用模擬回覆，IAP 使用測試金鑰做真實簽章驗證；沙箱 localhost EACCES 後原封不動重跑通過）；尚未完成 App 真實 Google 登入、雲端 Gemini 或手機端驗收，也不代表臨床審核通過。
 
