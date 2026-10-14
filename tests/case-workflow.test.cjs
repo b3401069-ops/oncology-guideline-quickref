@@ -2,6 +2,65 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const workflow = require('../case-workflow.js');
 const fields = values => Object.entries(values).map(([sourceTemplateKey,value]) => ({id:sourceTemplateKey, sourceTemplateKey,label:sourceTemplateKey,value}));
+
+test('locally advanced untreated breast case is not prompted as metastatic disease', () => {
+  const f = fields({'base-treatment-setting':'尚未治療','base-disease-setting':'局部晚期／不可切除',
+    'breast-subtype':'HER2+','breast-her2':'IHC 3+','breast-er':'陰性','base-stage':'',
+    'breast-advanced-alterations':'','breast-pdl1-cps':'','breast-pn':'','breast-pt':'','breast-oncotype-rs':'','breast-tumor-size-cm':''});
+  const args = {cancerId:'breast_cancer',fields:f,context:{phase:'locally-advanced'},diagnosis:{suggestedFields:f}};
+  const q = workflow.questions(args);
+  assert.deepEqual(q.map(x=>x.field.id),['base-stage']);
+  assert.ok(workflow.questions({...args,context:{phase:'advanced'}}).some(x=>x.field.id==='breast-advanced-alterations'));
+});
+
+test('generic diagnostic suggestions cannot reintroduce postoperative fields in other cancers', () => {
+  for (const cancerId of ['breast_cancer','nsclc','colon_cancer','rectal_cancer']) {
+    const prefix = cancerId.replace('_cancer','');
+    const f = fields({[prefix+'-pt']:'',[prefix+'-pn']:'',[prefix+'-margin']:''});
+    for (const phase of ['initial','preoperative','locally-advanced','advanced','followup']) {
+      assert.deepEqual(workflow.questions({cancerId,fields:f,context:{phase},diagnosis:{suggestedFields:f}}),[]);
+    }
+    assert.equal(workflow.questions({cancerId,fields:f,context:{phase:'postoperative'},diagnosis:{suggestedFields:f}}).length,2);
+  }
+});
+
+test('source notices distinguish absent PDF, unparsed PDF and unmatched index from missing case input', () => {
+  const base={filledCount:9,hasDocs:false,hasIndex:false,hasPages:false};
+  const absent=workflow.sourceNotice(base);
+  assert.match(absent.headline,/已收到 9 項條件/);
+  assert.match(absent.message,/不是已填資料遺失/);
+  assert.match(workflow.sourceNotice({...base,hasDocs:true}).headline,/尚待解析/);
+  assert.match(workflow.sourceNotice({...base,hasDocs:true,hasIndex:true}).message,/不代表沒有適用療程/);
+  assert.equal(workflow.sourceNotice({...base,hasDocs:true,hasIndex:true,hasPages:true}),null);
+});
+
+test('deferring questions advances the form without changing unknowns or suppressing result-page gaps', () => {
+  for (const cancerId of ['breast_cancer','nsclc','colon_cancer','rectal_cancer','rare_cancer']) {
+    const f = fields({'base-treatment-setting':'','base-disease-setting':'','base-pathology':'待確認'});
+    const args = {cancerId,fields:f,context:{phase:'unknown'},diagnosis:{suggestedFields:[f[2]]}};
+    const before = JSON.stringify(f);
+    assert.deepEqual(workflow.questions(args).map(x=>x.field.id),f.slice(0,2).map(x=>x.id));
+    assert.deepEqual(workflow.questions({...args,deferredIds:f.slice(0,2).map(x=>x.id)}).map(x=>x.field.id),['base-pathology']);
+    assert.equal(JSON.stringify(f),before);
+    assert.equal(workflow.questions(args).length,2);
+  }
+});
+
+test('deferral never hides conflicting disease and treatment settings', () => {
+  const f = fields({'base-treatment-setting':'術後／鞏固','base-disease-setting':'轉移／全身性'});
+  const q = workflow.questions({fields:f,context:{conflicts:['矛盾']},deferredIds:f.map(x=>x.id)});
+  assert.equal(q.length,2);
+  assert.ok(q.every(x=>x.reason.includes('矛盾')));
+});
+
+test('explicit AI decision changes and uncertainty retain both conclusions for review', () => {
+  for (const decision of ['目前不支持常規輔助性化療','證據不足，需核對','優先補充關鍵資料','傾向／應考慮輔助性化療']) {
+    assert.match(workflow.summaryDisagreement({level:'recommended'},{decision}),/系統未替您選定結論/);
+  }
+  assert.match(workflow.summaryDisagreement({level:'review'},{decision:'建議輔助性化療'}),/不同/);
+  assert.equal(workflow.summaryDisagreement({level:'recommended'},{decision:'建議輔助性化療'}),'');
+  assert.equal(workflow.summaryDisagreement(undefined,{decision:'建議輔助性化療'}),'');
+});
 test('asks at most two actionable missing fields, prioritizing current phase and never asks for known values', () => {
   const f = fields({'base-treatment-setting':'','base-disease-setting':'初診局限','breast-subtype':'','breast-er':'陽性'});
   const result = workflow.questions({cancerId:'breast_cancer',fields:f,context:{phase:'unknown'},assessment:{missing:[]}});

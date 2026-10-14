@@ -11,7 +11,14 @@
     colon_cancer: ['crc-mmr-msi','colon-surgery-path','colon-pt','colon-pn','colon-margin'],
     rectal_cancer: ['rectal-surgery-path','crc-mmr-msi','rectal-pt','rectal-pn','rectal-margin','rectal-crm'],
   };
-  function questions({cancerId, fields, context, assessment = {}, diagnosis = {}}) {
+  function fieldRelevant(field, context) {
+    const key = field.sourceTemplateKey || field.key || '';
+    if (!['unknown','postoperative'].includes(context.phase) && /^(?:breast|nsclc|colon|rectal)-(?:pt|pn|path-stage|margin|crm|rcb|residual)/.test(key)) return false;
+    if (['initial','preoperative','locally-advanced'].includes(context.phase) && /^breast-(?:genomic-assay|oncotype-rs|chemotherapy-candidate|tumor-size-cm|initial-)/.test(key)) return false;
+    if (context.phase !== 'advanced' && ['breast-advanced-alterations','breast-pdl1-cps'].includes(key)) return false;
+    return true;
+  }
+  function questions({cancerId, fields, context, assessment = {}, diagnosis = {}, deferredIds = []}) {
     if (context.conflicts?.length) return ['base-disease-setting','base-treatment-setting'].map(key => fields.find(f => f.sourceTemplateKey === key))
       .filter(Boolean).map(field => ({field, reason:'目前病程與治療目的有矛盾；先確認此項，避免套錯分支。'}));
     const cancerKeys = context.phase==='postoperative' || context.phase==='unknown' ? priorities[cancerId] || [] :
@@ -22,13 +29,77 @@
     ranked.push(...fields.filter(f=>missingLabels.has(f.label)).map(f=>f.sourceTemplateKey));
     if(cancerId==='breast_cancer' && [...missingLabels].some(label=>/基因表現/.test(label)))ranked.push('breast-genomic-assay','breast-oncotype-rs');
     const needsAnswer=field=>unknown(value([field],field.sourceTemplateKey || field.key)) || (field.sourceTemplateKey==='breast-oncotype-rs' && !/^(?:100|[1-9]?\d)$/.test(value([field],field.sourceTemplateKey)));
-    const candidates = fields.filter(field => needsAnswer(field) &&
+    const candidates = fields.filter(field => !deferredIds.includes(field.id) && needsAnswer(field) &&
+      (fieldRelevant(field, context) || (assessment.active && missingLabels.has(field.label))) &&
       (ranked.includes(field.sourceTemplateKey) || missingLabels.has(field.label) || (!assessment.active && diagnosis.suggestedFields?.some(f=>f.id===field.id))) &&
       (field.sourceTemplateKey !== 'breast-oncotype-rs' || value(fields,'breast-genomic-assay') === 'Oncotype DX'));
     return candidates.sort((a,b) => {
       const rank = f => ranked.indexOf(f.sourceTemplateKey) < 0 ? 100 : ranked.indexOf(f.sourceTemplateKey);
       return rank(a)-rank(b);
-    }).slice(0,2).map(field=>({field,reason: ['base-treatment-setting','base-disease-setting'].includes(field.sourceTemplateKey) ? '決定本次使用術前、術後、晚期或追蹤路徑。' : '此條件會改變本次來源分支或療程適用性；其餘欄位可稍後補。'}));
+    }).slice(0,2).map(field=>({field: field.sourceTemplateKey === 'base-stage' && ['initial','preoperative','locally-advanced'].includes(context.phase)
+      ? {...field,label:'臨床分期（cT／cN／M）',help:'尚未手術時填臨床分期；不知道可留白，不必填術後 pT／pN。'} : field,
+      reason: ['base-treatment-setting','base-disease-setting'].includes(field.sourceTemplateKey) ? '決定本次使用術前、術後、晚期或追蹤路徑。' : '此條件會改變本次來源分支或療程適用性；其餘欄位可稍後補。'}));
+  }
+  function sourceNotice({hasDocs, hasIndex, hasPages, filledCount}) {
+    const received = filledCount ? `已收到 ${filledCount} 項條件；` : '';
+    if (!hasDocs) return {
+      headline:received + '此網址尚無本癌別指引',
+      message:'目前無法比對療程，是缺少本機 PDF 來源，不是已填資料遺失。',
+      next:'請使用原本匯入 PDF 的網址與瀏覽器，或在這裡匯入指引。已填條件會保留，不必重新填寫。',
+      action:'匯入／檢查本機指引',
+    };
+    if (!hasIndex) return {
+      headline:received + '指引 PDF 尚待解析',
+      message:'已找到文件，但還沒有可供查詢的頁面索引。',
+      next:'請到文件庫解析或升級這份 PDF，再回來查詢；不用重填個案。',
+      action:'解析／升級 PDF',
+    };
+    if (!hasPages) return {
+      headline:received + '尚未找到對應來源頁',
+      message:'目前索引未定位到這個情境；不代表你沒有填資料，也不代表沒有適用療程。',
+      next:'請核對指引版本、解析狀態及本次病程；也可直接開啟原始 PDF 查閱。',
+      action:'查看本機指引',
+    };
+    return null;
+  }
+  // A bounded reading route, NOT a treatment recommendation. Keep both inflammatory
+  // and non-inflammatory pathways until that distinction is documented. Coordinates
+  // and headings were inspected in the user's local v5.2026; never reuse on a new version.
+  function sourceRoute({cancerId, fields, context, documents}) {
+    if (!documents.length || cancerId !== 'breast_cancer' || context.phase !== 'locally-advanced' || context.conflicts?.length ||
+      value(fields,'base-treatment-setting') !== '尚未治療' || value(fields,'breast-surgery-path') !== '尚未完成手術' ||
+      value(fields,'breast-pathology-scope') !== '浸潤性乳癌' || value(fields,'breast-subtype') !== 'HER2+' ||
+      !/^(?:IHC 3\+|IHC 2\+／ISH 陽性)$/.test(value(fields,'breast-her2')) ||
+      /M1[a-c]?(?!\d)|stage\s*IV|第四期|轉移/i.test(value(fields,'base-stage'))) return null;
+    const specs = [
+      ['BINV-12',25,/WORKUP PRIOR TO PREOPERATIVE SYSTEMIC THERAPY/i],
+      ['BINV-M',74,/HR-Positive or -Negative and HER2-Positive/i],
+      ['BINV-L',69,/PRINCIPLES OF PREOPERATIVE SYSTEMIC THERAPY/i],
+      ['BINV-L',70,/PRINCIPLES OF PREOPERATIVE SYSTEMIC THERAPY/i],
+      ['BINV-M',71,/Considerations for Those Receiving Preoperative\/Adjuvant Systemic Therapy/i],
+      ['BINV-15',28,/INOPERABLE OR LOCALLY ADVANCED DISEASE \(NON-INFLAMMATORY\)/i],
+      ['IBC-1',113,/Inflammatory Breast Cancer/i],
+      ['IBC-2',114,/Inflammatory Breast Cancer/i],
+    ];
+    const docs = documents.filter(doc => doc.nccnStructure?.version === '5.2026');
+    const pages = [], issues = [];
+    if (docs.length !== 1) issues.push('術前來源導引需要唯一的 Breast Cancer v5.2026 文件；請核對目前版本。');
+    else for (const [code, pageNumber, anchor] of specs) {
+      const doc = docs[0];
+      const found = (doc.nccnStructure.sections || []).filter(p => (p.code || p.sectionCode) === code && p.page === pageNumber && !p.updatePage && !p.navigationPage && anchor.test(p.sourceText || ''));
+      if (found.length !== 1) issues.push(`術前來源導引缺少可核對的 ${code} p.${pageNumber}；請核對原 PDF 或重新解析。`);
+      else pages.push({doc, page:{...found[0],sectionCode:code}, reasons:['局部晚期、尚未治療、HER2 陽性的術前來源導引；不是已確認適用的療程。']});
+    }
+    return {headline:'先看術前評估與 HER2+ 療程來源', pages:issues.length ? [] : pages, issues,
+      limitation:'仍須核對 cT／cN／M 與是否為發炎性乳癌；保留兩種路徑供核對，不視為已選定療程。'};
+  }
+  // Compare only explicit decision labels, never infer clinical agreement from prose.
+  function summaryDisagreement(rule, summary) {
+    const levels = {'建議輔助性化療':'recommended','傾向／應考慮輔助性化療':'consider','目前不支持常規輔助性化療':'omit',
+      '治療方向待核對':'review','優先補充關鍵資料':'review','追蹤與照護評估':'review','證據不足，需核對':'review'};
+    const aiLevel = levels[summary?.decision];
+    if (!rule?.level || !aiLevel || rule.level === aiLevel) return '';
+    return 'AI 與規則式初步整理的方向不同，請核對原頁與適用條件；系統未替您選定結論。';
   }
   function focusSelection(assessment, matches, focus, {cancerId,fields=[]}={}) {
     if (!focusOptions.some(x=>x.id===focus)) focus='overview';
@@ -95,7 +166,7 @@
     const checks=fromPayload(input);
     return !rules.some(r=>r.aliases.test(statement) && checks.some(c=>c.id===r.id && c.status!=='met'));
   }
-  const api={focusOptions,questions,focusSelection,eligibility,fromPayload,statementAllowed};
+  const api={focusOptions,questions,fieldRelevant,sourceNotice,sourceRoute,summaryDisagreement,focusSelection,eligibility,fromPayload,statementAllowed};
   if(typeof module!=='undefined'&&module.exports)module.exports=api;
   if(typeof window!=='undefined')window.CASE_WORKFLOW=api;
 })();

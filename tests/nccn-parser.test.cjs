@@ -13,6 +13,13 @@ test('prefers the NCCN footer code over flowchart labels', () => {
   assert.deepEqual(parser.detectSectionCode('LOW-RISK\nPROS-12', rows), { code: 'PROS-12', part: null, total: null });
 });
 
+test('only an index missing the known breast principles page context needs this targeted refresh', () => {
+  const base={schemaVersion:parser.schemaVersion,version:'5.2026',evidenceContextVersion:2,branchContextVersion:1,sections:[{code:'BINV-L',page:70,supportingPage:true}]};
+  assert.equal(parser.needsEvidenceRefresh({nccnStructure:base}),true);
+  assert.equal(parser.needsEvidenceRefresh({nccnStructure:{...base,sections:[{...base.sections[0],sourceText:'PRINCIPLES OF PREOPERATIVE SYSTEMIC THERAPY'}]}}),false);
+  assert.equal(parser.needsEvidenceRefresh({nccnStructure:{...base,sections:[{code:'OTHER',page:70}]}}),false);
+});
+
 test('extracts monitoring and ADT options that do not look like classic drug suffixes', () => {
   const layout = { rows: [
     row(500, '• Monitoring'),

@@ -61,8 +61,8 @@ test('case-first workbench does not require a PDF and keeps unverified output ex
   for (const label of [
     '直接開始個案',
     '不需要先匯入 NCCN PDF',
-    '個案條件工作台',
-    '查看快速參考與待核對事項',
+    '本次查詢',
+    '看目前重點',
     '證據狀態',
     '尚無 NCCN 原始來源',
     '不會自行產生 NCCN 療程或頁碼',
@@ -91,7 +91,7 @@ test('home search tolerates legacy guideline links and exposes working quick sta
 
 test('quick reference leads with a compact case summary and collapses raw candidate lists', () => {
   for (const label of [
-    'Gemini 個案重點',
+    '整理本次答案',
     '規則式初步整理',
     '現在先做',
     '查看來源與本次輸入',
@@ -115,7 +115,7 @@ test('quick reference leads with a compact case summary and collapses raw candid
 
 test('Gemini summary is opt-in and only sends the prepared de-identified payload', () => {
   for (const marker of [
-    '用 Gemini 整理本次個案',
+    '整理本次答案',
     "fetch('/api/clinical-summary'",
     'JSON.stringify(aiSummaryPayload)',
     '不傳送 PDF 檔案',
@@ -146,7 +146,8 @@ test('candidate capture has no early top-k truncation and both UI request paths 
 
 test('search results precede the quality dashboard and case summary is not duplicated', () => {
   assert.ok(html.indexOf('id="search-results"') < html.indexOf('class="nccn-quality"'));
-  assert.match(html, /nccn-quality'\)\?\.classList.toggle\('hidden'/);
+  assert.match(html, /if \(management\) return/);
+  assert.match(html, /renderHomePage\(app, true\)/);
   assert.match(html, /const quickStartCards = \['breast_cancer', 'nsclc', 'colon_cancer', 'rectal_cancer'\]/);
   assert.equal((html.match(/id="case-summary-title"/g) || []).length, 1);
   assert.doesNotMatch(html, /<h2[^>]*>👉 下一步/);

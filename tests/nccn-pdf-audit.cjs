@@ -64,6 +64,44 @@ async function main() {
   // and the shared UI/AI/NHI selection, not only generic keyword matching.
   const keyed = data => Object.entries(data).map(([sourceTemplateKey, value]) => ({ sourceTemplateKey, label: sourceTemplateKey, value }));
   const breastDoc = { title: 'Breast Cancer', storageKey: 'audit-breast', nccnStructure: results.get('Breast') };
+  // Synthetic regression data; the PDF is local source material, not a patient record.
+  const untreatedFields = keyed({
+    'base-disease-setting':'局部晚期／不可切除','base-treatment-setting':'尚未治療','base-pathology':'合成測試資料',
+    'breast-er':'陰性','breast-grade':'Grade 2','breast-her2':'IHC 3+','breast-pathology-scope':'浸潤性乳癌',
+    'breast-subtype':'HER2+','breast-surgery-path':'尚未完成手術',
+  });
+  const untreatedContext = matcher.resolveCaseContext(untreatedFields);
+  const routeArgs = {cancerId:'breast_cancer',fields:untreatedFields,context:untreatedContext,documents:[breastDoc]};
+  const route = workflow.sourceRoute(routeArgs);
+  assert.deepEqual(route.issues,[]);
+  assert.deepEqual(route.pages.map(p=>p.page.page),[25,74,69,70,71,28,113,114]);
+  const untreatedAssessment = matcher.adjuvantAssessment('breast_cancer',[breastDoc],untreatedFields);
+  assert.equal(untreatedAssessment.active,false,'Reading route must not activate a treatment recommendation');
+  const untreatedMatches = matcher.matchTreatmentPages([breastDoc],untreatedFields,50);
+  const untreatedSelection = window.CASE_REVIEW.selectEvidence('breast_cancer',untreatedAssessment,untreatedMatches,untreatedContext,route);
+  assert.equal(untreatedSelection.treatmentEvidence.length,0,'Mixed pre/postoperative table must not become an unfiltered drug picker');
+  assert.ok(!untreatedSelection.excludedPages.some(p=>route.pages.some(r=>r.page.page===p.page.page)));
+  const untreatedPayload = window.CASE_REVIEW.buildPayload({cancer:{id:'breast_cancer'},fields:untreatedFields,assessment:untreatedAssessment,context:untreatedContext,selection:untreatedSelection});
+  assert.deepEqual(window.CASE_REVIEW.inspectEvidencePacket(untreatedPayload),[]);
+  assert.equal(untreatedPayload.evidence.length,8);
+  assert.equal(untreatedPayload.caseFields.length,9);
+  assert.ok(untreatedPayload.evidence.every(p=>p.truncated===false && p.pageText === route.pages.find(r=>r.page.page===p.page).page.sourceText.trim()));
+  assert.match(untreatedPayload.deterministicAssessment.reviewItems.join(' '),/發炎性/);
+  for (const page of [25,74,69,70,71,28,113,114]) {
+    const missingDoc={...breastDoc,nccnStructure:{...breastDoc.nccnStructure,sections:breastDoc.nccnStructure.sections.filter(p=>p.page!==page)}};
+    const incomplete=workflow.sourceRoute({...routeArgs,documents:[missingDoc]});
+    assert.ok(incomplete.issues.length); assert.equal(incomplete.pages.length,0);
+    const selected=window.CASE_REVIEW.selectEvidence('breast_cancer',untreatedAssessment,untreatedMatches,untreatedContext,incomplete);
+    assert.equal(selected.blocked,true); assert.equal(selected.evidencePages.length,0);
+  }
+  const futureDoc={...breastDoc,nccnStructure:{...breastDoc.nccnStructure,version:'6.2026'}};
+  assert.ok(workflow.sourceRoute({...routeArgs,documents:[futureDoc]}).issues.length);
+  assert.ok(workflow.sourceRoute({...routeArgs,documents:[breastDoc,{...breastDoc,id:'duplicate'}]}).issues.length);
+  for (const [key,value] of [['breast-her2','IHC 2+／ISH 待確認'],['breast-subtype','HR+/HER2-'],['breast-surgery-path','先手術（未接受術前全身治療）'],['base-treatment-setting','第一線']]) {
+    assert.equal(workflow.sourceRoute({...routeArgs,fields:untreatedFields.map(f=>f.sourceTemplateKey===key?{...f,value}:f)}),null);
+  }
+  assert.equal(workflow.sourceRoute({...routeArgs,context:{phase:'advanced'}}),null);
+  console.log(`PASS real-source untreated HER2+ reading route: ${untreatedMatches.length} keyword candidates -> 8 full pages, 2 priority links, no unfiltered regimen picker`);
   const breastFields = keyed({
     'base-disease-setting': '初診局限', 'base-treatment-setting': '術後／鞏固',
     'breast-pathology-scope': '浸潤性乳癌', 'breast-surgery-path': '先手術（未接受術前全身治療）',

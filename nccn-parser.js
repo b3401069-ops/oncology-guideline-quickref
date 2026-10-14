@@ -667,7 +667,10 @@
         const sourceLayout = {version:1,rotation:page.rotate || 0,rows:layout.rows.map(row=>({top:1-(row.y-page.view[1])/height,
           items:row.items.map(item=>({left:(item.x-page.view[0])/width,text:item.text}))}))};
         if (section.code && !navigationPage) sections.push({ ...section, page: pageNumber, title: pageTitle(text, section), types, updatePage, supportingPage,
-          ...(!supportingPage || sourceContext.footnotesFor.length ? { sourceText: text, sourceContext, sourceLayout } : {}),
+          // Citation density can also flag a clinical principles page (e.g.
+          // BINV-L 2/2). Preserve its original context for explicitly verified
+          // reading routes, without promoting it into treatment candidates.
+          ...(!supportingPage || sourceContext.footnotesFor.length || (!updatePage && !/^(?:MS|ABBR)-/.test(section.code)) ? { sourceText: text, sourceContext, sourceLayout } : {}),
         });
         if (section.code && !navigationPage && !supportingPage && types.some(type => ['systemic', 'treatment', 'radiation', 'surgery', 'followup'].includes(type))) {
           const treatmentOptions = extractTreatmentOptions(layout, types);
@@ -729,7 +732,8 @@
   // Index compatibility and complete AI source context are separate capabilities.
   // Old indexes remain readable while the library offers a local-only refresh.
   function needsEvidenceRefresh(doc) {
-    return !isCurrentStructure(doc) || Number(doc?.nccnStructure?.evidenceContextVersion || 0) < 2 || doc?.nccnStructure?.branchContextVersion !== 1;
+    const missingBreastPrinciples = doc?.nccnStructure?.version === '5.2026' && doc.nccnStructure.sections?.some(p => p.code === 'BINV-L' && p.page === 70 && !p.sourceText);
+    return !isCurrentStructure(doc) || Number(doc?.nccnStructure?.evidenceContextVersion || 0) < 2 || doc?.nccnStructure?.branchContextVersion !== 1 || !!missingBreastPrinciples;
   }
   window.NCCN_PARSER = {
     schemaVersion: SCHEMA_VERSION,

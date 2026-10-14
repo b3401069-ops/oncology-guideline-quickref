@@ -276,9 +276,9 @@
   <script src="./backup-format.js"></script>
   <script src="./clinical-templates.js"></script>
   <script src="./clinical-matcher.js"></script>
-  <script src="./case-workflow.js"></script>
+  <script src="./case-workflow.js?v=2026.10.14.2"></script>
   <script src="./branch-evidence.js"></script>
-  <script src="./case-review.js"></script>
+  <script src="./case-review.js?v=2026.10.14.2"></script>
   <script src="./reference-cases.js"></script>
   <script src="./clinical-scenarios.js"></script>
   <script src="./drug-vocabulary.js"></script>
@@ -289,7 +289,7 @@
   <script src="./tfda-registry.js"></script>
   <script src="./quality-audit.js"></script>
   <script src="./quality-audit-page.js"></script>
-  <script src="./nccn-parser.js"></script>
+  <script src="./nccn-parser.js?v=2026.10.14.2"></script>
   <script type="module">
     // ========== Database ==========
     const DB_NAME = 'OncologyGuidelineDB';
@@ -1111,9 +1111,9 @@
         </fieldset>`;
       }
       if (field.type === 'text' || field.type === 'number') {
-        return `<div class="form-group"><label class="label">${esc(field.label)}</label><input class="input" data-nhi-query-field="${esc(field.id)}" type="${field.type === 'number' ? 'number' : 'text'}" value="${esc(field.value ?? '')}" placeholder="（未輸入）"></div>`;
+        return `<div class="form-group"><label class="label">${esc(field.label)}</label><input class="input" aria-label="${esc(field.label)}" data-nhi-query-field="${esc(field.id)}" type="${field.type === 'number' ? 'number' : 'text'}" value="${esc(field.value ?? '')}" placeholder="（未輸入）"></div>`;
       }
-      return `<div class="form-group"><label class="label">${esc(field.label)}</label><select class="input" data-nhi-query-field="${esc(field.id)}">
+      return `<div class="form-group"><label class="label">${esc(field.label)}</label><select class="input" aria-label="${esc(field.label)}" data-nhi-query-field="${esc(field.id)}">
         <option value="">（未輸入）</option>
         ${options.map(option => `<option value="${esc(option)}" ${field.value === option ? 'selected' : ''}>${esc(precisionOptionLabel(field, option))}</option>`).join('')}
       </select>${field.help ? `<p class="text-xs text-gray-400 mt-1">${esc(field.help)}</p>` : ''}</div>`;
@@ -1129,6 +1129,18 @@
     const getCasePrecisionFields = async (cancerId) => {
       const definitions = (await dbGetAll('precisionFields')).filter(field => field.cancerId === cancerId);
       return window.CASE_STATE.apply(definitions, cancerId);
+    };
+    const resumeCaseQuery = (cancerId, fields) => {
+      const query = readNhiQueryState(cancerId);
+      const merged = applyNhiQueryState(fields, query);
+      // Returning from results must retain every explicit edit, including blanks.
+      for (const field of merged) {
+        if (query.fresh || Object.prototype.hasOwnProperty.call(query.values, field.id)) {
+          window.CASE_STATE.setValue(cancerId, field.id, field.value);
+        }
+      }
+      clearNhiQueryState(cancerId);
+      return merged;
     };
     const migrateLegacyCaseValues = async () => {
       const fields = await dbGetAll('precisionFields');
@@ -1858,6 +1870,8 @@
 
     async function handleRoute(options = {}) {
       const preserveScroll = options?.preserveScroll === true;
+      const previousPath = currentRoute;
+      const expandedIds = preserveScroll ? [...document.querySelectorAll('details[id][open]')].map(el => el.id) : [];
       const previousScrollY = Number.isFinite(options?.restoreScrollY)
         ? options.restoreScrollY
         : (document.scrollingElement?.scrollTop ?? window.scrollY);
@@ -1866,6 +1880,9 @@
       const anchorTop = Number.isFinite(options?.anchorTop) ? options.anchorTop : measuredAnchorTop;
       parseRoute(getHashPath());
       await render();
+      if (preserveScroll && currentRoute === previousPath) {
+        expandedIds.forEach(id => { const section = document.getElementById(id); if (section) section.open = true; });
+      }
       const restoreScroll = () => {
         if (!preserveScroll) { window.scrollTo(0, 0); return; }
         const anchor = anchorId ? document.getElementById(anchorId) : null;
@@ -1893,6 +1910,8 @@
         await renderPdfViewer(app);
       } else if (currentRoute === '/') {
         await renderHomePage(app);
+      } else if (currentRoute === '/data') {
+        await renderHomePage(app, true);
       } else if (currentRoute.startsWith('/cancer/') && !routeParams.sub) {
         await renderCancerDetail(app);
       } else if (routeParams.sub === 'quickref') {
@@ -1926,7 +1945,7 @@
 
     // ========== Pages ==========
 
-    async function renderHomePage(app) {
+    async function renderHomePage(app, management = false) {
       const cards = await dbGetAll('cancerCards');
       const docs = await dbGetAll('documents');
       const allNhiNotes = await dbGetAll('nhiNotes');
@@ -1966,27 +1985,37 @@
       app.innerHTML = `
         <div class="container">
           <div class="mb-6">
-            <h1 class="text-2xl font-bold">腫瘤指引快速查</h1>
-            <p class="text-sm text-gray-500 mt-1">個人本機指引查閱與防漏工具</p>
+            <h1 class="text-2xl font-bold">${management ? '資料管理' : '腫瘤指引快速查'}</h1>
+            <p class="text-sm text-gray-500 mt-1">${management ? '文件、來源與品質檢查' : '選癌別 → 填關鍵條件 → 看本次重點'}</p>
           </div>
+          ${!management ? `
+          <div class="search-wrap">
+            <span class="search-icon">🔍</span>
+            <input type="search" id="search-input" class="input" aria-label="搜尋癌別" style="padding-left:44px;padding-right:40px" placeholder="查哪個癌別？例如：乳癌" />
+            <button id="search-clear" class="search-clear hidden" aria-label="清除搜尋">✕</button>
+          </div>
+          <div id="search-results" class="hidden" aria-live="polite"></div>
+          <div id="home-content">
           <section class="case-start-card" aria-labelledby="case-start-title">
             <div class="flex items-start gap-3">
               <span style="font-size:28px;line-height:1">🩺</span>
               <div>
                 <h2 id="case-start-title" class="font-semibold text-gray-800">直接開始個案</h2>
-                <p class="text-sm text-gray-600 mt-1">先選癌別、填入分期與生物標記，再查看缺漏與可核對的指引路徑。不需要先匯入 NCCN PDF；沒有原始來源時只會標示待核對。</p>
+                <p class="text-sm text-gray-600 mt-1">先選癌別。不需要先匯入 NCCN PDF；無來源時只整理條件與缺漏。</p>
               </div>
             </div>
             ${quickStartCards.length ? `<div class="case-quick-starts" aria-label="常用癌別捷徑">${quickStartCards.map(card => `<button type="button" class="btn btn-secondary" onclick="navigate('/cancer/${jsStr(card.id)}')">${esc(card.zhName)}</button>`).join('')}</div>` : ''}
-            <button type="button" class="btn btn-primary" id="case-start-button">搜尋其他癌別</button>
+            <button type="button" class="btn btn-ghost btn-sm" id="case-start-button">搜尋其他癌別</button>
           </section>
-          <div class="search-wrap">
-            <span class="search-icon">🔍</span>
-            <input type="text" id="search-input" class="input" style="padding-left:44px;padding-right:40px"
-              placeholder="搜尋癌別、英文名或同義詞..." />
-            <button id="search-clear" class="search-clear hidden">✕</button>
+          ${recent.length ? `<div class="category-title">最近使用</div>${recent.map(c => renderCancerCardItem(c, coveredCardIds, expectedNccnCardIds)).join('')}` : ''}
+          <details class="result-disclosure mt-3"><summary>瀏覽所有癌別</summary><div class="result-disclosure-body" id="category-list"></div></details>
           </div>
-          <div id="search-results" class="hidden" aria-live="polite"></div>
+          ` : `
+          <div class="quick-links mb-4">
+            <button class="btn btn-secondary" onclick="navigate('/pdf-library')">文件庫</button>
+            <button class="btn btn-secondary" onclick="navigate('/sources')">來源中心</button>
+            <button class="btn btn-secondary" onclick="navigate('/settings')">備份／還原</button>
+          </div>
           <section class="nccn-quality" aria-labelledby="nccn-quality-title">
             <div class="flex-between mb-3" style="gap:8px">
               <div><h2 id="nccn-quality-title" class="font-semibold text-gray-800">NCCN 指引品質總覽</h2><p class="text-xs text-gray-500 mt-1">PDF、指引系列與癌別是不同計數</p></div>
@@ -2031,28 +2060,12 @@
           ${staleNhiRuleCount || undatedNhiRuleCount ? `<div class="alert alert-warning" style="cursor:pointer" onclick="navigate('/pdf-library')"><strong>健保規定時效待確認</strong>${staleNhiRuleCount ? ` · ${staleNhiRuleCount} 筆超過一年` : ''}${undatedNhiRuleCount ? ` · ${undatedNhiRuleCount} 筆未記錄日期` : ''}<p class="text-xs mt-1">重新解析目前健保 PDF 可補上公告日期並封存舊版。</p></div>` : ''}
           ${staleCount > 0 ? `<div class="alert alert-warning" style="cursor:pointer" onclick="navigate('/pdf-library')">⏰ 有 <strong>${staleCount}</strong> 份指引超過 6 個月未確認版本，點此前往文件庫</div>` : ''}
           ${needBackup ? `<div class="alert alert-info" style="cursor:pointer" onclick="navigate('/settings')">💾 ${backupDays === null ? '尚未匯出過備份' : '已 ' + backupDays + ' 天未備份'}，點此前往設定頁備份</div>` : ''}
-          <div id="home-content">
-            ${recent.length ? `<div class="category-title">🕐 最近使用</div>${recent.map(c => renderCancerCardItem(c, coveredCardIds, expectedNccnCardIds)).join('')}<div style="height:12px"></div>` : ''}
-            <div class="quick-links">
-              <div class="quick-link" onclick="navigate('/pdf-library')">
-                <span class="quick-link-icon">📄</span>
-                <span class="quick-link-label">PDF 文件庫</span>
-              </div>
-              <div class="quick-link" onclick="navigate('/sources')">
-                <span class="quick-link-icon">🌐</span>
-                <span class="quick-link-label">來源中心</span>
-              </div>
-              <div class="quick-link" onclick="navigate('/settings')">
-                <span class="quick-link-icon">⚙️</span>
-                <span class="quick-link-label">設定</span>
-              </div>
-            </div>
-            <div id="category-list"></div>
-          </div>
-          ${renderNav('search')}
+          `}
+          ${renderNav(management ? 'pdf' : 'search')}
         </div>
       `;
 
+      if (management) return;
       // Render categories
       const grouped = {};
       cards.forEach(c => { if (!grouped[c.category]) grouped[c.category] = []; grouped[c.category].push(c); });
@@ -2076,7 +2089,6 @@
 
       const updateSearchResults = () => {
         const q = input.value;
-        document.querySelector('.nccn-quality')?.classList.toggle('hidden', !!q.trim());
         clearBtn.classList.toggle('hidden', !q);
         if (q.trim()) {
           const filtered = searchCards(cards, q);
@@ -2133,9 +2145,8 @@
 
     function renderNav(active) {
       const items = [
-        { path: '/', id: 'search', icon: '🔍', label: '搜尋' },
-        { path: '/pdf-library', id: 'pdf', icon: '📄', label: '文件庫' },
-        { path: '/sources', id: 'sources', icon: '🌐', label: '來源' },
+        { path: '/', id: 'search', icon: '🔍', label: '查詢' },
+        { path: '/data', id: 'pdf', icon: '📄', label: '資料管理' },
         { path: '/settings', id: 'settings', icon: '⚙️', label: '設定' },
       ];
       return `
@@ -2162,11 +2173,14 @@
           return `<button type="button" aria-pressed="${selected}" class="tag ${selected ? 'tag-category' : ''}" style="cursor:pointer;border:none;padding:6px 12px" onclick="window._togglePfMulti('${jsStr(f.id)}', ${i})">${esc(precisionOptionLabel(f, option))}</button>`;
         }).join('')}</div>`;
       } else if (f.type === 'text' || f.type === 'number') {
-        control = `<input id="${esc(controlId)}" class="input" type="${f.type === 'number' ? 'number' : 'text'}" value="${esc(f.value ?? '')}" placeholder="（未輸入）" onchange="window._setPfValue('${jsStr(f.id)}', this.value.trim(), this)">`;
+        control = `<input id="${esc(controlId)}" data-case-text-field="${esc(f.id)}" class="input" type="${f.type === 'number' ? 'number' : 'text'}" value="${esc(f.value ?? '')}" placeholder="（未輸入）">`;
       } else {
         control = `<select id="${esc(controlId)}" class="input" onchange="window._setPfValue('${jsStr(f.id)}', this.value, this)"><option value="">（未輸入）</option>${f.options.map(option => `<option value="${esc(option)}" ${f.value === option ? 'selected' : ''}>${esc(precisionOptionLabel(f, option))}</option>`).join('')}</select>`;
       }
       return `<div class="form-group" id="precision-field-${esc(f.id)}">${label}${control}${f.help ? `<p class="text-xs text-gray-400 mt-1">${esc(f.help)}</p>` : ''}</div>`;
+    }
+    function renderCaseFocus(value) {
+      return `<label class="label" for="case-focus">今天想查什麼？</label><select class="input" id="case-focus">${window.CASE_WORKFLOW.focusOptions.map(item => `<option value="${esc(item.id)}" ${value === item.id ? 'selected' : ''}>${esc(item.label)}</option>`).join('')}</select>`;
     }
     async function renderCancerDetail(app) {
       const card = await dbGet('cancerCards', routeParams.cancerId);
@@ -2185,9 +2199,17 @@
       const checklists = (await dbGetAll('checklists')).filter(c => c.cancerId === card.id);
       const nhiNotes = nhiNotesForCancer(await dbGetAll('nhiNotes'), card.id, relatedIds);
       const tfdaRecords = await dbGetAll('tfdaIndications');
-      const precisionFields = await getCasePrecisionFields(card.id);
+      const precisionFields = resumeCaseQuery(card.id, await getCasePrecisionFields(card.id));
       const inputContext = window.CLINICAL_MATCHER.resolveCaseContext(precisionFields);
       const fieldGroups = window.CASE_REVIEW.groupFields(precisionFields, inputContext);
+      const caseState = window.CASE_STATE.read(card.id);
+      const caseFocus = caseState.__focus || 'overview';
+      const parsedDocs = currentDocs.filter(isUsableNccnStructure);
+      const assessment = window.CLINICAL_MATCHER.adjuvantAssessment(card.id, parsedDocs, precisionFields, window.CASE_STATE.treatmentHistory(card.id));
+      const stepQuestions = window.CASE_WORKFLOW.questions({cancerId:card.id, fields:precisionFields, context:inputContext, assessment,
+        diagnosis:nccnTreatmentDiagnosis(parsedDocs, precisionFields), deferredIds:caseState.__deferredQuestions || []});
+      const stepIds = new Set(stepQuestions.map(({field}) => field.id));
+      const otherFields = [...fieldGroups.entry, ...fieldGroups.relevant, ...fieldGroups.secondary].filter(field => !stepIds.has(field.id));
       const jumpDoc = currentDocs.find(d => d.storageKey);
       const pfMap = buildPfMap(precisionFields);
       const filledPf = precisionFields.filter(hasPfValue);
@@ -2196,9 +2218,6 @@
       // Update last used
       await dbPut('cancerCards', { ...card, lastUsedAt: new Date().toISOString() });
 
-      const statusClass = card.reviewStatus === '已維護' ? 'status-maintained' :
-        card.reviewStatus === '部分維護' ? 'status-partial' : 'status-pending';
-
       app.innerHTML = `
         <div class="container">
           <button class="back-btn" onclick="navigate('/')">← 返回</button>
@@ -2206,9 +2225,8 @@
             <div class="min-w-0">
               <h1 class="text-2xl font-bold">${esc(card.zhName)}</h1>
               <p class="text-sm text-gray-500">${esc(card.enName)}</p>
-              ${card.synonyms.length ? `<p class="text-xs text-gray-400 mt-1">同義詞：${esc(card.synonyms.join('、'))}</p>` : ''}
             </div>
-            <span class="status ${statusClass} shrink-0">${esc({ '待維護': '內容待整理', '部分維護': '內容部分整理', '已維護': '內容已整理' }[card.reviewStatus] || card.reviewStatus)}</span>
+            <span class="tag">個案查詢</span>
           </div>
 
           ${filledPf.length ? `<div class="mb-4" style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
@@ -2219,24 +2237,24 @@
           <section class="card section case-workbench" aria-labelledby="case-workbench-title">
             <div class="flex-between" style="gap:12px;align-items:flex-start">
               <div>
-                <h2 id="case-workbench-title" class="section-title" style="margin-bottom:4px">🩺 個案條件工作台</h2>
-                <p class="text-sm text-gray-600">先填目前掌握的條件；留白會列入缺漏，不會被當成陰性或正常。</p>
+                <h2 id="case-workbench-title" class="section-title" style="margin-bottom:4px">本次查詢</h2>
               </div>
               ${filledPf.length ? `<button type="button" class="btn btn-ghost btn-sm" style="width:auto;white-space:nowrap" onclick="window._newCase('${jsStr(card.id)}')">新個案</button>` : ''}
             </div>
-            <div class="case-workbench-status" aria-label="個案工作台狀態">
-              <div class="case-workbench-stat"><strong>${filledPf.length} / ${precisionFields.length}</strong><span>已填個案欄位</span></div>
-              <div class="case-workbench-stat"><strong>${currentDocs.length ? '已有文件' : '尚無文件'}</strong><span>NCCN 原始來源</span></div>
-              <div class="case-workbench-stat"><strong>${currentDocs.length ? '可連結核對' : '只列待核對'}</strong><span>快速參考模式</span></div>
-            </div>
-            ${precisionFields.length ? `<div class="space-y-3">${fieldGroups.entry.map(renderCaseField).join('')}</div>
-            <details class="case-fields mt-3" ${inputContext.phase !== 'unknown' ? 'open' : ''}><summary>本次病況與治療條件（${fieldGroups.relevant.length} 項）</summary><div class="mt-3">${fieldGroups.relevant.map(renderCaseField).join('')}</div></details>
-            ${fieldGroups.secondary.length ? `<details class="case-fields mt-3"><summary>其他情境欄位／原始檢測資料（${fieldGroups.secondary.length} 項，已填值保留）</summary><div class="mt-3">${fieldGroups.secondary.map(renderCaseField).join('')}</div></details>` : ''}
-            <p class="text-xs text-gray-500 mt-2">個案值只保留在目前分頁；本機模板用來整理資料，不會在缺少指引來源時自行產生療程。</p>` :
-            '<p class="text-sm text-gray-500">尚未設定個案欄位，可由下方「編輯精準欄位」建立。</p>'}
-            <button class="btn btn-primary mt-4" onclick="navigate('/cancer/${jsStr(card.id)}/quickref')">查看快速參考與待核對事項</button>
+            <div class="mt-3">${renderCaseFocus(caseFocus)}</div>
+            ${stepQuestions.length ? `<div id="case-question-step" class="mt-4"><p class="text-sm font-semibold mb-3">先確認這 ${stepQuestions.length} 項</p>${stepQuestions.map(({field}) => renderNhiQueryField(field)).join('')}</div>
+            <p class="text-xs text-gray-500">不知道可以留白、稍後補；不會當成陰性或正常。</p>
+            <button type="button" class="btn btn-primary mt-3" id="case-step-next">繼續／稍後補</button>` : '<p class="text-sm mt-4">可先查看目前重點；仍需補充的資料會在結果中標示。</p>'}
+            <button type="button" class="btn ${stepQuestions.length ? 'btn-secondary' : 'btn-primary'} mt-3" id="case-show-result">看目前重點</button>
+            <p class="text-xs text-gray-500 mt-3">${parsedDocs.length ? '已匯入可比對來源；版本與適用分支仍需核對。' : currentDocs.length ? '本癌別 PDF 尚待解析，目前只整理條件。' : '本癌別尚無 PDF，目前只整理條件與缺漏。'} <button type="button" class="btn btn-ghost btn-sm" style="width:auto" onclick="navigate('/pdf-library')">管理來源</button></p>
           </section>
 
+          <details class="result-disclosure mb-4" id="case-all-fields"><summary>查看／修改全部條件（已填 ${filledPf.length} 項）</summary><div class="result-disclosure-body">
+            <p class="text-xs text-gray-500 mb-3">已填內容保留。此處包含其他情境欄位，不必全部填完；個案值只保留在目前分頁。</p>
+            ${otherFields.map(renderCaseField).join('')}
+            <button type="button" class="btn btn-secondary" id="case-ask-again">重新顯示待確認問題</button>
+          </div></details>
+          <details class="result-disclosure mb-4"><summary>癌別資料與維護</summary><div class="result-disclosure-body">
           <!-- Guideline Documents -->
           <div class="card section">
             <h2 class="section-title">📄 應查指引</h2>
@@ -2328,9 +2346,43 @@
             <button class="btn btn-ghost" onclick="navigate('/cancer/${jsStr(card.id)}/precision')">編輯精準欄位</button>
             <button class="btn btn-ghost" onclick="navigate('/cancer/${jsStr(card.id)}/nhi')">編輯藥物／療程健保</button>
           </div>
+          </div></details>
           ${renderNav('')}
         </div>
       `;
+      const saveStep = () => {
+        // Save synchronously without redrawing text inputs (including IME/mobile
+        // composition), and flush again before navigation in case no blur fired.
+        for (const control of document.getElementById('case-all-fields')?.querySelectorAll('[data-case-text-field]') || []) {
+          window.CASE_STATE.setValue(card.id, control.dataset.caseTextField, control.value.trim());
+        }
+        const controls = [...(document.getElementById('case-question-step')?.querySelectorAll('[data-nhi-query-field]') || [])];
+        for (const {field} of stepQuestions) {
+          const inputs = controls.filter(control => control.dataset.nhiQueryField === field.id);
+          const value = field.type === 'multi_select' ? inputs.filter(control => control.checked).map(control => control.value) : (inputs[0]?.value || '').trim();
+          window.CASE_STATE.setValue(card.id, field.id, value);
+          if (field.sourceTemplateKey === 'breast-genomic-assay' && value !== 'Oncotype DX') {
+            const score = precisionFields.find(f => f.sourceTemplateKey === 'breast-oncotype-rs');
+            if (score) window.CASE_STATE.setValue(card.id, score.id, '');
+          }
+        }
+        clearNhiQueryState(card.id);
+      };
+      document.getElementById('case-question-step')?.addEventListener('input', saveStep);
+      document.getElementById('case-question-step')?.addEventListener('change', saveStep);
+      document.getElementById('case-all-fields')?.addEventListener('input', saveStep);
+      document.getElementById('case-focus').addEventListener('change', event => {
+        saveStep();
+        window.CASE_STATE.setValue(card.id, '__focus', event.target.value);
+      });
+      document.getElementById('case-step-next')?.addEventListener('click', async () => {
+        saveStep();
+        window.CASE_STATE.setValue(card.id, '__deferredQuestions', [...new Set([...(caseState.__deferredQuestions || []), ...stepIds])]);
+        await handleRoute();
+        document.getElementById('case-question-step')?.querySelector('input, select')?.focus({preventScroll:true});
+      });
+      document.getElementById('case-show-result').addEventListener('click', () => { saveStep(); navigate('/cancer/' + card.id + '/quickref'); });
+      document.getElementById('case-ask-again').addEventListener('click', () => { window.CASE_STATE.setValue(card.id, '__deferredQuestions', []); handleRoute(); });
     }
 
     async function renderQuickRef(app) {
@@ -2363,7 +2415,8 @@
       const focused = window.CASE_WORKFLOW.focusSelection(fullAdjuvant, nccnMatches, caseFocus, {cancerId:card.id,fields:queryPrecisionFields});
       const adjuvant = focused.assessment;
       const caseContext = window.CLINICAL_MATCHER.resolveCaseContext(queryPrecisionFields);
-      const evidenceSelection = window.CASE_REVIEW.selectEvidence(card.id, adjuvant, focused.matches, caseContext);
+      const sourceRoute = !adjuvant.active ? window.CASE_WORKFLOW.sourceRoute({cancerId:card.id, fields:queryPrecisionFields, context:caseContext, documents:parsedNccnDocs}) : null;
+      const evidenceSelection = window.CASE_REVIEW.selectEvidence(card.id, adjuvant, focused.matches, caseContext, sourceRoute);
       const keyQuestions = window.CASE_WORKFLOW.questions({cancerId:card.id,fields:queryPrecisionFields,context:caseContext,assessment:fullAdjuvant,diagnosis:nccnDiagnosis});
       if (adjuvant.active && evidenceSelection.blocked) {
         adjuvant.reviewItems = [...new Set([...(adjuvant.reviewItems || []), ...evidenceSelection.issues])];
@@ -2373,7 +2426,7 @@
         };
       }
       const displayedNccnMatches = evidenceSelection.displayedMatches;
-      const nccnDiagnosticFields = nccnDiagnosis.suggestedFields || [];
+      const nccnDiagnosticFields = (nccnDiagnosis.suggestedFields || []).filter(field => window.CASE_WORKFLOW.fieldRelevant(field, caseContext));
       const fieldByTemplateKey = key => queryPrecisionFields.find(field => field.sourceTemplateKey === key);
       const nsclcDiseaseSetting = pfValueText(fieldByTemplateKey('base-disease-setting'));
       const nsclcDriverField = fieldByTemplateKey('nsclc-drivers');
@@ -2490,7 +2543,7 @@
       if (!checklists.length) missingItems.push('尚未建立 checklist');
       if (!precisionFields.length) missingItems.push('尚未設定精準化欄位');
       else unfilledPf.filter(field => field.required).forEach(field => missingItems.push('尚未輸入' + field.label));
-      const hasMatchedNccnPage = nccnMatches.length > 0 || (adjuvant.pages || []).length > 0;
+      const hasMatchedNccnPage = displayedNccnMatches.length > 0 || evidenceSelection.sourcePages.length > 0 || !!sourceRoute?.issues.length;
       const quickrefEvidenceState = hasMatchedNccnPage ? 'linked'
         : parsedNccnDocs.length ? 'source_ready'
         : hasDocs ? 'unparsed'
@@ -2501,22 +2554,36 @@
         unparsed: { label: 'PDF 待解析', className: 'status-partial', message: '已有本機 PDF，但尚未建立可供個案比對的章節與療程索引。' },
         no_source: { label: '尚無 NCCN 原始來源', className: 'status-pending', message: '目前只整理個案、缺漏與查核方向，不會自行產生 NCCN 療程或頁碼。' },
       }[quickrefEvidenceState];
-      const caseSummaryFeatures = adjuvant.active
+      const sourceNotice = window.CASE_WORKFLOW.sourceNotice({hasDocs, hasIndex:parsedNccnDocs.length > 0,
+        hasPages:hasMatchedNccnPage, filledCount:filledPf.length});
+      const receivedCaseFacts = [
+        ['base-disease-setting','base-treatment-setting'],
+        ['breast-subtype','breast-her2','breast-er'],
+      ].map(keys => keys.map(key => fieldByTemplateKey(key)).filter(field => field && hasPfValue(field))
+        .map(field => `${field.label}：${pfValueText(field)}`).join(' · ')).filter(Boolean);
+      const caseSummaryFeatures = sourceNotice || !adjuvant.active && receivedCaseFacts.length
+        ? receivedCaseFacts
+        : adjuvant.active
         ? [adjuvant.branchLabel, adjuvant.decision?.basis].filter(Boolean)
         : [...new Set(nccnDiagnosis.positiveFeatures
           .map(item => window.CLINICAL_MATCHER.featureLabel(item.key)).filter(Boolean))].slice(0, 6);
-      const caseSummaryHeadline = evidenceSelection.blocked
+      const caseSummaryHeadline = evidenceSelection.conflicts.length
+        ? evidenceSelection.conflicts[0]
+        : sourceNotice ? sourceNotice.headline
+        : evidenceSelection.blocked
         ? evidenceSelection.issues[0] || '關鍵資料尚未齊全，暫不確認治療方向'
         : adjuvant.active
         ? (adjuvant.decision?.headline || adjuvant.message)
-        : nccnMatches.length
-          ? '已定位 ' + nccnMatches.length + ' 個需核對的 NCCN 原頁'
+        : sourceRoute ? sourceRoute.headline
+        : displayedNccnMatches.length
+          ? '先核對本次情境的 NCCN 來源'
           : '目前條件還不足以定位特定治療分支';
       const caseSummaryMissing = adjuvant.active && adjuvant.missing?.length
         ? adjuvant.missing
         : nccnPromptFields.map(field => field.label).filter(Boolean);
       const caseSummaryNext = evidenceSelection.conflicts.length
         ? '返回個案條件，確認互相矛盾的病程或檢測結果。'
+        : sourceNotice ? sourceNotice.next
         : keyQuestions.length
         ? '先確認：' + keyQuestions.map(item=>item.field.label).join('、')
         : caseSummaryMissing.length
@@ -2534,37 +2601,59 @@
       const therapyStatusLabels = {met:'已記錄條件符合',missing:'尚缺資料／來源',unmet:'已知條件不符'};
       const locatedBranches = aiSummaryPayload.evidence.filter(item=>item.branch?.status==='located');
       const evidenceRoleLabels = { primary: '主決策', regimen: '療程／支持', candidate: '待核對候選', footnotes: '必要腳註', eligibility: '必要適用條件' };
+      const sourceSetupMessages = ['沒有可供本次判讀的來源頁。','來源包尚未通過檢查。','來源頁數或傳送清單不完整。'];
+      const summaryWarnings = [...new Set([...evidenceSelection.issues, ...(adjuvant.decision?.caveats || []), ...aiEvidenceIssues,
+        ...(nsclcNeedsDriverResult ? ['晚期／復發 NSCLC 在採用 PD-L1 路徑前，應先確認完整 DNA＋RNA 驅動基因檢測結果。'] : [])])]
+        .filter(issue => !sourceNotice || !sourceSetupMessages.includes(issue));
+      const visibleQuestions = sourceNotice && !evidenceSelection.conflicts.length ? [] : keyQuestions;
 
       app.innerHTML = `
         <div class="container">
-          <button class="back-btn" onclick="navigate('/cancer/${jsStr(card.id)}')">← 返回</button>
-          <h1 class="text-2xl font-bold mb-1">快速參考</h1>
-          <p class="text-sm text-gray-500 mb-6">${esc(card.zhName)} · ${esc(card.enName)}</p>
+          <button class="back-btn" onclick="navigate('/cancer/${jsStr(card.id)}')">← 修改個案條件</button>
+          <h1 class="text-2xl font-bold mb-1">${esc(card.zhName)} · 本次重點</h1>
+          <details class="result-disclosure mb-4"><summary>調整問題：${esc(window.CASE_WORKFLOW.focusOptions.find(item => item.id === caseFocus)?.label || '整體方向')}</summary><div class="result-disclosure-body">${renderCaseFocus(caseFocus)}</div></details>
 
-          ${isEmpty ? '<div class="alert alert-warning mb-4">⚠️ 此癌別資料待維護，以下資訊可能不完整</div>' : ''}
-
-          <section class="card section" aria-label="聚焦本次問題">
-            <label class="label" for="case-focus">本次先回答什麼？</label>
-            <select class="input" id="case-focus">${window.CASE_WORKFLOW.focusOptions.map(item=>`<option value="${esc(item.id)}" ${caseFocus===item.id?'selected':''}>${esc(item.label)}</option>`).join('')}</select>
-            <p class="text-xs text-gray-500 mt-2">${focused.deferred.length ? `已將 ${focused.deferred.length} 個療程候選延後至「選擇療程」；必要腳註仍保留。` : '整體方向可先看重點；來源太多時，先切換為「是否需要本次治療」。不會清空已填條件。'}</p>
-            ${keyQuestions.length?`<div id="key-question-panel" class="mt-3"><p class="font-semibold text-sm">先確認這 ${keyQuestions.length} 項即可繼續縮小路徑</p>${keyQuestions.map(({field,reason})=>`<p class="text-xs text-gray-500 mt-2">${esc(reason)}</p>${renderNhiQueryField(field)}`).join('')}<button class="btn btn-primary" type="button" id="key-question-submit">套用並重新定位</button><p class="text-xs text-gray-500 mt-2">這是下一步最關鍵的追問，不代表其餘醫療資料已完整。</p></div>`:''}
-          </section>
+          ${isEmpty && !sourceNotice ? '<div class="alert alert-warning mb-4">⚠️ 此癌別資料待維護，以下資訊可能不完整</div>' : ''}
 
           <section class="card section case-summary-card" aria-labelledby="case-summary-title">
-            <h2 id="case-summary-title" class="section-title" style="color:var(--primary-800)">🧭 本次個案重點</h2>
+            <h2 id="case-summary-title" class="section-title" style="color:var(--primary-800)">本次個案重點</h2>
             <div id="case-rule-fallback">
+            <p class="text-xs text-gray-500 mb-2">規則式初步整理 · ${esc(quickrefEvidence.label)}</p>
             <p class="font-semibold" style="color:var(--primary-800)">${esc(caseSummaryHeadline)}</p>
-            ${caseSummaryFeatures.length ? `<p class="text-sm text-gray-700 mt-2">${esc(caseSummaryFeatures.join(' · '))}</p>` : '<p class="text-sm text-gray-600 mt-2">尚未辨識可用的個案條件。</p>'}
+            ${sourceNotice ? `<p class="text-sm mt-2" id="case-source-notice">${esc(sourceNotice.message)}</p>` : `<p class="text-xs text-gray-500 mt-2">已套用 ${filledPf.length} 項個案條件</p>`}
+            ${caseSummaryFeatures.length ? `<ul class="ai-summary-list">${caseSummaryFeatures.slice(0, 2).map(item => `<li>${esc(item)}</li>`).join('')}</ul>` : '<p class="text-sm text-gray-600 mt-2">尚未辨識可用的個案條件。</p>'}
             <div class="case-summary-next"><p class="text-xs font-semibold text-gray-500">現在先做</p><p class="text-sm text-gray-800 mt-1">${esc(caseSummaryNext)}</p></div>
-            ${!adjuvant.active ? '<p class="text-xs text-gray-500 mt-2">此病程目前僅提供來源候選與資料整理，尚無經核對的專屬治療分支。</p>' : ''}
+            ${sourceNotice ? `<button type="button" class="btn btn-primary mt-3" onclick="navigate('/pdf-library')">${esc(sourceNotice.action)}</button>` : ''}
+            ${!adjuvant.active ? `<p class="text-xs text-gray-500 mt-2">${esc(sourceRoute?.limitation || '此病程目前僅提供來源候選與資料整理，尚無經核對的專屬治療分支。')}</p>` : ''}
             </div>
             <div id="ai-summary-result" class="ai-summary-result hidden" aria-live="polite"></div>
+            ${summaryWarnings.length ? `<div class="alert alert-warning mt-3" id="case-critical-warnings"><p class="font-semibold text-sm">需先核對</p><ul class="text-xs mt-2">${summaryWarnings.map(item => `<li>${esc(item)}</li>`).join('')}</ul></div>` : ''}
+            <div class="mt-3" aria-label="優先核對來源" style="display:flex;flex-wrap:wrap;gap:6px">${evidenceSelection.sourcePages.slice(0, 2).map(({ doc, page }) => doc.storageKey ? `<button type="button" class="btn btn-secondary btn-sm" style="width:auto" onclick="openPdf('${jsStr(doc.storageKey)}', ${safePdfPage(page.page)})">${esc(page.sectionCode)} · PDF p.${safePdfPage(page.page)}</button>` : `<span class="tag">${esc(page.sectionCode)} · PDF p.${safePdfPage(page.page)}</span>`).join('')}</div>
+            <div class="mt-3" id="ai-summary-controls">
+              <details id="case-ai-disclosure"><summary class="text-sm">需要時，再用 Gemini 整理</summary>
+              ${sourceNotice ? '<p class="text-xs text-gray-500 mb-2">Gemini 尚未啟用：需要先有可核對來源，不會把缺少指引誤判成沒有治療選項。</p><details><summary class="text-xs">Gemini 授權與來源檢查詳情</summary>' : ''}
+              <label class="text-xs" style="display:block"><input type="checkbox" id="ai-consent"> 我已去識別資料，確認有權傳送本次欄位與來源段落給 Google Gemini</label>
+              <button type="button" class="btn btn-primary mt-3" id="generate-ai-summary-btn" disabled>${filledPf.length ? '整理本次答案' : '請先填寫個案條件'}</button>
+              ${aiEvidenceIssues.length ? '<p class="text-xs mt-2" style="color:var(--amber-700)">AI 暫不傳送：請先處理上方待核對事項。</p>' : '<p class="text-xs text-gray-500 mt-2">勾選同意並按按鈕才會傳送；不啟用網路搜尋。</p>'}
+              <details class="mt-2"><summary class="text-xs text-gray-500" style="cursor:pointer">傳送內容與使用說明</summary>
+                <p class="text-xs text-gray-600 mt-2">不傳送 PDF 檔案；只傳送本次去識別欄位、治療歷程、規則式初步整理與候選來源文字。來源文件的使用／AI 傳送授權需另行確認；去識別化不等於取得指引內容授權。模型仍可能使用既有知識；AI 結果仍需回原頁核對。</p>
+                <p class="text-xs text-gray-500 mt-2">${esc(aiSummaryPayload.evidenceLimitations[0])}</p>
+                <pre style="white-space:pre-wrap;max-height:300px;overflow:auto;font-size:11px">${esc(JSON.stringify(aiSummaryPayload, null, 2))}</pre>
+              </details>
+              ${sourceNotice ? '</details>' : ''}
+              </details>
+            </div>
+            <button class="btn btn-ghost mt-3" id="copy-case-summary-btn">複製本次重點</button>
+            <p class="text-xs text-gray-500 mt-2">輔助整理，非最終治療建議。</p>
+          </section>
+
+          ${visibleQuestions.length ? `<section class="card section" aria-label="關鍵追問"><div id="key-question-panel"><p class="font-semibold text-sm mb-3">下一步：先確認這 ${visibleQuestions.length} 項</p>${visibleQuestions.map(({field}) => renderNhiQueryField(field)).join('')}<button class="btn btn-primary" type="button" id="key-question-submit">更新本次重點</button><p class="text-xs text-gray-500 mt-2">尚不知道可留白；不代表其餘資料已完整。</p></div></section>` : ''}
+          <details class="result-disclosure mb-4" id="complete-case-evidence"><summary>查看完整依據與治療歷程</summary><div class="result-disclosure-body">
             ${locatedBranches.length?`<details class="result-disclosure mt-3"><summary>查看本次頁內分支（保留例外與腳註）</summary><div class="result-disclosure-body">${locatedBranches.map(item=>{
               const pair=evidenceSelection.evidencePages[aiSummaryPayload.evidence.indexOf(item)];
               const first=item.branch.passages.find(p=>p.kind==='branch');
               return `<p class="text-sm font-semibold">${esc(item.sectionCode)} p.${item.page}：${esc(item.branch.label)}</p><p class="text-xs text-gray-500">${esc(item.branch.reason)}</p>${pair?.doc.storageKey&&first?`<button type="button" class="btn btn-secondary btn-sm mt-2" onclick="window._openEvidenceRegion('${jsStr(pair.doc.storageKey)}',${safePdfPage(item.page)},${first.box.join(',')})">在原頁標示位置</button>`:''}<details class="mt-2"><summary class="text-xs">分支原文與必要脈絡</summary>${item.branch.passages.map(p=>`<p class="text-xs text-gray-600 mt-2" style="white-space:pre-wrap">${esc(p.kind)}：${esc(p.text)}</p>`).join('')}</details>`;
             }).join('')}</div></details>`:'<p class="text-xs text-gray-500 mt-2">本次沒有可確認的頁內定位，仍以完整原頁核對。</p>'}
-            <div class="mt-3" style="display:flex;flex-wrap:wrap;gap:6px">${evidenceSelection.sourcePages.slice(0, 2).map(({ doc, page }) => doc.storageKey ? `<button type="button" class="btn btn-secondary btn-sm" style="width:auto" onclick="openPdf('${jsStr(doc.storageKey)}', ${safePdfPage(page.page)})">${esc(page.sectionCode)} · PDF p.${safePdfPage(page.page)}</button>` : `<span class="tag">${esc(page.sectionCode)} · PDF p.${safePdfPage(page.page)}</span>`).join('')}</div>
             <details class="result-disclosure mt-3" id="evidence-selection-audit">
               <summary>選頁理由與完整性：${aiEvidenceIssues.length ? '需先核對' : `已檢查 ${aiSummaryPayload.evidence.length} 頁來源包`}</summary>
               <div class="result-disclosure-body">
@@ -2575,19 +2664,6 @@
                 ${evidenceSelection.deferred.length ? `<details class="mt-3"><summary class="text-xs">一般延伸連結（未視為必要來源）</summary><ul class="text-xs mt-2">${evidenceSelection.deferred.map(item => `<li>${esc(item.from)} → ${esc(item.code)}：${esc(item.reason)}</li>`).join('')}</ul></details>` : ''}
               </div>
             </details>
-            <details class="result-disclosure mt-3">
-              <summary>✨ Gemini 個案重點（選用）</summary>
-              <div class="result-disclosure-body">
-                <p class="text-xs text-gray-600">不傳送 PDF 檔案；會傳送本次去識別欄位、治療歷程、規則式初步整理與候選來源文字給 Google Gemini。未啟用網路搜尋，但模型仍可能使用既有知識；AI 結果仍需回原頁核對。</p>
-                <p class="text-xs text-gray-500 mt-2">來源文件的使用／AI 傳送授權需另行確認；去識別化不等於取得指引內容授權。不勾選、不按按鈕就不會傳送。</p>
-                <p class="text-xs text-gray-500 mt-2">${esc(aiSummaryPayload.evidenceLimitations[0])}</p>
-                ${aiEvidenceIssues.length ? '<div class="alert alert-warning mt-2"><p class="text-xs">AI 暫不傳送：請展開上方「選頁理由與完整性」處理來源或條件問題。</p></div>' : ''}
-                <label class="text-sm mt-3" style="display:block"><input type="checkbox" id="ai-consent"> 我已去識別資料，確認有權傳送上述內容給 Google Gemini</label>
-                <button type="button" class="btn btn-primary mt-3" id="generate-ai-summary-btn" disabled>${filledPf.length ? '用 Gemini 整理本次個案' : '請先填寫個案條件'}</button>
-                <details class="result-disclosure mt-2"><summary>查看本次實際傳送內容</summary><pre style="white-space:pre-wrap;max-height:300px;overflow:auto;font-size:11px">${esc(JSON.stringify(aiSummaryPayload, null, 2))}</pre></details>
-              </div>
-            </details>
-          </section>
 
           <details class="result-disclosure mb-4">
             <summary>查看來源與本次輸入（${filledPf.length} 項）</summary>
@@ -2740,6 +2816,9 @@
             </div>
           </details>
 
+          <button class="btn btn-ghost mt-2" id="copy-quickref-btn">複製完整核對紀錄</button>
+          </div></details>
+          <details class="result-disclosure mb-4" id="case-reimbursement" ${selectedTreatment || caseFocus === 'eligibility' ? 'open' : ''}><summary>選療程／查適用條件與健保</summary><div class="result-disclosure-body">
           <div class="card section">
             <div class="flex-between">
               <h2 class="section-title">💊 選擇藥物／療程查健保</h2>
@@ -2799,15 +2878,13 @@
             </details>` : ''}
           </div>
 
-          ${missingItems.length ? `
+          </div></details>
+          ${missingItems.length ? `<details class="result-disclosure mb-4"><summary>其他資料缺漏（${missingItems.length} 項）</summary><div class="result-disclosure-body">
             <div class="card section" style="border-color:var(--orange-200);background:var(--orange-50)">
               <h2 class="section-title" style="color:var(--orange-700)">⚠️ 目前資訊不足</h2>
               <ul class="space-y-1">${missingItems.map(m => `<li class="text-sm" style="color:var(--orange-700)">• ${m}</li>`).join('')}</ul>
             </div>
-          ` : ''}
-
-          <button class="btn btn-secondary" id="copy-case-summary-btn">📋 複製本次重點</button>
-          <button class="btn btn-ghost mt-2" id="copy-quickref-btn">複製完整核對紀錄</button>
+          </div></details>` : ''}
 
           <div class="text-xs text-gray-400 text-center mt-4 mb-8">
             <p>來源：${esc(effectivePrimaryGuideline || '尚未設定')}</p>
@@ -2835,6 +2912,7 @@
       const aiSummaryResult = document.getElementById('ai-summary-result');
       const caseRuleFallback = document.getElementById('case-rule-fallback');
       let activeAiSummary = null;
+      let aiComparison = null;
       const aiConsent = document.getElementById('ai-consent');
       let aiPending = false;
       const updateAiButton = () => { aiSummaryButton.disabled = aiPending || !filledPf.length || !aiConsent.checked || aiEvidenceIssues.length > 0; };
@@ -2845,6 +2923,7 @@
         aiSummaryButton.disabled = true;
         caseRuleFallback.classList.remove('hidden');
         activeAiSummary = null;
+        aiComparison = null;
         aiSummaryButton.textContent = 'Gemini 整理中…';
         aiSummaryResult.classList.remove('hidden');
         aiSummaryResult.innerHTML = '<p class="text-sm text-gray-600">正在比對個案高風險特徵與候選證據，通常需要幾秒鐘。</p>';
@@ -2869,29 +2948,37 @@
           }
           if (summary.evidenceStatus !== 'quoted-source') {
             aiSummaryResult.innerHTML = `<div class="alert alert-warning" style="margin-bottom:0"><p class="font-semibold">AI 摘要未通過來源檢查，保留上方初步整理</p><p class="text-sm mt-1">${esc(summary.headline)}</p>${renderAiSummaryList('需要核對', summary.uncertainties)}</div>`;
-            aiSummaryButton.textContent = '重新用 Gemini 整理';
+            aiSummaryButton.textContent = '重新整理本次答案';
             return;
           }
+          const disagreement = window.CASE_WORKFLOW.summaryDisagreement(adjuvant.decision, summary);
           aiSummaryResult.innerHTML = `
-            <span class="ai-summary-decision">${esc(summary.decision)}</span>
+            ${disagreement ? `<div class="alert alert-warning" role="alert"><p class="font-semibold">方向不同，暫不合併結論</p><p class="text-xs mt-1">${esc(disagreement)}</p></div>` : ''}
+            <span class="ai-summary-decision">AI 整理 · ${esc(summary.decision)}</span>
             <p class="font-semibold" style="color:#4c1d95">${esc(summary.headline)}</p>
-            ${renderAiSummaryList('為什麼', summary.keyReasons)}
-            ${renderAiSummaryList('現在先做', summary.nowDo)}
+            ${renderAiSummaryList('主要理由', summary.keyReasons?.slice(0, 2))}
+            ${renderAiSummaryList('現在先做', summary.nowDo?.slice(0, 1))}
             ${renderAiSummaryList('重要限制', summary.uncertainties)}
-            ${summary.missingInformation?.length || summary.uncertainties?.length || summary.evidenceRefs?.length ? `
+            ${renderAiSummaryList('尚缺關鍵資料', summary.missingInformation)}
+            <details class="result-disclosure mt-3"><summary>完整 AI 整理與規則核對</summary><div class="result-disclosure-body">
+                  <p class="text-xs font-semibold">規則式初步整理</p><p class="text-sm mt-1">${esc(caseSummaryHeadline)}</p>
+                  ${renderAiSummaryList('全部理由', summary.keyReasons)}
+                  ${renderAiSummaryList('全部下一步', summary.nowDo)}
+            ${summary.evidenceRefs?.length ? `
               <details class="result-disclosure mt-3">
                 <summary>查看缺漏、限制與來源</summary>
                 <div class="result-disclosure-body">
-                  ${renderAiSummaryList('真正會改變結論的缺漏', summary.missingInformation)}
                   ${renderAiSummaryList('NCCN 候選頁', summary.evidenceRefs)}
                   ${renderAiSummaryList('模型逐頁適用性自查（仍需人工核對）', (summary.sourceReviews || []).map(item => item.reference + '：' + item.reason))}
                   ${summary.evidenceSupport?.length ? `<p class="text-xs font-semibold mt-3">可核對引文（文字存在，不代表個案適用性已確認）</p>${summary.evidenceSupport.map(item => `<blockquote class="text-xs text-gray-600 mt-2" style="border-left:2px solid #c4b5fd;padding-left:8px"><p>${esc(item.quote)}</p><p class="mt-1">${esc(item.reference)}</p></blockquote>`).join('')}` : ''}
                 </div>
               </details>` : ''}
+            </div></details>
             <p class="text-xs text-gray-500 mt-3">模型：${esc(body.model || 'Gemini')}。這是 AI 輔助整理，不是最終治療建議。</p>`;
-          caseRuleFallback.classList.add('hidden');
-          activeAiSummary = summary;
-          aiSummaryButton.textContent = '重新用 Gemini 整理';
+          if (!disagreement) caseRuleFallback.classList.add('hidden');
+          activeAiSummary = disagreement ? null : summary;
+          aiComparison = disagreement ? {message:disagreement, headline:summary.headline, uncertainties:summary.uncertainties, missingInformation:summary.missingInformation} : null;
+          aiSummaryButton.textContent = '重新整理本次答案';
         } catch (error) {
           aiSummaryResult.innerHTML = `<div class="alert alert-warning" style="margin-bottom:0"><p class="font-semibold">AI 摘要尚未完成</p><p class="text-sm mt-1">${esc(error.message || '請稍後再試。')}</p></div>`;
           aiSummaryButton.textContent = '再試一次';
@@ -2990,9 +3077,12 @@
       document.getElementById('copy-case-summary-btn').addEventListener('click', async () => {
         const summary = activeAiSummary;
         const lines = [card.zhName + '｜本次個案重點', summary?.headline || caseSummaryHeadline];
+        if (aiComparison) lines.push('方向待核對：' + aiComparison.message, 'AI 摘要（未採用）：' + aiComparison.headline);
         lines.push(...(summary?.keyReasons || caseSummaryFeatures).slice(0, 4).map(item => '- ' + item));
         lines.push('現在先做：', ...(summary?.nowDo || [caseSummaryNext]).map(item => '- ' + item));
-        lines.push(...(summary?.uncertainties || evidenceSelection.issues).map(item => '注意：' + item));
+        if (sourceRoute) lines.push('注意：' + sourceRoute.limitation);
+        lines.push(...[...new Set([...summaryWarnings, ...(summary?.uncertainties || []), ...(aiComparison?.uncertainties || [])])].map(item => '注意：' + item));
+        lines.push(...[...new Set([...(summary?.missingInformation || caseSummaryMissing), ...(aiComparison?.missingInformation || [])])].map(item => '尚缺：' + item));
         lines.push('來源：' + (summary?.evidenceRefs || evidenceSelection.sourcePages.map(({ page }) => `${page.sectionCode} · PDF p.${page.page}`)).join('；'));
         lines.push('此為輔助整理，非最終治療建議。');
         try { await navigator.clipboard.writeText(lines.join('\n')); showToast('已複製本次重點'); }

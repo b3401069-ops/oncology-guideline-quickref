@@ -102,11 +102,11 @@
     return { entry, relevant: rest.filter(field => !secondary(field)), secondary: rest.filter(secondary) };
   }
 
-  function selectEvidence(cancerId, assessment, matches, context) {
-    const sourcePages = uniquePages([...(assessment.pages || []), ...(assessment.supportingPages || [])]);
+  function selectEvidence(cancerId, assessment, matches, context, route = null) {
+    const sourcePages = uniquePages(route ? route.pages : [...(assessment.pages || []), ...(assessment.supportingPages || [])]);
     const sourceKeys = new Set(sourcePages.map(pageKey));
     const conflicts = [...(context.conflicts || []), ...(assessment.conflicts || [])];
-    const issues = [...conflicts];
+    const issues = [...conflicts, ...(route?.issues || [])];
     if (context.phase === 'unknown') issues.push('請先確認目前病程與治療階段，再定位本次問題。');
     if (assessment.active && !assessment.pages?.length) issues.push('缺少本次分支的 NCCN 主決策頁；目前只整理條件，不確認治療方向。');
     if (assessment.active && sourcePages.some(({ doc }) => {
@@ -114,11 +114,12 @@
       return version !== REVIEWED_VERSIONS[cancerId];
     })) issues.push('來源版本尚未完成本分支核對；請核對原頁，不沿用舊版本規則結論。');
     const blocked = issues.length > 0 || assessment.status === 'missing' || assessment.status === 'conflict';
-    const candidates = conflicts.length ? [] : assessment.active
+    const candidates = conflicts.length ? [] : route ? route.pages : assessment.active
       ? matches.filter(item => sourceKeys.has(pageKey(item))) : matches;
-    const excludedPages = matches.filter(item => !candidates.includes(item)).map(item => ({ ...item, exclusionReason: conflicts.length ? '個案資料有矛盾。' : '不在本次規則分支的來源清單內。' }));
+    const candidateKeys = new Set(candidates.map(pageKey));
+    const excludedPages = matches.filter(item => !candidateKeys.has(pageKey(item))).map(item => ({ ...item, exclusionReason: conflicts.length ? '個案資料有矛盾。' : route ? '不是本次術前評估的入口或必要脈絡；未視為本次適用療程。' : '不在本次規則分支的來源清單內。' }));
     const displayedMatches = candidates.filter(item => {
-      let reason = assessment.active ? '' : phaseExclusion(item.page, context);
+      let reason = assessment.active || route ? '' : phaseExclusion(item.page, context);
       const matcher = typeof window !== 'undefined' ? window.CLINICAL_MATCHER : null;
       // Exclude only complete recommendation lists whose every option conflicts.
       // A mixed algorithm page, or unknown marker, is not a negative result.
@@ -129,11 +130,11 @@
       if (reason) excludedPages.push({ ...item, exclusionReason: reason });
       return !reason;
     });
-    const treatmentEvidence = blocked ? [] : assessment.active
+    const treatmentEvidence = blocked || route ? [] : assessment.active
       ? (assessment.decision?.regimens || []).filter(item => item?.option && !item.option.needsReview && sourceKeys.has(pageKey(item))).map(({ doc, page, option }) => ({ doc, page: { ...page, options: [option] }, reasons: ['adjuvant'] }))
       : displayedMatches;
     const selectedSources = conflicts.length ? [] : sourcePages;
-    return { sourcePages: selectedSources, displayedMatches, treatmentEvidence, blocked, issues, conflicts, excludedPages,
+    return { sourcePages: selectedSources, displayedMatches, treatmentEvidence, blocked, issues, conflicts, excludedPages, sourceRoute:route,
       ...planEvidence(selectedSources, displayedMatches, assessment) };
   }
 
@@ -171,7 +172,7 @@
         branch: assessment.branchLabel || '', headline: assessment.decision?.headline || assessment.message || '',
         basis: assessment.decision?.basis || '', level: selection.blocked ? 'review' : assessment.decision?.level || 'review',
         reasons: assessment.decision?.items || [], missing: assessment.missing || [],
-        caveats: assessment.decision?.caveats || [], reviewItems: [...(assessment.reviewItems || []), ...selection.issues],
+        caveats: assessment.decision?.caveats || [], reviewItems: [...(assessment.reviewItems || []), ...selection.issues, ...(selection.sourceRoute ? [selection.sourceRoute.limitation] : [])],
         blocked: selection.blocked,
         regimens: selection.treatmentEvidence.flatMap(item => item.page.options || []).map(option => typeof option === 'string' ? option : option.label),
       },
